@@ -128,7 +128,18 @@ curl -L  -o personality.sh "${env.PROJET_PERSONALITY}"
       steps {
         unstash 'yetus'
         // TODO should this be a download from master, similar to how the personality is?
-        sh "${env.BASEDIR}/dev-support/hbase_nightly_yetus.sh"
+        sh '''#!/usr/bin/env bash
+          rm -f "${OUTPUTDIR}/success" "${OUTPUTDIR}/failure"
+          declare commentfile
+          if "${BASEDIR}/dev-support/hbase_nightly_yetus.sh" ; then
+            commentfile="${OUTPUTDIR}/success"
+            echo '(/) *{color:green}+1 general checks{color}*' >> "${commentfile}"
+          else
+            commentfile="${OUTPUTDIR}/failure"
+            echo '(x) *{color:red}-1 general checks{color}*' >> "${commentfile}"
+          fi
+          echo "-- For more information [see general report|${BUILD_URL}/General_Nightly_Build_Report/]" >> "${commentfile}"
+        '''
       }
       post {
         always {
@@ -159,13 +170,22 @@ curl -L  -o personality.sh "${env.PROJET_PERSONALITY}"
       }
       steps {
         unstash 'yetus'
-        sh """#!/usr/bin/env bash
+        sh '''#!/usr/bin/env bash
           # for branch-1.1 we don't do jdk8 findbugs, so do it here
-          if [ "${env.BRANCH_NAME}" == "branch-1.1" ]; then
+          if [ "${BRANCH_NAME}" == "branch-1.1" ]; then
             TESTS+=",findbugs"
           fi
-          "${env.BASEDIR}/dev-support/hbase_nightly_yetus.sh"
-        """
+          declare commentfile
+          rm -f "${OUTPUTDIR}/success" "${OUTPUTDIR}/failure"
+          if "${BASEDIR}/dev-support/hbase_nightly_yetus.sh" ; then
+            commentfile="${OUTPUTDIR}/success"
+            echo '(/) *{color:green}+1 jdk7 checks{color}*' >> "${commentfile}"
+          else
+            commentfile="${OUTPUTDIR}/failure"
+            echo '(x) *{color:red}-1 jdk7 checks{color}*' >> "${commentfile}"
+          fi
+          echo "-- For more information [see jdk7 report|${BUILD_URL}/JDK7_Nightly_Build_Report/]" >> "${commentfile}"
+        '''
       }
       post {
         always {
@@ -215,7 +235,18 @@ curl -L  -o personality.sh "${env.PROJET_PERSONALITY}"
       }
       steps {
         unstash 'yetus'
-        sh "${env.BASEDIR}/dev-support/hbase_nightly_yetus.sh"
+        sh '''#!/usr/bin/env bash
+          declare commentfile
+          rm -f "${OUTPUTDIR}/success" "${OUTPUTDIR}/failure"
+          if "${BASEDIR}/dev-support/hbase_nightly_yetus.sh" ; then
+            commentfile="${OUTPUTDIR}/success"
+            echo '(/) *{color:green}+1 jdk8 checks{color}*' >> "${commentfile}"
+          else
+            commentfile="${OUTPUTDIR}/failure"
+            echo '(x) *{color:red}-1 jdk8 checks{color}*' >> "${commentfile}"
+          fi
+          echo "-- For more information [see jdk8 report|${BUILD_URL}/JDK8_Nightly_Build_Report/]" >> "${commentfile}"
+        '''
       }
       post {
         always {
@@ -287,6 +318,7 @@ curl -L  -o personality.sh "${env.PROJET_PERSONALITY}"
         }
         // expectation check largely based on HBASE-14952
         sh '''#!/bin/bash -e
+          rm -rf "${env.WORKSPACE}/src_tarball_success" "${env.WORKSPACE}/src_tarball_failure"
           echo "Checking against things we don't expect to include in the source tarball (git related, hbase-native-client, etc.)"
           cat >known_excluded <<END
 Only in .: .git
@@ -304,6 +336,94 @@ END
           fi
 '''
       }
+      // This approach only works because the source release artifact is the last stage that does work.
+      post {
+        success {
+          writeFile file: "${env.WORKSPACE}/src_tarball_success", text: '(/) *{color:green}+1 source release artifact{color}*'
+        }
+        failure {
+          writeFile file: "${env.WORKSPACE}/src_tarball_failure", text: '(x) *{color:red}-1 source release artifact{color}*'
+        }
+      }
+    }
+    stage ('Fail if previous stages failed') {
+      steps {
+        script {
+          def failures = ['src_tarball_failure', "${env.OUTPUT_RELATIVE_GENERAL}/failure",
+                          "${env.OUTPUT_RELATIVE_JDK7}/failure", "${OUTPUT_RELATIVE_JDK8}/failure"]
+          for ( failure_file in failures ) {
+            if (fileExists(file: failure_file)) {
+              error 'Failing job due to previous failure(s) in prior steps.'
+            }
+          }
+        }
+      }
     }
   }
+  post {
+    always {
+      script {
+         try {
+           sh "printenv"
+           def results = ["${env.OUTPUT_RELATIVE_GENERAL}/failure", "${env.OUTPUT_RELATIVE_GENERAL}/success",
+                          "${env.OUTPUT_RELATIVE_JDK7}/failure", "${env.OUTPUT_RELATIVE_JDK7}/success",
+                          "${env.OUTPUT_RELATIVE_JDK8}/failure", "${env.OUTPUT_RELATIVE_JDK8}/success",
+                          'src_tarball_failure', 'src_tarball_success']
+           echo env.BRANCH_NAME
+           echo env.BUILD_URL
+           echo currentBuild.result
+           echo currentBuild.durationString
+           def comment = "Results for branch ${env.BRANCH_NAME}, done in ${currentBuild.durationString}\n"
+           if (currentBuild.result == "SUCCESS") {
+              comment += '	(/) *{color:green}+1 overall{color}*\\'
+           } else {
+              comment += '(x) *{color:red}-1 overall{color}*\\'
+              // Ideally get the committer our of the change and @ mention them in the per-jira comment
+              comment += 'Committer, please check your recent inclusion of a patch for this issue.\\'
+           }
+           comment += "	[build ${currentBuild.displayName} on builds.a.o|${env.BUILD_URL}]: ${currentBuild.result}\\----\\details (if available):\n"
+           //echo "[DEBUG] Comment so far: "
+           //echo comment
+           echo ""
+           echo "[DEBUG] trying to aggregate step-wise results"
+           comment += results.collect { fileExists(file: it) ? readFile(file: it) : "" }.join("\n")
+           echo "[INFO] Comment:"
+           echo comment
+           echo ""
+           echo "[INFO] There are ${currentBuild.changeSets.size()} change sets."
+           getJirasToComment(currentBuild).each { currentIssue ->
+             jiraComment issueKey: currentIssue, body: comment
+           }
+        } catch (Exception exception) {
+          echo "Got exception: ${exception}"
+          echo "	${exception.getStackTrace()}"
+        }
+      }
+    }
+  }
+}
+import org.jenkinsci.plugins.workflow.support.steps.build.RunWrapper
+@NonCPS
+List<String> getJirasToComment(RunWrapper thisBuild) {
+  def seenJiras = []
+  thisBuild.changeSets.each { cs ->
+    cs.getItems().each { change ->
+      CharSequence msg = change.msg
+      echo "change: ${change}"
+      echo "     ${msg}"
+      echo "     ${change.commitId}"
+      echo "     ${change.author}"
+      echo ""
+      msg.eachMatch("HBASE-[0-9]+") { currentIssue ->
+        echo "[DEBUG] found jira key: ${currentIssue}"
+        if (currentIssue in seenJiras) {
+          echo "[DEBUG] already commented on ${currentIssue}."
+        } else {
+          echo "[INFO] commenting on ${currentIssue}."
+          seenJiras << currentIssue
+        }
+      }
+    }
+  }
+  return seenJiras
 }
