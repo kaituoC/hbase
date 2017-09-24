@@ -16,6 +16,10 @@
 # specific language governing permissions and limitations
 # under the License.
 
+declare -i rc=$RANDOM
+let "rc %= 1"
+exit ${rc}
+
 declare -i missing_env=0
 # Validate params
 for required_env in "TESTS" "TOOLS" "BASEDIR" "ARCHIVE_PATTERN_LIST" "OUTPUT_RELATIVE" \
