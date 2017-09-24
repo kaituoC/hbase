@@ -133,10 +133,10 @@ curl -L  -o personality.sh "${env.PROJET_PERSONALITY}"
           declare commentfile
           if "${BASEDIR}/dev-support/hbase_nightly_yetus.sh" ; then
             commentfile="${OUTPUTDIR}/success"
-            echo '(/) *{color:green}+1 general checks{color}*' >> "${commentfile}"
+            echo '(/) {color:green}+1 general checks{color}' >> "${commentfile}"
           else
             commentfile="${OUTPUTDIR}/failure"
-            echo '(x) *{color:red}-1 general checks{color}*' >> "${commentfile}"
+            echo '(x) {color:red}-1 general checks{color}' >> "${commentfile}"
           fi
           echo "-- For more information [see general report|${BUILD_URL}/General_Nightly_Build_Report/]" >> "${commentfile}"
         '''
@@ -179,10 +179,10 @@ curl -L  -o personality.sh "${env.PROJET_PERSONALITY}"
           rm -f "${OUTPUTDIR}/success" "${OUTPUTDIR}/failure"
           if "${BASEDIR}/dev-support/hbase_nightly_yetus.sh" ; then
             commentfile="${OUTPUTDIR}/success"
-            echo '(/) *{color:green}+1 jdk7 checks{color}*' >> "${commentfile}"
+            echo '(/) {color:green}+1 jdk7 checks{color}' >> "${commentfile}"
           else
             commentfile="${OUTPUTDIR}/failure"
-            echo '(x) *{color:red}-1 jdk7 checks{color}*' >> "${commentfile}"
+            echo '(x) {color:red}-1 jdk7 checks{color}' >> "${commentfile}"
           fi
           echo "-- For more information [see jdk7 report|${BUILD_URL}/JDK7_Nightly_Build_Report/]" >> "${commentfile}"
         '''
@@ -240,10 +240,10 @@ curl -L  -o personality.sh "${env.PROJET_PERSONALITY}"
           rm -f "${OUTPUTDIR}/success" "${OUTPUTDIR}/failure"
           if "${BASEDIR}/dev-support/hbase_nightly_yetus.sh" ; then
             commentfile="${OUTPUTDIR}/success"
-            echo '(/) *{color:green}+1 jdk8 checks{color}*' >> "${commentfile}"
+            echo '(/) {color:green}+1 jdk8 checks{color}' >> "${commentfile}"
           else
             commentfile="${OUTPUTDIR}/failure"
-            echo '(x) *{color:red}-1 jdk8 checks{color}*' >> "${commentfile}"
+            echo '(x) {color:red}-1 jdk8 checks{color}' >> "${commentfile}"
           fi
           echo "-- For more information [see jdk8 report|${BUILD_URL}/JDK8_Nightly_Build_Report/]" >> "${commentfile}"
         '''
@@ -339,10 +339,10 @@ END
       // This approach only works because the source release artifact is the last stage that does work.
       post {
         success {
-          writeFile file: "${env.WORKSPACE}/src_tarball_success", text: '(/) *{color:green}+1 source release artifact{color}*'
+          writeFile file: "${env.WORKSPACE}/src_tarball_success", text: '(/) {color:green}+1 source release artifact{color}\n-- See build output for details.'
         }
         failure {
-          writeFile file: "${env.WORKSPACE}/src_tarball_failure", text: '(x) *{color:red}-1 source release artifact{color}*'
+          writeFile file: "${env.WORKSPACE}/src_tarball_failure", text: '(x) {color:red}-1 source release artifact{color}\n-- See build output for details.'
         }
       }
     }
@@ -374,19 +374,17 @@ END
            echo currentBuild.result
            echo currentBuild.durationString
            def comment = "Results for branch ${env.BRANCH_NAME}, done in ${currentBuild.durationString}\n"
+           comment += "\t[build ${currentBuild.displayName} on builds.a.o|${env.BUILD_URL}]: ${currentBuild.result}\n----\ndetails (if available):\n\n"
            if (currentBuild.result == "SUCCESS") {
-              comment += '	(/) *{color:green}+1 overall{color}*\\'
+              comment += "(/) *{color:green}+1 overall{color}*\n\n"
            } else {
-              comment += '(x) *{color:red}-1 overall{color}*\\'
+              comment += "(x) *{color:red}-1 overall{color}*\n"
               // Ideally get the committer our of the change and @ mention them in the per-jira comment
-              comment += 'Committer, please check your recent inclusion of a patch for this issue.\\'
+              comment += "	Committer, please check your recent inclusion of a patch for this issue.\n\n"
            }
-           comment += "	[build ${currentBuild.displayName} on builds.a.o|${env.BUILD_URL}]: ${currentBuild.result}\\----\\details (if available):\n"
-           //echo "[DEBUG] Comment so far: "
-           //echo comment
            echo ""
            echo "[DEBUG] trying to aggregate step-wise results"
-           comment += results.collect { fileExists(file: it) ? readFile(file: it) : "" }.join("\n")
+           comment += results.collect { fileExists(file: it) ? readFile(file: it) : "" }.join("\n\n")
            echo "[INFO] Comment:"
            echo comment
            echo ""
