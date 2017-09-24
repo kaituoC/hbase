@@ -16,6 +16,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
+mkdir -p "${OUTPUTDIR}"
+echo "<html><p>placeholder</html>" > "${OUTPUTDIR}/console-report.html"
 declare -i rc=$RANDOM
 let "rc %= 1"
 exit ${rc}
