@@ -17,21 +17,20 @@
  */
 package org.apache.hadoop.hbase.ipc;
 
-import org.apache.hadoop.hbase.shaded.io.netty.bootstrap.ServerBootstrap;
-import org.apache.hadoop.hbase.shaded.io.netty.channel.Channel;
-import org.apache.hadoop.hbase.shaded.io.netty.channel.ChannelInitializer;
-import org.apache.hadoop.hbase.shaded.io.netty.channel.ChannelOption;
-import org.apache.hadoop.hbase.shaded.io.netty.channel.ChannelPipeline;
-import org.apache.hadoop.hbase.shaded.io.netty.channel.EventLoopGroup;
-import org.apache.hadoop.hbase.shaded.io.netty.channel.ServerChannel;
-import org.apache.hadoop.hbase.shaded.io.netty.channel.group.ChannelGroup;
-import org.apache.hadoop.hbase.shaded.io.netty.channel.group.DefaultChannelGroup;
-import org.apache.hadoop.hbase.shaded.io.netty.channel.nio.NioEventLoopGroup;
-import org.apache.hadoop.hbase.shaded.io.netty.channel.socket.nio.NioServerSocketChannel;
-import org.apache.hadoop.hbase.shaded.io.netty.handler.codec.FixedLengthFrameDecoder;
-import org.apache.hadoop.hbase.shaded.io.netty.handler.codec.LengthFieldBasedFrameDecoder;
-import org.apache.hadoop.hbase.shaded.io.netty.util.concurrent.DefaultThreadFactory;
-import org.apache.hadoop.hbase.shaded.io.netty.util.concurrent.GlobalEventExecutor;
+import org.apache.hbase.thirdparty.io.netty.bootstrap.ServerBootstrap;
+import org.apache.hbase.thirdparty.io.netty.channel.Channel;
+import org.apache.hbase.thirdparty.io.netty.channel.ChannelInitializer;
+import org.apache.hbase.thirdparty.io.netty.channel.ChannelOption;
+import org.apache.hbase.thirdparty.io.netty.channel.ChannelPipeline;
+import org.apache.hbase.thirdparty.io.netty.channel.EventLoopGroup;
+import org.apache.hbase.thirdparty.io.netty.channel.ServerChannel;
+import org.apache.hbase.thirdparty.io.netty.channel.group.ChannelGroup;
+import org.apache.hbase.thirdparty.io.netty.channel.group.DefaultChannelGroup;
+import org.apache.hbase.thirdparty.io.netty.channel.nio.NioEventLoopGroup;
+import org.apache.hbase.thirdparty.io.netty.channel.socket.nio.NioServerSocketChannel;
+import org.apache.hbase.thirdparty.io.netty.handler.codec.FixedLengthFrameDecoder;
+import org.apache.hbase.thirdparty.io.netty.util.concurrent.DefaultThreadFactory;
+import org.apache.hbase.thirdparty.io.netty.util.concurrent.GlobalEventExecutor;
 
 import java.io.IOException;
 import java.io.InterruptedIOException;
@@ -39,18 +38,20 @@ import java.net.InetSocketAddress;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.CellScanner;
+import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.Server;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.monitoring.MonitoredRPCHandler;
 import org.apache.hadoop.hbase.regionserver.HRegionServer;
 import org.apache.hadoop.hbase.security.HBasePolicyProvider;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.BlockingService;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.Descriptors.MethodDescriptor;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.Message;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.protobuf.BlockingService;
+import org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.MethodDescriptor;
+import org.apache.hbase.thirdparty.com.google.protobuf.Message;
 import org.apache.hadoop.hbase.util.NettyEventLoopGroupConfig;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.security.authorize.ServiceAuthorizationManager;
@@ -59,10 +60,10 @@ import org.apache.hadoop.security.authorize.ServiceAuthorizationManager;
  * An RPC server with Netty4 implementation.
  * @since 2.0.0
  */
-@InterfaceAudience.Private
+@InterfaceAudience.LimitedPrivate({HBaseInterfaceAudience.CONFIG})
 public class NettyRpcServer extends RpcServer {
 
-  public static final Log LOG = LogFactory.getLog(NettyRpcServer.class);
+  public static final Logger LOG = LoggerFactory.getLogger(NettyRpcServer.class);
 
   private final InetSocketAddress bindAddress;
 
@@ -71,9 +72,9 @@ public class NettyRpcServer extends RpcServer {
   private final ChannelGroup allChannels = new DefaultChannelGroup(GlobalEventExecutor.INSTANCE);
 
   public NettyRpcServer(Server server, String name, List<BlockingServiceAndInterface> services,
-      InetSocketAddress bindAddress, Configuration conf, RpcScheduler scheduler)
-      throws IOException {
-    super(server, name, services, bindAddress, conf, scheduler);
+      InetSocketAddress bindAddress, Configuration conf, RpcScheduler scheduler,
+      boolean reservoirEnabled) throws IOException {
+    super(server, name, services, bindAddress, conf, scheduler, reservoirEnabled);
     this.bindAddress = bindAddress;
     EventLoopGroup eventLoopGroup;
     Class<? extends ServerChannel> channelClass;
@@ -97,10 +98,8 @@ public class NettyRpcServer extends RpcServer {
             FixedLengthFrameDecoder preambleDecoder = new FixedLengthFrameDecoder(6);
             preambleDecoder.setSingleDecode(true);
             pipeline.addLast("preambleDecoder", preambleDecoder);
-            pipeline.addLast("preambleHandler",
-              new NettyRpcServerPreambleHandler(NettyRpcServer.this));
-            pipeline.addLast("frameDecoder",
-              new LengthFieldBasedFrameDecoder(maxRequestSize, 0, 4, 0, 4, true));
+            pipeline.addLast("preambleHandler", createNettyRpcServerPreambleHandler());
+            pipeline.addLast("frameDecoder", new NettyRpcFrameDecoder(maxRequestSize));
             pipeline.addLast("decoder", new NettyRpcServerRequestDecoder(allChannels, metrics));
             pipeline.addLast("encoder", new NettyRpcServerResponseEncoder(metrics));
           }
@@ -113,6 +112,11 @@ public class NettyRpcServer extends RpcServer {
     }
     initReconfigurable(conf);
     this.scheduler.init(new RpcSchedulerContext(this));
+  }
+
+  @VisibleForTesting
+  protected NettyRpcServerPreambleHandler createNettyRpcServerPreambleHandler() {
+    return new NettyRpcServerPreambleHandler(NettyRpcServer.this);
   }
 
   @Override
@@ -181,7 +185,7 @@ public class NettyRpcServer extends RpcServer {
       Message param, CellScanner cellScanner, long receiveTime, MonitoredRPCHandler status,
       long startTime, int timeout) throws IOException {
     NettyServerCall fakeCall = new NettyServerCall(-1, service, md, null, param, cellScanner, null,
-        -1, null, null, receiveTime, timeout, reservoir, cellBlockBuilder, null);
+        -1, null, receiveTime, timeout, reservoir, cellBlockBuilder, null);
     return call(fakeCall, status);
   }
 }

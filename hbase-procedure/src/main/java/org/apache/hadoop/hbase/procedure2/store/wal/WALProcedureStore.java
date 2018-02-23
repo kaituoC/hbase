@@ -37,8 +37,6 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
 import org.apache.commons.collections4.queue.CircularFifoQueue;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileAlreadyExistsException;
@@ -46,18 +44,23 @@ import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.PathFilter;
-import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.yetus.audience.InterfaceStability;
+import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.log.HBaseMarkers;
 import org.apache.hadoop.hbase.procedure2.Procedure;
 import org.apache.hadoop.hbase.procedure2.store.ProcedureStoreBase;
 import org.apache.hadoop.hbase.procedure2.store.ProcedureStoreTracker;
 import org.apache.hadoop.hbase.procedure2.util.ByteSlot;
 import org.apache.hadoop.hbase.procedure2.util.StringUtils;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos.ProcedureWALHeader;
+import org.apache.hadoop.hbase.util.CommonFSUtils;
 import org.apache.hadoop.hbase.util.Threads;
 import org.apache.hadoop.ipc.RemoteException;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.yetus.audience.InterfaceStability;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
 
 /**
  * WAL implementation of the ProcedureStore.
@@ -65,8 +68,11 @@ import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTe
 @InterfaceAudience.Private
 @InterfaceStability.Evolving
 public class WALProcedureStore extends ProcedureStoreBase {
-  private static final Log LOG = LogFactory.getLog(WALProcedureStore.class);
+  private static final Logger LOG = LoggerFactory.getLogger(WALProcedureStore.class);
   public static final String LOG_PREFIX = "pv2-";
+  /** Used to construct the name of the log directory for master procedures */
+  public static final String MASTER_PROCEDURE_LOGDIR = "MasterProcWALs";
+
 
   public interface LeaseRecovery {
     void recoverFileLease(FileSystem fs, Path path) throws IOException;
@@ -126,6 +132,7 @@ public class WALProcedureStore extends ProcedureStoreBase {
   private final FileSystem fs;
   private final Path walDir;
   private final Path walArchiveDir;
+  private final boolean enforceStreamCapability;
 
   private final AtomicReference<Throwable> syncException = new AtomicReference<>();
   private final AtomicBoolean loading = new AtomicBoolean(true);
@@ -185,18 +192,43 @@ public class WALProcedureStore extends ProcedureStoreBase {
     }
   }
 
-  public WALProcedureStore(final Configuration conf, final FileSystem fs, final Path walDir,
-      final LeaseRecovery leaseRecovery) {
-    this(conf, fs, walDir, null, leaseRecovery);
+  public WALProcedureStore(final Configuration conf, final LeaseRecovery leaseRecovery)
+      throws IOException {
+    this(conf,
+        new Path(CommonFSUtils.getWALRootDir(conf), MASTER_PROCEDURE_LOGDIR),
+        new Path(CommonFSUtils.getRootDir(conf), HConstants.HREGION_OLDLOGDIR_NAME), leaseRecovery);
   }
 
-  public WALProcedureStore(final Configuration conf, final FileSystem fs, final Path walDir,
-      final Path walArchiveDir, final LeaseRecovery leaseRecovery) {
-    this.fs = fs;
+  @VisibleForTesting
+  public WALProcedureStore(final Configuration conf, final Path walDir, final Path walArchiveDir,
+      final LeaseRecovery leaseRecovery) throws IOException {
     this.conf = conf;
+    this.leaseRecovery = leaseRecovery;
     this.walDir = walDir;
     this.walArchiveDir = walArchiveDir;
-    this.leaseRecovery = leaseRecovery;
+    this.fs = walDir.getFileSystem(conf);
+    this.enforceStreamCapability = conf.getBoolean(CommonFSUtils.UNSAFE_STREAM_CAPABILITY_ENFORCE, true);
+
+    // Create the log directory for the procedure store
+    if (!fs.exists(walDir)) {
+      if (!fs.mkdirs(walDir)) {
+        throw new IOException("Unable to mkdir " + walDir);
+      }
+    }
+    // Now that it exists, set the log policy
+    CommonFSUtils.setStoragePolicy(fs, conf, walDir, HConstants.WAL_STORAGE_POLICY,
+      HConstants.DEFAULT_WAL_STORAGE_POLICY);
+
+    // Create archive dir up front. Rename won't work w/o it up on HDFS.
+    if (this.walArchiveDir != null && !this.fs.exists(this.walArchiveDir)) {
+      if (this.fs.mkdirs(this.walArchiveDir)) {
+        if (LOG.isDebugEnabled()) {
+          LOG.debug("Created Procedure Store WAL archive dir " + this.walArchiveDir);
+        }
+      } else {
+        LOG.warn("Failed create of " + this.walArchiveDir);
+      }
+    }
   }
 
   @Override
@@ -247,16 +279,6 @@ public class WALProcedureStore extends ProcedureStoreBase {
       }
     };
     syncThread.start();
-
-    // Create archive dir up front. Rename won't work w/o it up on HDFS.
-    if (this.walArchiveDir != null && !this.fs.exists(this.walArchiveDir)) {
-      if (this.fs.mkdirs(this.walArchiveDir)) {
-        if (LOG.isDebugEnabled()) LOG.debug("Created Procedure Store WAL archive dir " +
-            this.walArchiveDir);
-      } else {
-        LOG.warn("Failed create of " + this.walArchiveDir);
-      }
-    }
   }
 
   @Override
@@ -336,7 +358,7 @@ public class WALProcedureStore extends ProcedureStoreBase {
   public void recoverLease() throws IOException {
     lock.lock();
     try {
-      LOG.info("Starting WAL Procedure Store lease recovery");
+      LOG.trace("Starting WAL Procedure Store lease recovery");
       FileStatus[] oldLogs = getLogFiles();
       while (isRunning()) {
         // Get Log-MaxID and recover lease on old logs
@@ -365,7 +387,7 @@ public class WALProcedureStore extends ProcedureStoreBase {
           continue;
         }
 
-        LOG.info("Lease acquired for flushLogId: " + flushLogId);
+        LOG.trace("Lease acquired for flushLogId={}", flushLogId);
         break;
       }
     } finally {
@@ -383,9 +405,7 @@ public class WALProcedureStore extends ProcedureStoreBase {
 
       // Nothing to do, If we have only the current log.
       if (logs.size() == 1) {
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("No state logs to replay.");
-        }
+        LOG.trace("No state logs to replay.");
         loader.setMaxProcId(0);
         return;
       }
@@ -475,8 +495,8 @@ public class WALProcedureStore extends ProcedureStoreBase {
     } catch (IOException e) {
       // We are not able to serialize the procedure.
       // this is a code error, and we are not able to go on.
-      LOG.fatal("Unable to serialize one of the procedure: proc=" + proc +
-                ", subprocs=" + Arrays.toString(subprocs), e);
+      LOG.error(HBaseMarkers.FATAL, "Unable to serialize one of the procedure: proc=" +
+          proc + ", subprocs=" + Arrays.toString(subprocs), e);
       throw new RuntimeException(e);
     } finally {
       releaseSlot(slot);
@@ -504,7 +524,8 @@ public class WALProcedureStore extends ProcedureStoreBase {
     } catch (IOException e) {
       // We are not able to serialize the procedure.
       // this is a code error, and we are not able to go on.
-      LOG.fatal("Unable to serialize one of the procedure: " + Arrays.toString(procs), e);
+      LOG.error(HBaseMarkers.FATAL, "Unable to serialize one of the procedure: " +
+          Arrays.toString(procs), e);
       throw new RuntimeException(e);
     } finally {
       releaseSlot(slot);
@@ -527,7 +548,7 @@ public class WALProcedureStore extends ProcedureStoreBase {
     } catch (IOException e) {
       // We are not able to serialize the procedure.
       // this is a code error, and we are not able to go on.
-      LOG.fatal("Unable to serialize the procedure: " + proc, e);
+      LOG.error(HBaseMarkers.FATAL, "Unable to serialize the procedure: " + proc, e);
       throw new RuntimeException(e);
     } finally {
       releaseSlot(slot);
@@ -550,7 +571,7 @@ public class WALProcedureStore extends ProcedureStoreBase {
     } catch (IOException e) {
       // We are not able to serialize the procedure.
       // this is a code error, and we are not able to go on.
-      LOG.fatal("Unable to serialize the procedure: " + procId, e);
+      LOG.error(HBaseMarkers.FATAL, "Unable to serialize the procedure: " + procId, e);
       throw new RuntimeException(e);
     } finally {
       releaseSlot(slot);
@@ -575,7 +596,7 @@ public class WALProcedureStore extends ProcedureStoreBase {
     } catch (IOException e) {
       // We are not able to serialize the procedure.
       // this is a code error, and we are not able to go on.
-      LOG.fatal("Unable to serialize the procedure: " + proc, e);
+      LOG.error(HBaseMarkers.FATAL, "Unable to serialize the procedure: " + proc, e);
       throw new RuntimeException(e);
     } finally {
       releaseSlot(slot);
@@ -611,7 +632,7 @@ public class WALProcedureStore extends ProcedureStoreBase {
     } catch (IOException e) {
       // We are not able to serialize the procedure.
       // this is a code error, and we are not able to go on.
-      LOG.fatal("Unable to serialize the procedures: " + Arrays.toString(procIds), e);
+      LOG.error("Unable to serialize the procedures: " + Arrays.toString(procIds), e);
       throw new RuntimeException(e);
     } finally {
       releaseSlot(slot);
@@ -628,7 +649,7 @@ public class WALProcedureStore extends ProcedureStoreBase {
     slotsCache.offer(slot);
   }
 
-  private enum PushType { INSERT, UPDATE, DELETE };
+  private enum PushType { INSERT, UPDATE, DELETE }
 
   private long pushData(final PushType type, final ByteSlot slot,
       final long procId, final long[] subProcIds) {
@@ -881,7 +902,7 @@ public class WALProcedureStore extends ProcedureStoreBase {
         LOG.warn("Unable to roll the log, attempt=" + (i + 1), e);
       }
     }
-    LOG.fatal("Unable to roll the log");
+    LOG.error(HBaseMarkers.FATAL, "Unable to roll the log");
     return false;
   }
 
@@ -1004,6 +1025,17 @@ public class WALProcedureStore extends ProcedureStoreBase {
     } catch (RemoteException re) {
       LOG.warn("failed to create log file with id=" + logId, re);
       return false;
+    }
+    // After we create the stream but before we attempt to use it at all
+    // ensure that we can provide the level of data safety we're configured
+    // to provide.
+    final String durability = useHsync ? "hsync" : "hflush";
+    if (enforceStreamCapability && !(CommonFSUtils.hasCapability(newStream, durability))) {
+        throw new IllegalStateException("The procedure WAL relies on the ability to " + durability +
+          " for proper operation during component failures, but the underlying filesystem does " +
+          "not support doing so. Please check the config value of '" + USE_HSYNC_CONF_KEY +
+          "' to set the desired level of robustness and ensure the config value of '" +
+          CommonFSUtils.HBASE_WAL_DIR + "' points to a FileSystem mount that can provide it.");
     }
     try {
       ProcedureWALFormat.writeHeader(newStream, header);

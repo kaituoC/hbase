@@ -20,8 +20,6 @@ package org.apache.hadoop.hbase.master;
 
 import java.io.IOException;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -29,23 +27,27 @@ import org.apache.hadoop.fs.permission.FsAction;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.hbase.ClusterId;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.backup.HFileArchiver;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
+import org.apache.hadoop.hbase.client.RegionInfo;
+import org.apache.hadoop.hbase.client.RegionInfoBuilder;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.exceptions.DeserializationException;
 import org.apache.hadoop.hbase.fs.HFileSystem;
-import org.apache.hadoop.hbase.master.procedure.MasterProcedureConstants;
+import org.apache.hadoop.hbase.log.HBaseMarkers;
 import org.apache.hadoop.hbase.mob.MobConstants;
+import org.apache.hadoop.hbase.procedure2.store.wal.WALProcedureStore;
 import org.apache.hadoop.hbase.regionserver.HRegion;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSTableDescriptors;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.ipc.RemoteException;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * This class abstracts a bunch of operations the HMaster needs to interact with
@@ -54,7 +56,7 @@ import org.apache.hadoop.ipc.RemoteException;
  */
 @InterfaceAudience.Private
 public class MasterFileSystem {
-  private static final Log LOG = LogFactory.getLog(MasterFileSystem.class);
+  private static final Logger LOG = LoggerFactory.getLogger(MasterFileSystem.class);
 
   /** Parameter name for HBase instance root directory permission*/
   public static final String HBASE_DIR_PERMS = "hbase.rootdir.perms";
@@ -96,11 +98,8 @@ public class MasterFileSystem {
 
   private boolean isSecurityEnabled;
 
-  private final MasterServices services;
-
-  public MasterFileSystem(MasterServices services) throws IOException {
-    this.conf = services.getConfiguration();
-    this.services = services;
+  public MasterFileSystem(Configuration conf) throws IOException {
+    this.conf = conf;
     // Set filesystem to be that of this.rootdir else we get complaints about
     // mismatched filesystems if hbase.rootdir is hdfs and fs.defaultFS is
     // default localfs.  Presumption is that rootdir is fully-qualified before
@@ -143,10 +142,10 @@ public class MasterFileSystem {
     };
 
     final String[] protectedSubLogDirs = new String[] {
-            HConstants.HREGION_LOGDIR_NAME,
-            HConstants.HREGION_OLDLOGDIR_NAME,
-            HConstants.CORRUPT_DIR_NAME,
-            MasterProcedureConstants.MASTER_PROCEDURE_LOGDIR
+      HConstants.HREGION_LOGDIR_NAME,
+      HConstants.HREGION_OLDLOGDIR_NAME,
+      HConstants.CORRUPT_DIR_NAME,
+      WALProcedureStore.MASTER_PROCEDURE_LOGDIR
     };
     // check if the root directory exists
     checkRootDir(this.rootdir, conf, this.fs);
@@ -263,12 +262,13 @@ public class MasterFileSystem {
             HConstants.DEFAULT_VERSION_FILE_WRITE_ATTEMPTS));
       }
     } catch (DeserializationException de) {
-      LOG.fatal("Please fix invalid configuration for " + HConstants.HBASE_DIR, de);
+      LOG.error(HBaseMarkers.FATAL, "Please fix invalid configuration for "
+        + HConstants.HBASE_DIR, de);
       IOException ioe = new IOException();
       ioe.initCause(de);
       throw ioe;
     } catch (IllegalArgumentException iae) {
-      LOG.fatal("Please fix invalid configuration for "
+      LOG.error(HBaseMarkers.FATAL, "Please fix invalid configuration for "
         + HConstants.HBASE_DIR + " " + rd.toString(), iae);
       throw iae;
     }
@@ -388,9 +388,9 @@ public class MasterFileSystem {
       // created here in bootstrap and it'll need to be cleaned up.  Better to
       // not make it in first place.  Turn off block caching for bootstrap.
       // Enable after.
-      HRegionInfo metaHRI = new HRegionInfo(HRegionInfo.FIRST_META_REGIONINFO);
       TableDescriptor metaDescriptor = new FSTableDescriptors(c).get(TableName.META_TABLE_NAME);
-      HRegion meta = HRegion.createHRegion(metaHRI, rd, c, setInfoFamilyCachingForMeta(metaDescriptor, false), null);
+      HRegion meta = HRegion.createHRegion(RegionInfoBuilder.FIRST_META_REGIONINFO, rd,
+          c, setInfoFamilyCachingForMeta(metaDescriptor, false), null);
       meta.close();
     } catch (IOException e) {
         e = e instanceof RemoteException ?
@@ -416,12 +416,12 @@ public class MasterFileSystem {
     return builder.build();
   }
 
-  public void deleteFamilyFromFS(HRegionInfo region, byte[] familyName)
+  public void deleteFamilyFromFS(RegionInfo region, byte[] familyName)
       throws IOException {
     deleteFamilyFromFS(rootdir, region, familyName);
   }
 
-  public void deleteFamilyFromFS(Path rootDir, HRegionInfo region, byte[] familyName)
+  public void deleteFamilyFromFS(Path rootDir, RegionInfo region, byte[] familyName)
       throws IOException {
     // archive family store files
     Path tableDir = FSUtils.getTableDir(rootDir, region.getTable());
@@ -443,7 +443,7 @@ public class MasterFileSystem {
   public void stop() {
   }
 
-  public void logFileSystemState(Log log) throws IOException {
+  public void logFileSystemState(Logger log) throws IOException {
     FSUtils.logFileSystemState(fs, rootdir, log);
   }
 }

@@ -20,32 +20,33 @@ package org.apache.hadoop.hbase.master.procedure;
 
 import java.io.IOException;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.conf.ConfigurationObserver;
-import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.yetus.audience.InterfaceStability;
 import org.apache.hadoop.hbase.ipc.RpcServer;
 import org.apache.hadoop.hbase.master.HMaster;
 import org.apache.hadoop.hbase.master.MasterCoprocessorHost;
 import org.apache.hadoop.hbase.master.MasterServices;
 import org.apache.hadoop.hbase.master.assignment.AssignmentManager;
+import org.apache.hadoop.hbase.master.replication.ReplicationPeerManager;
 import org.apache.hadoop.hbase.procedure2.Procedure;
 import org.apache.hadoop.hbase.procedure2.ProcedureEvent;
 import org.apache.hadoop.hbase.procedure2.store.ProcedureStore;
 import org.apache.hadoop.hbase.procedure2.store.wal.WALProcedureStore;
-import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.security.Superusers;
+import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.util.CancelableProgressable;
 import org.apache.hadoop.hbase.util.FSUtils;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.yetus.audience.InterfaceStability;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @InterfaceAudience.Private
 @InterfaceStability.Evolving
 public class MasterProcedureEnv implements ConfigurationObserver {
-  private static final Log LOG = LogFactory.getLog(MasterProcedureEnv.class);
+  private static final Logger LOG = LoggerFactory.getLogger(MasterProcedureEnv.class);
 
   @InterfaceAudience.Private
   public static class WALStoreLeaseRecovery implements WALProcedureStore.LeaseRecovery {
@@ -105,16 +106,12 @@ public class MasterProcedureEnv implements ConfigurationObserver {
   public MasterProcedureEnv(final MasterServices master,
       final RSProcedureDispatcher remoteDispatcher) {
     this.master = master;
-    this.procSched = new MasterProcedureScheduler(master.getConfiguration());
+    this.procSched = new MasterProcedureScheduler();
     this.remoteDispatcher = remoteDispatcher;
   }
 
   public User getRequestUser() {
-    User user = RpcServer.getRequestUser();
-    if (user == null) {
-      user = Superusers.getSystemUser();
-    }
-    return user;
+    return RpcServer.getRequestUser().orElse(Superusers.getSystemUser());
   }
 
   public MasterServices getMasterServices() {
@@ -141,6 +138,10 @@ public class MasterProcedureEnv implements ConfigurationObserver {
     return remoteDispatcher;
   }
 
+  public ReplicationPeerManager getReplicationPeerManager() {
+    return master.getReplicationPeerManager();
+  }
+
   public boolean isRunning() {
     if (this.master == null || this.master.getMasterProcedureExecutor() == null) return false;
     return master.getMasterProcedureExecutor().isRunning();
@@ -150,26 +151,26 @@ public class MasterProcedureEnv implements ConfigurationObserver {
     return master.isInitialized();
   }
 
-  public boolean waitInitialized(Procedure proc) {
-    return procSched.waitEvent(master.getInitializedEvent(), proc);
+  public boolean waitInitialized(Procedure<?> proc) {
+    return master.getInitializedEvent().suspendIfNotReady(proc);
   }
 
-  public boolean waitServerCrashProcessingEnabled(Procedure proc) {
+  public boolean waitServerCrashProcessingEnabled(Procedure<?> proc) {
     if (master instanceof HMaster) {
-      return procSched.waitEvent(((HMaster)master).getServerCrashProcessingEnabledEvent(), proc);
+      return ((HMaster)master).getServerCrashProcessingEnabledEvent().suspendIfNotReady(proc);
     }
     return false;
   }
 
-  public boolean waitFailoverCleanup(Procedure proc) {
-    return procSched.waitEvent(master.getAssignmentManager().getFailoverCleanupEvent(), proc);
+  public boolean waitFailoverCleanup(Procedure<?> proc) {
+    return master.getAssignmentManager().getFailoverCleanupEvent().suspendIfNotReady(proc);
   }
 
-  public void setEventReady(ProcedureEvent event, boolean isReady) {
+  public void setEventReady(ProcedureEvent<?> event, boolean isReady) {
     if (isReady) {
-      procSched.wakeEvent(event);
+      event.wake(procSched);
     } else {
-      procSched.suspendEvent(event);
+      event.suspend();
     }
   }
 

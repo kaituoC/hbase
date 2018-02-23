@@ -33,8 +33,6 @@ import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -43,6 +41,8 @@ import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.MetaTableAccessor;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.client.Put;
@@ -55,6 +55,7 @@ import org.apache.hadoop.hbase.security.UserProvider;
 import org.apache.hadoop.hbase.security.token.TokenUtil;
 import org.apache.hadoop.hbase.util.Base64;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.RegionSplitter;
 import org.apache.hadoop.hbase.zookeeper.ZKConfig;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.mapreduce.InputFormat;
@@ -69,7 +70,7 @@ import com.codahale.metrics.MetricRegistry;
 @SuppressWarnings({ "rawtypes", "unchecked" })
 @InterfaceAudience.Public
 public class TableMapReduceUtil {
-  private static final Log LOG = LogFactory.getLog(TableMapReduceUtil.class);
+  private static final Logger LOG = LoggerFactory.getLogger(TableMapReduceUtil.class);
 
   /**
    * Use this before submitting a TableMap job. It will appropriately set up
@@ -207,7 +208,7 @@ public class TableMapReduceUtil {
     conf.set(TableInputFormat.SCAN, convertScanToString(scan));
     conf.setStrings("io.serializations", conf.get("io.serializations"),
         MutationSerialization.class.getName(), ResultSerialization.class.getName(),
-        KeyValueSerialization.class.getName());
+        CellSerialization.class.getName());
     if (addDependencyJars) {
       addDependencyJars(job);
     }
@@ -344,6 +345,36 @@ public class TableMapReduceUtil {
   }
 
   /**
+   * Sets up the job for reading from a table snapshot. It bypasses hbase servers and read directly
+   * from snapshot files.
+   * @param snapshotName The name of the snapshot (of a table) to read from.
+   * @param scan The scan instance with the columns, time range etc.
+   * @param mapper The mapper class to use.
+   * @param outputKeyClass The class of the output key.
+   * @param outputValueClass The class of the output value.
+   * @param job The current job to adjust. Make sure the passed job is carrying all necessary HBase
+   *          configuration.
+   * @param addDependencyJars upload HBase jars and jars for any of the configured job classes via
+   *          the distributed cache (tmpjars).
+   * @param tmpRestoreDir a temporary directory to copy the snapshot files into. Current user should
+   *          have write permissions to this directory, and this should not be a subdirectory of
+   *          rootdir. After the job is finished, restore directory can be deleted.
+   * @throws IOException When setting up the details fails.
+   * @see TableSnapshotInputFormat
+   */
+  public static void initTableSnapshotMapperJob(String snapshotName, Scan scan,
+      Class<? extends TableMapper> mapper,
+      Class<?> outputKeyClass,
+      Class<?> outputValueClass, Job job,
+      boolean addDependencyJars, Path tmpRestoreDir)
+      throws IOException {
+    TableSnapshotInputFormat.setInput(job, snapshotName, tmpRestoreDir);
+    initTableMapperJob(snapshotName, scan, mapper, outputKeyClass, outputValueClass, job,
+      addDependencyJars, false, TableSnapshotInputFormat.class);
+    resetCacheConfig(job.getConfiguration());
+  }
+
+  /**
    * Sets up the job for reading from a table snapshot. It bypasses hbase servers
    * and read directly from snapshot files.
    *
@@ -360,18 +391,23 @@ public class TableMapReduceUtil {
    * @param tmpRestoreDir a temporary directory to copy the snapshot files into. Current user should
    * have write permissions to this directory, and this should not be a subdirectory of rootdir.
    * After the job is finished, restore directory can be deleted.
+   * @param splitAlgo algorithm to split
+   * @param numSplitsPerRegion how many input splits to generate per one region
    * @throws IOException When setting up the details fails.
    * @see TableSnapshotInputFormat
    */
   public static void initTableSnapshotMapperJob(String snapshotName, Scan scan,
-      Class<? extends TableMapper> mapper,
-      Class<?> outputKeyClass,
-      Class<?> outputValueClass, Job job,
-      boolean addDependencyJars, Path tmpRestoreDir)
-  throws IOException {
-    TableSnapshotInputFormat.setInput(job, snapshotName, tmpRestoreDir);
+                                                Class<? extends TableMapper> mapper,
+                                                Class<?> outputKeyClass,
+                                                Class<?> outputValueClass, Job job,
+                                                boolean addDependencyJars, Path tmpRestoreDir,
+                                                RegionSplitter.SplitAlgorithm splitAlgo,
+                                                int numSplitsPerRegion)
+          throws IOException {
+    TableSnapshotInputFormat.setInput(job, snapshotName, tmpRestoreDir, splitAlgo,
+            numSplitsPerRegion);
     initTableMapperJob(snapshotName, scan, mapper, outputKeyClass,
-        outputValueClass, job, addDependencyJars, false, TableSnapshotInputFormat.class);
+            outputValueClass, job, addDependencyJars, false, TableSnapshotInputFormat.class);
     resetCacheConfig(job.getConfiguration());
   }
 
@@ -763,21 +799,6 @@ public class TableMapReduceUtil {
    * @see <a href="https://issues.apache.org/jira/browse/PIG-3285">PIG-3285</a>
    */
   public static void addHBaseDependencyJars(Configuration conf) throws IOException {
-
-    // PrefixTreeCodec is part of the hbase-prefix-tree module. If not included in MR jobs jar
-    // dependencies, MR jobs that write encoded hfiles will fail.
-    // We used reflection here so to prevent a circular module dependency.
-    // TODO - if we extract the MR into a module, make it depend on hbase-prefix-tree.
-    Class prefixTreeCodecClass = null;
-    try {
-      prefixTreeCodecClass =
-          Class.forName("org.apache.hadoop.hbase.codec.prefixtree.PrefixTreeCodec");
-    } catch (ClassNotFoundException e) {
-      // this will show up in unit tests but should not show in real deployments
-      LOG.warn("The hbase-prefix-tree module jar containing PrefixTreeCodec is not present." +
-          "  Continuing without it.");
-    }
-
     addDependencyJarsForClasses(conf,
       // explicitly pull a class from each module
       org.apache.hadoop.hbase.HConstants.class,                      // hbase-common
@@ -787,19 +808,21 @@ public class TableMapReduceUtil {
       org.apache.hadoop.hbase.ipc.RpcServer.class,                   // hbase-server
       org.apache.hadoop.hbase.CompatibilityFactory.class,            // hbase-hadoop-compat
       org.apache.hadoop.hbase.mapreduce.JobUtil.class,               // hbase-hadoop2-compat
-      org.apache.hadoop.hbase.mapreduce.TableMapper.class,           // hbase-mapreduce
+      org.apache.hadoop.hbase.mapreduce.TableMapper.class,           // hbase-server
       org.apache.hadoop.hbase.metrics.impl.FastLongHistogram.class,  // hbase-metrics
       org.apache.hadoop.hbase.metrics.Snapshot.class,                // hbase-metrics-api
-      prefixTreeCodecClass, //  hbase-prefix-tree (if null will be skipped)
-      // pull necessary dependencies
       org.apache.zookeeper.ZooKeeper.class,
-      org.apache.hadoop.hbase.shaded.io.netty.channel.Channel.class,
+      org.apache.hbase.thirdparty.io.netty.channel.Channel.class,
       com.google.protobuf.Message.class,
-      org.apache.hadoop.hbase.shaded.com.google.protobuf.UnsafeByteOperations.class,
-      org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists.class,
-      org.apache.htrace.Trace.class,
+      org.apache.hbase.thirdparty.com.google.protobuf.UnsafeByteOperations.class,
+      org.apache.hbase.thirdparty.com.google.common.collect.Lists.class,
+      org.apache.htrace.core.Tracer.class,
       com.codahale.metrics.MetricRegistry.class,
-      org.apache.commons.lang3.ArrayUtils.class);
+      org.apache.commons.lang3.ArrayUtils.class,
+      com.fasterxml.jackson.databind.ObjectMapper.class,
+      com.fasterxml.jackson.core.Versioned.class,
+      com.fasterxml.jackson.annotation.JsonView.class,
+      org.apache.hadoop.hbase.zookeeper.ZKWatcher.class);
   }
 
   /**
@@ -940,7 +963,7 @@ public class TableMapReduceUtil {
     }
 
     LOG.debug(String.format("For class %s, using jar %s", my_class.getName(), jar));
-    return new Path(jar).makeQualified(fs);
+    return new Path(jar).makeQualified(fs.getUri(), fs.getWorkingDirectory());
   }
 
   /**

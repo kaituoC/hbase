@@ -1,4 +1,4 @@
-/**
+/*
  *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -25,12 +25,12 @@ import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.hadoop.hbase.io.TimeRange;
 import org.apache.hadoop.hbase.util.ClassSize;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 /**
  * A mutable segment in memstore, specifically the active segment.
@@ -38,29 +38,30 @@ import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTe
 @InterfaceAudience.Private
 public class MutableSegment extends Segment {
 
-  public final static long DEEP_OVERHEAD = Segment.DEEP_OVERHEAD + ClassSize.CONCURRENT_SKIPLISTMAP;
+  public final static long DEEP_OVERHEAD = Segment.DEEP_OVERHEAD
+        + ClassSize.CONCURRENT_SKIPLISTMAP
+        + ClassSize.SYNC_TIMERANGE_TRACKER;
 
   protected MutableSegment(CellSet cellSet, CellComparator comparator, MemStoreLAB memStoreLAB) {
-    super(cellSet, comparator, memStoreLAB);
-    incSize(0,DEEP_OVERHEAD); // update the mutable segment metadata
+    super(cellSet, comparator, memStoreLAB, TimeRangeTracker.create(TimeRangeTracker.Type.SYNC));
+    incSize(0, DEEP_OVERHEAD, 0); // update the mutable segment metadata
   }
 
   /**
    * Adds the given cell into the segment
    * @param cell the cell to add
    * @param mslabUsed whether using MSLAB
-   * @param memstoreSize
    */
-  public void add(Cell cell, boolean mslabUsed, MemstoreSize memstoreSize) {
-    internalAdd(cell, mslabUsed, memstoreSize);
+  public void add(Cell cell, boolean mslabUsed, MemStoreSizing memStoreSizing) {
+    internalAdd(cell, mslabUsed, memStoreSizing);
   }
 
-  public void upsert(Cell cell, long readpoint, MemstoreSize memstoreSize) {
-    internalAdd(cell, false, memstoreSize);
+  public void upsert(Cell cell, long readpoint, MemStoreSizing memStoreSizing) {
+    internalAdd(cell, false, memStoreSizing);
 
     // Get the Cells for the row/family/qualifier regardless of timestamp.
     // For this case we want to clean up any other puts
-    Cell firstCell = CellUtil.createFirstOnRowColTS(cell, HConstants.LATEST_TIMESTAMP);
+    Cell firstCell = PrivateCellUtil.createFirstOnRowColTS(cell, HConstants.LATEST_TIMESTAMP);
     SortedSet<Cell> ss = this.tailSet(firstCell);
     Iterator<Cell> it = ss.iterator();
     // versions visible to oldest scanner
@@ -87,9 +88,10 @@ public class MutableSegment extends Segment {
             // removed cell is from MSLAB or not. Will do once HBASE-16438 is in
             int cellLen = getCellLength(cur);
             long heapSize = heapSizeChange(cur, true);
-            this.incSize(-cellLen, -heapSize);
-            if (memstoreSize != null) {
-              memstoreSize.decMemstoreSize(cellLen, heapSize);
+            long offHeapSize = offHeapSizeChange(cur, true);
+            this.incSize(-cellLen, -heapSize, -offHeapSize);
+            if (memStoreSizing != null) {
+              memStoreSizing.decMemStoreSize(cellLen, heapSize, offHeapSize);
             }
             it.remove();
           } else {
@@ -110,17 +112,6 @@ public class MutableSegment extends Segment {
   @VisibleForTesting
   Cell first() {
     return this.getCellSet().first();
-  }
-
-  @Override
-  public boolean shouldSeek(TimeRange tr, long oldestUnexpiredTS) {
-    return (this.timeRangeTracker.includesTimeRange(tr)
-        && (this.timeRangeTracker.getMax() >= oldestUnexpiredTS));
-  }
-
-  @Override
-  public long getMinTimestamp() {
-    return this.timeRangeTracker.getMin();
   }
 
   @Override protected long indexEntrySize() {

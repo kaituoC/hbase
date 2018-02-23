@@ -40,7 +40,7 @@ public class CollectionBackedScanner extends NonReversedNonLazyKeyValueScanner {
   private Cell current;
 
   public CollectionBackedScanner(SortedSet<Cell> set) {
-    this(set, CellComparator.COMPARATOR);
+    this(set, CellComparator.getInstance());
   }
 
   public CollectionBackedScanner(SortedSet<Cell> set,
@@ -51,7 +51,7 @@ public class CollectionBackedScanner extends NonReversedNonLazyKeyValueScanner {
   }
 
   public CollectionBackedScanner(List<Cell> list) {
-    this(list, CellComparator.COMPARATOR);
+    this(list, CellComparator.getInstance());
   }
 
   public CollectionBackedScanner(List<Cell> list,

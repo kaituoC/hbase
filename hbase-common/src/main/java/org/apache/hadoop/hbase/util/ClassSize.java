@@ -20,15 +20,15 @@
 
 package org.apache.hadoop.hbase.util;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 
 /**
@@ -39,7 +39,7 @@ import org.apache.yetus.audience.InterfaceAudience;
  */
 @InterfaceAudience.Private
 public class ClassSize {
-  private static final Log LOG = LogFactory.getLog(ClassSize.class);
+  private static final Logger LOG = LoggerFactory.getLogger(ClassSize.class);
 
   /** Array overhead */
   public static final int ARRAY;
@@ -128,8 +128,11 @@ public class ClassSize {
   /** Overhead for timerange */
   public static final int TIMERANGE;
 
-  /** Overhead for TimeRangeTracker */
-  public static final int TIMERANGE_TRACKER;
+  /** Overhead for SyncTimeRangeTracker */
+  public static final int SYNC_TIMERANGE_TRACKER;
+
+  /** Overhead for NonSyncTimeRangeTracker */
+  public static final int NON_SYNC_TIMERANGE_TRACKER;
 
   /** Overhead for CellSkipListSet */
   public static final int CELL_SET;
@@ -193,7 +196,7 @@ public class ClassSize {
         return (int) UnsafeAccess.theUnsafe.objectFieldOffset(
           HeaderSize.class.getDeclaredField("a"));
       } catch (NoSuchFieldException | SecurityException e) {
-        LOG.error(e);
+        LOG.error(e.toString(), e);
       }
       return super.headerSize();
     }
@@ -325,8 +328,11 @@ public class ClassSize {
 
     TIMERANGE = align(ClassSize.OBJECT + Bytes.SIZEOF_LONG * 2 + Bytes.SIZEOF_BOOLEAN);
 
-    TIMERANGE_TRACKER = align(ClassSize.OBJECT + 2 * REFERENCE);
-    CELL_SET = align(OBJECT + REFERENCE);
+    SYNC_TIMERANGE_TRACKER = align(ClassSize.OBJECT + 2 * REFERENCE);
+
+    NON_SYNC_TIMERANGE_TRACKER = align(ClassSize.OBJECT + 2 * Bytes.SIZEOF_LONG);
+
+    CELL_SET = align(OBJECT + REFERENCE + Bytes.SIZEOF_INT);
 
     STORE_SERVICES = align(OBJECT + REFERENCE + ATOMIC_LONG);
   }

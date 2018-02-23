@@ -26,7 +26,7 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.exceptions.DeserializationException;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.FilterProtos;
 
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.InvalidProtocolBufferException;
+import org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException;
 
 /**
  * A filter that includes rows based on a chance.
@@ -69,8 +69,14 @@ public class RandomRowFilter extends FilterBase {
     return false;
   }
 
+  @Deprecated
   @Override
-  public ReturnCode filterKeyValue(Cell v) {
+  public ReturnCode filterKeyValue(final Cell c) {
+    return filterCell(c);
+  }
+
+  @Override
+  public ReturnCode filterCell(final Cell c) {
     if (filterOutRow) {
       return ReturnCode.NEXT_ROW;
     }
@@ -81,7 +87,8 @@ public class RandomRowFilter extends FilterBase {
   public boolean filterRow() {
     return filterOutRow;
   }
-  
+
+  @Override
   public boolean hasFilterRow() {
     return true;
   }
@@ -109,6 +116,7 @@ public class RandomRowFilter extends FilterBase {
   /**
    * @return The filter serialized using pb
    */
+  @Override
   public byte [] toByteArray() {
     FilterProtos.RandomRowFilter.Builder builder =
       FilterProtos.RandomRowFilter.newBuilder();
@@ -134,10 +142,11 @@ public class RandomRowFilter extends FilterBase {
   }
 
   /**
-   * @param other
+   * @param o the other filter to compare with
    * @return true if and only if the fields of the filter that are serialized
    * are equal to the corresponding fields in other.  Used for testing.
    */
+  @Override
   boolean areSerializedFieldsEqual(Filter o) {
     if (o == this) return true;
     if (!(o instanceof RandomRowFilter)) return false;

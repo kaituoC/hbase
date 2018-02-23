@@ -23,16 +23,13 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.MetaTableAccessor;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotFoundException;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Connection;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
@@ -41,21 +38,24 @@ import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.client.TableState;
 import org.apache.hadoop.hbase.master.MasterCoprocessorHost;
 import org.apache.hadoop.hbase.procedure2.ProcedureStateSerializer;
+import org.apache.hadoop.hbase.util.ServerRegionReplicaUtil;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.ModifyTableState;
-import org.apache.hadoop.hbase.util.ServerRegionReplicaUtil;
 
 @InterfaceAudience.Private
 public class ModifyTableProcedure
     extends AbstractStateMachineTableProcedure<ModifyTableState> {
-  private static final Log LOG = LogFactory.getLog(ModifyTableProcedure.class);
+  private static final Logger LOG = LoggerFactory.getLogger(ModifyTableProcedure.class);
 
   private TableDescriptor unmodifiedTableDescriptor = null;
   private TableDescriptor modifiedTableDescriptor;
   private boolean deleteColumnFamilyInModify;
 
-  private List<HRegionInfo> regionInfoList;
+  private List<RegionInfo> regionInfoList;
   private Boolean traceEnabled = null;
 
   public ModifyTableProcedure() {
@@ -358,13 +358,27 @@ public class ModifyTableProcedure
           connection);
       }
     }
-
-    // Setup replication for region replicas if needed
-    if (newReplicaCount > 1 && oldReplicaCount <= 1) {
-      ServerRegionReplicaUtil.setupRegionReplicaReplication(env.getMasterConfiguration());
+    if (newReplicaCount > oldReplicaCount) {
+      Connection connection = env.getMasterServices().getConnection();
+      // Get the existing table regions
+      List<RegionInfo> existingTableRegions =
+          MetaTableAccessor.getTableRegions(connection, getTableName());
+      // add all the new entries to the meta table
+      addRegionsToMeta(env, newTableDescriptor, existingTableRegions);
+      if (oldReplicaCount <= 1) {
+        // The table has been newly enabled for replica. So check if we need to setup
+        // region replication
+        ServerRegionReplicaUtil.setupRegionReplicaReplication(env.getMasterConfiguration());
+      }
     }
   }
 
+  private static void addRegionsToMeta(final MasterProcedureEnv env,
+      final TableDescriptor tableDescriptor, final List<RegionInfo> regionInfos)
+      throws IOException {
+    MetaTableAccessor.addRegionsToMeta(env.getMasterServices().getConnection(), regionInfos,
+      tableDescriptor.getRegionReplication());
+  }
   /**
    * Action after modifying table.
    * @param env MasterProcedureEnv
@@ -413,7 +427,7 @@ public class ModifyTableProcedure
     }
   }
 
-  private List<HRegionInfo> getRegionInfoList(final MasterProcedureEnv env) throws IOException {
+  private List<RegionInfo> getRegionInfoList(final MasterProcedureEnv env) throws IOException {
     if (regionInfoList == null) {
       regionInfoList = env.getAssignmentManager().getRegionStates()
           .getRegionsOfTable(getTableName());

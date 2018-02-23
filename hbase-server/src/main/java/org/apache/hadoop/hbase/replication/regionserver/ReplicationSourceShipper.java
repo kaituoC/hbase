@@ -24,14 +24,14 @@ import java.util.Map;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.MetaTableAccessor;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.wal.WALEdit;
 import org.apache.hadoop.hbase.replication.ReplicationEndpoint;
 import org.apache.hadoop.hbase.replication.regionserver.ReplicationSourceWALReader.WALEntryBatch;
@@ -42,9 +42,9 @@ import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.Threads;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.cache.CacheBuilder;
-import org.apache.hadoop.hbase.shaded.com.google.common.cache.CacheLoader;
-import org.apache.hadoop.hbase.shaded.com.google.common.cache.LoadingCache;
+import org.apache.hbase.thirdparty.com.google.common.cache.CacheBuilder;
+import org.apache.hbase.thirdparty.com.google.common.cache.CacheLoader;
+import org.apache.hbase.thirdparty.com.google.common.cache.LoadingCache;
 
 /**
  * This thread reads entries from a queue and ships them. Entries are placed onto the queue by
@@ -52,7 +52,7 @@ import org.apache.hadoop.hbase.shaded.com.google.common.cache.LoadingCache;
  */
 @InterfaceAudience.Private
 public class ReplicationSourceShipper extends Thread {
-  private static final Log LOG = LogFactory.getLog(ReplicationSourceShipper.class);
+  private static final Logger LOG = LoggerFactory.getLogger(ReplicationSourceShipper.class);
 
   // Hold the state of a replication worker thread
   public enum WorkerState {
@@ -277,8 +277,8 @@ public class ReplicationSourceShipper extends Thread {
   }
 
   protected void updateLogPosition(long lastReadPosition) {
-    source.getSourceManager().logPositionAndCleanOldLogs(currentPath, source.getPeerClusterZnode(),
-      lastReadPosition, false, false);
+    source.getSourceManager().logPositionAndCleanOldLogs(currentPath, source.getQueueId(),
+      lastReadPosition, false);
     lastLoggedPosition = lastReadPosition;
   }
 
@@ -295,7 +295,7 @@ public class ReplicationSourceShipper extends Thread {
   public void startup(UncaughtExceptionHandler handler) {
     String name = Thread.currentThread().getName();
     Threads.setDaemonThreadRunning(this, name + ".replicationSource." + walGroupId + ","
-        + source.getPeerClusterZnode(), handler);
+        + source.getQueueId(), handler);
   }
 
   public PriorityBlockingQueue<Path> getLogQueue() {

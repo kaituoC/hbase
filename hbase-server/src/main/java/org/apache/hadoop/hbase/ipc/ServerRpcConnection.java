@@ -50,14 +50,14 @@ import org.apache.hadoop.hbase.security.HBaseSaslRpcServer;
 import org.apache.hadoop.hbase.security.SaslStatus;
 import org.apache.hadoop.hbase.security.SaslUtil;
 import org.apache.hadoop.hbase.security.User;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.BlockingService;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.ByteInput;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.ByteString;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.CodedInputStream;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.Descriptors.MethodDescriptor;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.Message;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.TextFormat;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.UnsafeByteOperations;
+import org.apache.hbase.thirdparty.com.google.protobuf.BlockingService;
+import org.apache.hbase.thirdparty.com.google.protobuf.ByteInput;
+import org.apache.hbase.thirdparty.com.google.protobuf.ByteString;
+import org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream;
+import org.apache.hbase.thirdparty.com.google.protobuf.Descriptors.MethodDescriptor;
+import org.apache.hbase.thirdparty.com.google.protobuf.Message;
+import org.apache.hbase.thirdparty.com.google.protobuf.TextFormat;
+import org.apache.hbase.thirdparty.com.google.protobuf.UnsafeByteOperations;
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.VersionInfo;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.RPCProtos;
@@ -77,7 +77,6 @@ import org.apache.hadoop.security.authorize.AuthorizationException;
 import org.apache.hadoop.security.authorize.ProxyUsers;
 import org.apache.hadoop.security.token.SecretManager.InvalidToken;
 import org.apache.hadoop.security.token.TokenIdentifier;
-import org.apache.htrace.TraceInfo;
 
 /** Reads calls from a connection and queues them for handling. */
 @edu.umd.cs.findbugs.annotations.SuppressWarnings(
@@ -194,14 +193,15 @@ abstract class ServerRpcConnection implements Closeable {
     String className = header.getCellBlockCodecClass();
     if (className == null || className.length() == 0) return;
     try {
-      this.codec = (Codec)Class.forName(className).newInstance();
+      this.codec = (Codec)Class.forName(className).getDeclaredConstructor().newInstance();
     } catch (Exception e) {
       throw new UnsupportedCellCodecException(className, e);
     }
     if (!header.hasCellBlockCompressorClass()) return;
     className = header.getCellBlockCompressorClass();
     try {
-      this.compressionCodec = (CompressionCodec)Class.forName(className).newInstance();
+      this.compressionCodec =
+          (CompressionCodec)Class.forName(className).getDeclaredConstructor().newInstance();
     } catch (Exception e) {
       throw new UnsupportedCompressionCodecException(className, e);
     }
@@ -632,7 +632,7 @@ abstract class ServerRpcConnection implements Closeable {
     if ((totalRequestSize +
         this.rpcServer.callQueueSizeInBytes.sum()) > this.rpcServer.maxQueueSizeInBytes) {
       final ServerCall<?> callTooBig = createCall(id, this.service, null, null, null, null,
-        totalRequestSize, null, null, 0, this.callCleanup);
+        totalRequestSize, null, 0, this.callCleanup);
       this.rpcServer.metrics.exception(RpcServer.CALL_QUEUE_TOO_BIG_EXCEPTION);
       callTooBig.setResponse(null, null,  RpcServer.CALL_QUEUE_TOO_BIG_EXCEPTION,
         "Call queue is full on " + this.rpcServer.server.getServerName() +
@@ -694,21 +694,18 @@ abstract class ServerRpcConnection implements Closeable {
       }
 
       ServerCall<?> readParamsFailedCall = createCall(id, this.service, null, null, null, null,
-        totalRequestSize, null, null, 0, this.callCleanup);
+        totalRequestSize, null, 0, this.callCleanup);
       readParamsFailedCall.setResponse(null, null, t, msg + "; " + t.getMessage());
       readParamsFailedCall.sendResponseIfReady();
       return;
     }
 
-    TraceInfo traceInfo = header.hasTraceInfo() ? new TraceInfo(header
-        .getTraceInfo().getTraceId(), header.getTraceInfo().getParentId())
-        : null;
     int timeout = 0;
     if (header.hasTimeout() && header.getTimeout() > 0) {
       timeout = Math.max(this.rpcServer.minClientRequestTimeout, header.getTimeout());
     }
     ServerCall<?> call = createCall(id, this.service, md, header, param, cellScanner, totalRequestSize,
-      traceInfo, this.addr, timeout, this.callCleanup);
+      this.addr, timeout, this.callCleanup);
 
     if (!this.rpcServer.scheduler.dispatch(new CallRunner(this.rpcServer, call))) {
       this.rpcServer.callQueueSizeInBytes.add(-1 * call.getSize());
@@ -790,7 +787,7 @@ abstract class ServerRpcConnection implements Closeable {
   public abstract boolean isConnectionOpen();
 
   public abstract ServerCall<?> createCall(int id, BlockingService service, MethodDescriptor md,
-      RequestHeader header, Message param, CellScanner cellScanner, long size, TraceInfo tinfo,
+      RequestHeader header, Message param, CellScanner cellScanner, long size,
       InetAddress remoteAddress, int timeout, CallCleanup reqCleanup);
 
   private static class ByteBuffByteInput extends ByteInput {

@@ -19,13 +19,11 @@ package org.apache.hadoop.hbase.coprocessor;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
-import org.apache.hadoop.hbase.Coprocessor;
 import org.apache.hadoop.hbase.CoprocessorEnvironment;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HConstants;
@@ -37,6 +35,8 @@ import org.apache.hadoop.hbase.ipc.CoprocessorRpcUtils;
 import org.apache.hadoop.hbase.regionserver.InternalScanner;
 import org.apache.hadoop.hbase.regionserver.Region;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.google.protobuf.RpcCallback;
 import com.google.protobuf.RpcController;
@@ -48,14 +48,16 @@ import com.google.protobuf.Service;
  * coprocessor endpoints throwing exceptions.
  */
 public class ColumnAggregationEndpointWithErrors
-    extends
-    ColumnAggregationWithErrorsProtos.ColumnAggregationServiceWithErrors
-implements Coprocessor, CoprocessorService  {
-  private static final Log LOG = LogFactory.getLog(ColumnAggregationEndpointWithErrors.class);
+    extends ColumnAggregationWithErrorsProtos.ColumnAggregationServiceWithErrors
+    implements RegionCoprocessor {
+  private static final Logger LOG =
+      LoggerFactory.getLogger(ColumnAggregationEndpointWithErrors.class);
+
   private RegionCoprocessorEnvironment env = null;
+
   @Override
-  public Service getService() {
-    return this;
+  public Iterable<Service> getServices() {
+    return Collections.singleton(this);
   }
 
   @Override
@@ -73,7 +75,7 @@ implements Coprocessor, CoprocessorService  {
   }
 
   @Override
-  public void sum(RpcController controller, ColumnAggregationWithErrorsSumRequest request, 
+  public void sum(RpcController controller, ColumnAggregationWithErrorsSumRequest request,
       RpcCallback<ColumnAggregationWithErrorsSumResponse> done) {
     // aggregate at each region
     Scan scan = new Scan();

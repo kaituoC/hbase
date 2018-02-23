@@ -15,29 +15,34 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.replication;
+
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.HRegionInfo;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.Waiter;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.regionserver.HRegion;
-import org.apache.hadoop.hbase.replication.regionserver.*;
+import org.apache.hadoop.hbase.replication.regionserver.HBaseInterClusterReplicationEndpoint;
+import org.apache.hadoop.hbase.replication.regionserver.MetricsReplicationGlobalSourceSource;
+import org.apache.hadoop.hbase.replication.regionserver.MetricsReplicationSourceImpl;
+import org.apache.hadoop.hbase.replication.regionserver.MetricsReplicationSourceSource;
+import org.apache.hadoop.hbase.replication.regionserver.MetricsReplicationSourceSourceImpl;
+import org.apache.hadoop.hbase.replication.regionserver.MetricsSource;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.ReplicationTests;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -50,19 +55,23 @@ import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Tests ReplicationSource and ReplicationEndpoint interactions
  */
 @Category({ReplicationTests.class, MediumTests.class})
 public class TestReplicationEndpoint extends TestReplicationBase {
-  private static final Log LOG = LogFactory.getLog(TestReplicationEndpoint.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestReplicationEndpoint.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestReplicationEndpoint.class);
 
   static int numRegionServers;
 
@@ -117,7 +126,7 @@ public class TestReplicationEndpoint extends TestReplicationBase {
     });
   }
 
-  @Test (timeout=120000)
+  @Test
   public void testCustomReplicationEndpoint() throws Exception {
     // test installing a custom replication endpoint other than the default one.
     admin.addPeer("testCustomReplicationEndpoint",
@@ -156,7 +165,7 @@ public class TestReplicationEndpoint extends TestReplicationBase {
     admin.removePeer("testCustomReplicationEndpoint");
   }
 
-  @Test (timeout=120000)
+  @Test
   public void testReplicationEndpointReturnsFalseOnReplicate() throws Exception {
     Assert.assertEquals(0, ReplicationEndpointForTest.replicateCount.get());
     Assert.assertTrue(!ReplicationEndpointReturningFalse.replicated.get());
@@ -192,7 +201,7 @@ public class TestReplicationEndpoint extends TestReplicationBase {
     admin.removePeer("testReplicationEndpointReturnsFalseOnReplicate");
   }
 
-  @Test (timeout=120000)
+  @Test
   public void testInterClusterReplication() throws Exception {
     final String id = "testInterClusterReplication";
 
@@ -202,7 +211,7 @@ public class TestReplicationEndpoint extends TestReplicationBase {
     // Make sure edits are spread across regions because we do region based batching
     // before shipping edits.
     for(HRegion region: regions) {
-      HRegionInfo hri = region.getRegionInfo();
+      RegionInfo hri = region.getRegionInfo();
       byte[] row = hri.getStartKey();
       for (int i = 0; i < 100; i++) {
         if (row.length > 0) {
@@ -238,7 +247,7 @@ public class TestReplicationEndpoint extends TestReplicationBase {
     utility1.deleteTableData(tableName);
   }
 
-  @Test (timeout=120000)
+  @Test
   public void testWALEntryFilterFromReplicationEndpoint() throws Exception {
     ReplicationPeerConfig rpc =  new ReplicationPeerConfig().setClusterKey(ZKConfig.getZooKeeperClusterKey(conf1))
         .setReplicationEndpointImpl(ReplicationEndpointWithWALEntryFilter.class.getName());
@@ -267,7 +276,7 @@ public class TestReplicationEndpoint extends TestReplicationBase {
     admin.removePeer("testWALEntryFilterFromReplicationEndpoint");
   }
 
-  @Test (timeout=120000, expected=IOException.class)
+  @Test (expected=IOException.class)
   public void testWALEntryFilterAddValidation() throws Exception {
     ReplicationPeerConfig rpc =  new ReplicationPeerConfig().setClusterKey(ZKConfig.getZooKeeperClusterKey(conf1))
         .setReplicationEndpointImpl(ReplicationEndpointWithWALEntryFilter.class.getName());
@@ -277,7 +286,7 @@ public class TestReplicationEndpoint extends TestReplicationBase {
     admin.addPeer("testWALEntryFilterAddValidation", rpc);
   }
 
-  @Test (timeout=120000, expected=IOException.class)
+  @Test (expected=IOException.class)
   public void testWALEntryFilterUpdateValidation() throws Exception {
     ReplicationPeerConfig rpc =  new ReplicationPeerConfig().setClusterKey(ZKConfig.getZooKeeperClusterKey(conf1))
         .setReplicationEndpointImpl(ReplicationEndpointWithWALEntryFilter.class.getName());
@@ -486,7 +495,7 @@ public class TestReplicationEndpoint extends TestReplicationBase {
       }
 
       super.replicate(replicateContext);
-      LOG.info("Replicated " + row + ", count=" + replicateCount.get());
+      LOG.info("Replicated " + Bytes.toString(row) + ", count=" + replicateCount.get());
 
       replicated.set(replicateCount.get() > COUNT); // first 10 times, we return false
       return replicated.get();

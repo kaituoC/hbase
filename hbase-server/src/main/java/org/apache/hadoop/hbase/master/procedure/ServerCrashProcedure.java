@@ -18,16 +18,13 @@
 package org.apache.hadoop.hbase.master.procedure;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.RegionReplicaUtil;
 import org.apache.hadoop.hbase.master.MasterServices;
 import org.apache.hadoop.hbase.master.MasterWalManager;
@@ -39,8 +36,10 @@ import org.apache.hadoop.hbase.procedure2.ProcedureStateSerializer;
 import org.apache.hadoop.hbase.procedure2.ProcedureSuspendedException;
 import org.apache.hadoop.hbase.procedure2.ProcedureYieldException;
 import org.apache.hadoop.hbase.procedure2.StateMachineProcedure;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.RegionInfo;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.ServerCrashState;
 
@@ -57,7 +56,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.S
 public class ServerCrashProcedure
 extends StateMachineProcedure<MasterProcedureEnv, ServerCrashState>
 implements ServerProcedureInterface {
-  private static final Log LOG = LogFactory.getLog(ServerCrashProcedure.class);
+  private static final Logger LOG = LoggerFactory.getLogger(ServerCrashProcedure.class);
 
   /**
    * Name of the crashed server to process.
@@ -72,7 +71,7 @@ implements ServerProcedureInterface {
   /**
    * Regions that were on the crashed server.
    */
-  private List<HRegionInfo> regionsOnCrashedServer;
+  private List<RegionInfo> regionsOnCrashedServer;
 
   private boolean carryingMeta = false;
   private boolean shouldSplitWal;
@@ -159,20 +158,19 @@ implements ServerProcedureInterface {
         if (filterDefaultMetaRegions(regionsOnCrashedServer)) {
           if (LOG.isTraceEnabled()) {
             LOG.trace("Assigning regions " +
-              HRegionInfo.getShortNameToLog(regionsOnCrashedServer) + ", " + this +
+              RegionInfo.getShortNameToLog(regionsOnCrashedServer) + ", " + this +
               "; cycles=" + getCycles());
           }
           handleRIT(env, regionsOnCrashedServer);
           AssignmentManager am = env.getAssignmentManager();
-          // forceNewPlan is set to false. Balancer is expected to find most suitable target
-          // server if retention is not possible.
-          addChildProcedure(am.
-              createAssignProcedures(am.getOrderedRegions(regionsOnCrashedServer), false));
+          // createAssignProcedure will try to use the old location for the region deploy.
+          addChildProcedure(am.createAssignProcedures(regionsOnCrashedServer));
         }
         setNextState(ServerCrashState.SERVER_CRASH_FINISH);
         break;
 
       case SERVER_CRASH_FINISH:
+        services.getAssignmentManager().getRegionStates().removeServer(serverName);
         services.getServerManager().getDeadServers().finish(serverName);
         return Flow.NO_MORE_STATE;
 
@@ -185,31 +183,31 @@ implements ServerProcedureInterface {
     return Flow.HAS_MORE_STATE;
   }
 
+
   /**
    * @param env
    * @throws IOException
    */
   private void processMeta(final MasterProcedureEnv env) throws IOException {
-    if (LOG.isDebugEnabled()) LOG.debug(this + "; Processing hbase:meta that was on " +
-        this.serverName);
+    LOG.debug("{}; processing hbase:meta", this);
 
     // Assign meta if still carrying it. Check again: region may be assigned because of RIT timeout
     final AssignmentManager am = env.getMasterServices().getAssignmentManager();
-    for (HRegionInfo hri: am.getRegionStates().getServerRegionInfoSet(serverName)) {
-      if (!isDefaultMetaRegion(hri)) continue;
-
-      am.offlineRegion(hri);
+    for (RegionInfo hri: am.getRegionStates().getServerRegionInfoSet(serverName)) {
+      if (!isDefaultMetaRegion(hri)) {
+        continue;
+      }
       addChildProcedure(new RecoverMetaProcedure(serverName, this.shouldSplitWal));
     }
   }
 
-  private boolean filterDefaultMetaRegions(final List<HRegionInfo> regions) {
+  private boolean filterDefaultMetaRegions(final List<RegionInfo> regions) {
     if (regions == null) return false;
     regions.removeIf(this::isDefaultMetaRegion);
     return !regions.isEmpty();
   }
 
-  private boolean isDefaultMetaRegion(final HRegionInfo hri) {
+  private boolean isDefaultMetaRegion(final RegionInfo hri) {
     return hri.getTable().equals(TableName.META_TABLE_NAME) &&
       RegionReplicaUtil.isDefaultReplica(hri);
   }
@@ -295,8 +293,8 @@ implements ServerProcedureInterface {
       setCarryingMeta(this.carryingMeta).
       setShouldSplitWal(this.shouldSplitWal);
     if (this.regionsOnCrashedServer != null && !this.regionsOnCrashedServer.isEmpty()) {
-      for (HRegionInfo hri: this.regionsOnCrashedServer) {
-        state.addRegionsOnCrashedServer(HRegionInfo.convert(hri));
+      for (RegionInfo hri: this.regionsOnCrashedServer) {
+        state.addRegionsOnCrashedServer(ProtobufUtil.toRegionInfo(hri));
       }
     }
     serializer.serialize(state.build());
@@ -315,9 +313,9 @@ implements ServerProcedureInterface {
     this.shouldSplitWal = state.getShouldSplitWal();
     int size = state.getRegionsOnCrashedServerCount();
     if (size > 0) {
-      this.regionsOnCrashedServer = new ArrayList<HRegionInfo>(size);
-      for (RegionInfo ri: state.getRegionsOnCrashedServerList()) {
-        this.regionsOnCrashedServer.add(HRegionInfo.convert(ri));
+      this.regionsOnCrashedServer = new ArrayList<>(size);
+      for (org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.RegionInfo ri: state.getRegionsOnCrashedServerList()) {
+        this.regionsOnCrashedServer.add(ProtobufUtil.toRegionInfo(ri));
       }
     }
   }
@@ -365,13 +363,13 @@ implements ServerProcedureInterface {
    * @param env
    * @param regions Regions that were on crashed server
    */
-  private void handleRIT(final MasterProcedureEnv env, final List<HRegionInfo> regions) {
+  private void handleRIT(final MasterProcedureEnv env, final List<RegionInfo> regions) {
     if (regions == null) return;
     AssignmentManager am = env.getMasterServices().getAssignmentManager();
-    final Iterator<HRegionInfo> it = regions.iterator();
+    final Iterator<RegionInfo> it = regions.iterator();
     ServerCrashException sce = null;
     while (it.hasNext()) {
-      final HRegionInfo hri = it.next();
+      final RegionInfo hri = it.next();
       RegionTransitionProcedure rtp = am.getRegionStates().getRegionTransitionProcedure(hri);
       if (rtp == null) continue;
       // Make sure the RIT is against this crashed server. In the case where there are many

@@ -34,14 +34,15 @@ import java.util.Set;
 import java.util.SortedSet;
 import java.util.TreeMap;
 import java.util.TreeSet;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseConfiguration;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.client.RegionInfo;
+import org.apache.hadoop.hbase.client.RegionInfoBuilder;
 import org.apache.hadoop.hbase.client.RegionReplicaUtil;
 import org.apache.hadoop.hbase.master.RackManager;
 import org.apache.hadoop.hbase.master.RegionPlan;
@@ -49,16 +50,17 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.net.DNSToSwitchMapping;
 import org.junit.Assert;
 import org.junit.BeforeClass;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Class used to be the base of unit tests on load balancers. It gives helper
- * methods to create maps of {@link ServerName} to lists of {@link HRegionInfo}
+ * methods to create maps of {@link ServerName} to lists of {@link RegionInfo}
  * and to check list of region plans.
  *
  */
 public class BalancerTestBase {
-  private static final Log LOG = LogFactory.getLog(BalancerTestBase.class);
-  protected static Random rand = new Random();
+  private static final Logger LOG = LoggerFactory.getLogger(BalancerTestBase.class);
   static int regionId = 0;
   protected static Configuration conf;
   protected static StochasticLoadBalancer loadBalancer;
@@ -158,12 +160,9 @@ public class BalancerTestBase {
     public MockMapping(Configuration conf) {
     }
 
+    @Override
     public List<String> resolve(List<String> names) {
-      List<String> ret = new ArrayList<>(names.size());
-      for (String name : names) {
-        ret.add("rack");
-      }
-      return ret;
+      return Stream.generate(() -> "rack").limit(names.size()).collect(Collectors.toList());
     }
 
     // do not add @Override annotations here. It mighty break compilation with earlier Hadoops
@@ -244,20 +243,20 @@ public class BalancerTestBase {
   /**
    * Checks whether region replicas are not hosted on the same host.
    */
-  public void assertRegionReplicaPlacement(Map<ServerName, List<HRegionInfo>> serverMap, RackManager rackManager) {
-    TreeMap<String, Set<HRegionInfo>> regionsPerHost = new TreeMap<>();
-    TreeMap<String, Set<HRegionInfo>> regionsPerRack = new TreeMap<>();
+  public void assertRegionReplicaPlacement(Map<ServerName, List<RegionInfo>> serverMap, RackManager rackManager) {
+    TreeMap<String, Set<RegionInfo>> regionsPerHost = new TreeMap<>();
+    TreeMap<String, Set<RegionInfo>> regionsPerRack = new TreeMap<>();
 
-    for (Entry<ServerName, List<HRegionInfo>> entry : serverMap.entrySet()) {
+    for (Entry<ServerName, List<RegionInfo>> entry : serverMap.entrySet()) {
       String hostname = entry.getKey().getHostname();
-      Set<HRegionInfo> infos = regionsPerHost.get(hostname);
+      Set<RegionInfo> infos = regionsPerHost.get(hostname);
       if (infos == null) {
         infos = new HashSet<>();
         regionsPerHost.put(hostname, infos);
       }
 
-      for (HRegionInfo info : entry.getValue()) {
-        HRegionInfo primaryInfo = RegionReplicaUtil.getRegionInfoForDefaultReplica(info);
+      for (RegionInfo info : entry.getValue()) {
+        RegionInfo primaryInfo = RegionReplicaUtil.getRegionInfoForDefaultReplica(info);
         if (!infos.add(primaryInfo)) {
           Assert.fail("Two or more region replicas are hosted on the same host after balance");
         }
@@ -268,16 +267,16 @@ public class BalancerTestBase {
       return;
     }
 
-    for (Entry<ServerName, List<HRegionInfo>> entry : serverMap.entrySet()) {
+    for (Entry<ServerName, List<RegionInfo>> entry : serverMap.entrySet()) {
       String rack = rackManager.getRack(entry.getKey());
-      Set<HRegionInfo> infos = regionsPerRack.get(rack);
+      Set<RegionInfo> infos = regionsPerRack.get(rack);
       if (infos == null) {
         infos = new HashSet<>();
         regionsPerRack.put(rack, infos);
       }
 
-      for (HRegionInfo info : entry.getValue()) {
-        HRegionInfo primaryInfo = RegionReplicaUtil.getRegionInfoForDefaultReplica(info);
+      for (RegionInfo info : entry.getValue()) {
+        RegionInfo primaryInfo = RegionReplicaUtil.getRegionInfoForDefaultReplica(info);
         if (!infos.add(primaryInfo)) {
           Assert.fail("Two or more region replicas are hosted on the same rack after balance");
         }
@@ -298,9 +297,9 @@ public class BalancerTestBase {
         + " min=" + min + "]";
   }
 
-  protected List<ServerAndLoad> convertToList(final Map<ServerName, List<HRegionInfo>> servers) {
+  protected List<ServerAndLoad> convertToList(final Map<ServerName, List<RegionInfo>> servers) {
     List<ServerAndLoad> list = new ArrayList<>(servers.size());
-    for (Map.Entry<ServerName, List<HRegionInfo>> e : servers.entrySet()) {
+    for (Map.Entry<ServerName, List<RegionInfo>> e : servers.entrySet()) {
       list.add(new ServerAndLoad(e.getKey(), e.getValue().size()));
     }
     return list;
@@ -333,7 +332,7 @@ public class BalancerTestBase {
    */
   protected List<ServerAndLoad> reconcile(List<ServerAndLoad> list,
                                           List<RegionPlan> plans,
-                                          Map<ServerName, List<HRegionInfo>> servers) {
+                                          Map<ServerName, List<RegionInfo>> servers) {
     List<ServerAndLoad> result = new ArrayList<>(list.size());
 
     Map<ServerName, ServerAndLoad> map = new HashMap<>(list.size());
@@ -366,7 +365,7 @@ public class BalancerTestBase {
     map.put(sn, sal);
   }
 
-  protected TreeMap<ServerName, List<HRegionInfo>> mockClusterServers(int[] mockCluster) {
+  protected TreeMap<ServerName, List<RegionInfo>> mockClusterServers(int[] mockCluster) {
     return mockClusterServers(mockCluster, -1);
   }
 
@@ -375,42 +374,42 @@ public class BalancerTestBase {
       mockClusterServers(mockCluster, -1), null, null, null);
   }
 
-  protected TreeMap<ServerName, List<HRegionInfo>> mockClusterServers(int[] mockCluster, int numTables) {
+  protected TreeMap<ServerName, List<RegionInfo>> mockClusterServers(int[] mockCluster, int numTables) {
     int numServers = mockCluster.length;
-    TreeMap<ServerName, List<HRegionInfo>> servers = new TreeMap<>();
+    TreeMap<ServerName, List<RegionInfo>> servers = new TreeMap<>();
     for (int i = 0; i < numServers; i++) {
       int numRegions = mockCluster[i];
       ServerAndLoad sal = randomServer(0);
-      List<HRegionInfo> regions = randomRegions(numRegions, numTables);
+      List<RegionInfo> regions = randomRegions(numRegions, numTables);
       servers.put(sal.getServerName(), regions);
     }
     return servers;
   }
 
-  protected TreeMap<ServerName, List<HRegionInfo>> mockUniformClusterServers(int[] mockCluster) {
+  protected TreeMap<ServerName, List<RegionInfo>> mockUniformClusterServers(int[] mockCluster) {
     int numServers = mockCluster.length;
-    TreeMap<ServerName, List<HRegionInfo>> servers = new TreeMap<>();
+    TreeMap<ServerName, List<RegionInfo>> servers = new TreeMap<>();
     for (int i = 0; i < numServers; i++) {
       int numRegions = mockCluster[i];
       ServerAndLoad sal = randomServer(0);
-      List<HRegionInfo> regions = uniformRegions(numRegions);
+      List<RegionInfo> regions = uniformRegions(numRegions);
       servers.put(sal.getServerName(), regions);
     }
     return servers;
   }
 
-  protected HashMap<TableName, TreeMap<ServerName, List<HRegionInfo>>> mockClusterServersWithTables(Map<ServerName, List<HRegionInfo>> clusterServers) {
-    HashMap<TableName, TreeMap<ServerName, List<HRegionInfo>>> result = new HashMap<>();
-    for (Map.Entry<ServerName, List<HRegionInfo>> entry : clusterServers.entrySet()) {
+  protected HashMap<TableName, TreeMap<ServerName, List<RegionInfo>>> mockClusterServersWithTables(Map<ServerName, List<RegionInfo>> clusterServers) {
+    HashMap<TableName, TreeMap<ServerName, List<RegionInfo>>> result = new HashMap<>();
+    for (Map.Entry<ServerName, List<RegionInfo>> entry : clusterServers.entrySet()) {
       ServerName sal = entry.getKey();
-      List<HRegionInfo> regions = entry.getValue();
-      for (HRegionInfo hri : regions){
-        TreeMap<ServerName, List<HRegionInfo>> servers = result.get(hri.getTable());
+      List<RegionInfo> regions = entry.getValue();
+      for (RegionInfo hri : regions){
+        TreeMap<ServerName, List<RegionInfo>> servers = result.get(hri.getTable());
         if (servers == null) {
           servers = new TreeMap<>();
           result.put(hri.getTable(), servers);
         }
-        List<HRegionInfo> hrilist = servers.get(sal);
+        List<RegionInfo> hrilist = servers.get(sal);
         if (hrilist == null) {
           hrilist = new ArrayList<>();
           servers.put(sal, hrilist);
@@ -418,7 +417,7 @@ public class BalancerTestBase {
         hrilist.add(hri);
       }
     }
-    for(Map.Entry<TableName, TreeMap<ServerName, List<HRegionInfo>>> entry : result.entrySet()){
+    for(Map.Entry<TableName, TreeMap<ServerName, List<RegionInfo>>> entry : result.entrySet()){
       for(ServerName srn : clusterServers.keySet()){
         if (!entry.getValue().containsKey(srn)) entry.getValue().put(srn, new ArrayList<>());
       }
@@ -426,16 +425,17 @@ public class BalancerTestBase {
     return result;
   }
 
-  private Queue<HRegionInfo> regionQueue = new LinkedList<>();
+  private Queue<RegionInfo> regionQueue = new LinkedList<>();
 
-  protected List<HRegionInfo> randomRegions(int numRegions) {
+  protected List<RegionInfo> randomRegions(int numRegions) {
     return randomRegions(numRegions, -1);
   }
 
-  protected List<HRegionInfo> randomRegions(int numRegions, int numTables) {
-    List<HRegionInfo> regions = new ArrayList<>(numRegions);
+  protected List<RegionInfo> randomRegions(int numRegions, int numTables) {
+    List<RegionInfo> regions = new ArrayList<>(numRegions);
     byte[] start = new byte[16];
     byte[] end = new byte[16];
+    Random rand = ThreadLocalRandom.current();
     rand.nextBytes(start);
     rand.nextBytes(end);
     for (int i = 0; i < numRegions; i++) {
@@ -447,16 +447,22 @@ public class BalancerTestBase {
       Bytes.putInt(end, 0, (numRegions << 1) + 1);
       TableName tableName =
           TableName.valueOf("table" + (numTables > 0 ? rand.nextInt(numTables) : i));
-      HRegionInfo hri = new HRegionInfo(tableName, start, end, false, regionId++);
+      RegionInfo hri = RegionInfoBuilder.newBuilder(tableName)
+          .setStartKey(start)
+          .setEndKey(end)
+          .setSplit(false)
+          .setRegionId(regionId++)
+          .build();
       regions.add(hri);
     }
     return regions;
   }
 
-  protected List<HRegionInfo> uniformRegions(int numRegions) {
-    List<HRegionInfo> regions = new ArrayList<>(numRegions);
+  protected List<RegionInfo> uniformRegions(int numRegions) {
+    List<RegionInfo> regions = new ArrayList<>(numRegions);
     byte[] start = new byte[16];
     byte[] end = new byte[16];
+    Random rand = ThreadLocalRandom.current();
     rand.nextBytes(start);
     rand.nextBytes(end);
     for (int i = 0; i < numRegions; i++) {
@@ -464,13 +470,17 @@ public class BalancerTestBase {
       Bytes.putInt(end, 0, (numRegions << 1) + 1);
       TableName tableName =
               TableName.valueOf("table" + i);
-      HRegionInfo hri = new HRegionInfo(tableName, start, end, false);
+      RegionInfo hri = RegionInfoBuilder.newBuilder(tableName)
+          .setStartKey(start)
+          .setEndKey(end)
+          .setSplit(false)
+          .build();
       regions.add(hri);
     }
     return regions;
   }
 
-  protected void returnRegions(List<HRegionInfo> regions) {
+  protected void returnRegions(List<RegionInfo> regions) {
     regionQueue.addAll(regions);
   }
 
@@ -481,6 +491,7 @@ public class BalancerTestBase {
       ServerName sn = this.serverQueue.poll();
       return new ServerAndLoad(sn, numRegionsPerServer);
     }
+    Random rand = ThreadLocalRandom.current();
     String host = "srv" + rand.nextInt(Integer.MAX_VALUE);
     int port = rand.nextInt(60000);
     long startCode = rand.nextLong();
@@ -510,12 +521,12 @@ public class BalancerTestBase {
       int replication,
       int numTables,
       boolean assertFullyBalanced, boolean assertFullyBalancedForReplicas) {
-    Map<ServerName, List<HRegionInfo>> serverMap =
+    Map<ServerName, List<RegionInfo>> serverMap =
         createServerMap(numNodes, numRegions, numRegionsPerServer, replication, numTables);
     testWithCluster(serverMap, null, assertFullyBalanced, assertFullyBalancedForReplicas);
   }
 
-  protected void testWithCluster(Map<ServerName, List<HRegionInfo>> serverMap,
+  protected void testWithCluster(Map<ServerName, List<RegionInfo>> serverMap,
       RackManager rackManager, boolean assertFullyBalanced, boolean assertFullyBalancedForReplicas) {
     List<ServerAndLoad> list = convertToList(serverMap);
     LOG.info("Mock Cluster : " + printMock(list) + " " + printStats(list));
@@ -545,7 +556,7 @@ public class BalancerTestBase {
     }
   }
 
-  protected Map<ServerName, List<HRegionInfo>> createServerMap(int numNodes,
+  protected Map<ServerName, List<RegionInfo>> createServerMap(int numNodes,
                                                              int numRegions,
                                                              int numRegionsPerServer,
                                                              int replication,
@@ -558,10 +569,10 @@ public class BalancerTestBase {
       cluster[i] = numRegionsPerServer;
     }
     cluster[cluster.length - 1] = numRegions - ((cluster.length - 1) * numRegionsPerServer);
-    Map<ServerName, List<HRegionInfo>> clusterState = mockClusterServers(cluster, numTables);
+    Map<ServerName, List<RegionInfo>> clusterState = mockClusterServers(cluster, numTables);
     if (replication > 0) {
       // replicate the regions to the same servers
-      for (List<HRegionInfo> regions : clusterState.values()) {
+      for (List<RegionInfo> regions : clusterState.values()) {
         int length = regions.size();
         for (int i = 0; i < length; i++) {
           for (int r = 1; r < replication ; r++) {

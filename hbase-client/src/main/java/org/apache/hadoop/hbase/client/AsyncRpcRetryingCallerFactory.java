@@ -17,11 +17,11 @@
  */
 package org.apache.hadoop.hbase.client;
 
-import static org.apache.hadoop.hbase.shaded.com.google.common.base.Preconditions.checkArgument;
-import static org.apache.hadoop.hbase.shaded.com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.hbase.thirdparty.com.google.common.base.Preconditions.checkArgument;
+import static org.apache.hbase.thirdparty.com.google.common.base.Preconditions.checkNotNull;
 import static org.apache.hadoop.hbase.client.ConnectionUtils.retries2Attempts;
 
-import org.apache.hadoop.hbase.shaded.io.netty.util.HashedWheelTimer;
+import org.apache.hbase.thirdparty.io.netty.util.HashedWheelTimer;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -153,7 +153,7 @@ class AsyncRpcRetryingCallerFactory {
 
     private ScanResultCache resultCache;
 
-    private RawScanResultConsumer consumer;
+    private AdvancedScanResultConsumer consumer;
 
     private ClientService.Interface stub;
 
@@ -192,7 +192,7 @@ class AsyncRpcRetryingCallerFactory {
       return this;
     }
 
-    public ScanSingleRegionCallerBuilder consumer(RawScanResultConsumer consumer) {
+    public ScanSingleRegionCallerBuilder consumer(AdvancedScanResultConsumer consumer) {
       this.consumer = consumer;
       return this;
     }
@@ -427,8 +427,8 @@ class AsyncRpcRetryingCallerFactory {
 
     public AsyncAdminRequestRetryingCaller<T> build() {
       return new AsyncAdminRequestRetryingCaller<T>(retryTimer, conn, pauseNs, maxAttempts,
-          operationTimeoutNs, rpcTimeoutNs, startLogErrorsCnt, serverName, checkNotNull(callable,
-            "action is null"));
+          operationTimeoutNs, rpcTimeoutNs, startLogErrorsCnt, checkNotNull(serverName,
+            "serverName is null"), checkNotNull(callable, "action is null"));
     }
 
     public CompletableFuture<T> call() {
@@ -488,8 +488,8 @@ class AsyncRpcRetryingCallerFactory {
 
     public AsyncServerRequestRpcRetryingCaller<T> build() {
       return new AsyncServerRequestRpcRetryingCaller<T>(retryTimer, conn, pauseNs, maxAttempts,
-          operationTimeoutNs, rpcTimeoutNs, startLogErrorsCnt, serverName, checkNotNull(callable,
-            "action is null"));
+          operationTimeoutNs, rpcTimeoutNs, startLogErrorsCnt, checkNotNull(serverName,
+            "serverName is null"), checkNotNull(callable, "action is null"));
     }
 
     public CompletableFuture<T> call() {

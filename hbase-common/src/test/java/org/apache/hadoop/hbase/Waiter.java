@@ -19,14 +19,14 @@
 
 package org.apache.hadoop.hbase;
 
+import static org.junit.Assert.fail;
+
 import java.text.MessageFormat;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.yetus.audience.InterfaceAudience;
-
-import static org.junit.Assert.fail;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * A class that provides a standard waitFor pattern
@@ -35,7 +35,7 @@ import static org.junit.Assert.fail;
 @InterfaceAudience.Private
 public final class Waiter {
 
-  private static final Log LOG = LogFactory.getLog(Waiter.class);
+  private static final Logger LOG = LoggerFactory.getLogger(Waiter.class);
 
   /**
    * System property name whose value is a scale factor to increase time out values dynamically used
@@ -220,10 +220,10 @@ public final class Waiter {
     }
   }
 
-  public static String getExplanation(Predicate explain) {
+  public static String getExplanation(Predicate<?> explain) {
     if (explain instanceof ExplainingPredicate) {
       try {
-        return " " + ((ExplainingPredicate) explain).explainFailure();
+        return " " + ((ExplainingPredicate<?>) explain).explainFailure();
       } catch (Exception e) {
         LOG.error("Failed to get explanation, ", e);
         return e.getMessage();

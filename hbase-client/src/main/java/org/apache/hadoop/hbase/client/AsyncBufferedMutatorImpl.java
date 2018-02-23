@@ -30,12 +30,12 @@ import org.apache.hadoop.hbase.TableName;
 import org.apache.yetus.audience.InterfaceAudience;
 
 /**
- * The implementation of {@link AsyncBufferedMutator}. Simply wrap an {@link AsyncTableBase}.
+ * The implementation of {@link AsyncBufferedMutator}. Simply wrap an {@link AsyncTable}.
  */
 @InterfaceAudience.Private
 class AsyncBufferedMutatorImpl implements AsyncBufferedMutator {
 
-  private final AsyncTableBase table;
+  private final AsyncTable<?> table;
 
   private final long writeBufferSize;
 
@@ -47,7 +47,7 @@ class AsyncBufferedMutatorImpl implements AsyncBufferedMutator {
 
   private boolean closed;
 
-  AsyncBufferedMutatorImpl(AsyncTableBase table, long writeBufferSize) {
+  AsyncBufferedMutatorImpl(AsyncTable<?> table, long writeBufferSize) {
     this.table = table;
     this.writeBufferSize = writeBufferSize;
   }
@@ -74,12 +74,12 @@ class AsyncBufferedMutatorImpl implements AsyncBufferedMutator {
     bufferedSize = 0L;
     Iterator<CompletableFuture<Void>> toCompleteIter = toComplete.iterator();
     for (CompletableFuture<?> future : table.batch(toSend)) {
+      CompletableFuture<Void> toCompleteFuture = toCompleteIter.next();
       future.whenComplete((r, e) -> {
-        CompletableFuture<Void> f = toCompleteIter.next();
         if (e != null) {
-          f.completeExceptionally(e);
+          toCompleteFuture.completeExceptionally(e);
         } else {
-          f.complete(null);
+          toCompleteFuture.complete(null);
         }
       });
     }

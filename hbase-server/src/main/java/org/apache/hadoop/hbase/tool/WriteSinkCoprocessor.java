@@ -18,17 +18,19 @@
  */
 package org.apache.hadoop.hbase.tool;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.client.Mutation;
 import org.apache.hadoop.hbase.coprocessor.ObserverContext;
+import org.apache.hadoop.hbase.coprocessor.RegionCoprocessor;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.coprocessor.RegionObserver;
 import org.apache.hadoop.hbase.regionserver.MiniBatchOperationInProgress;
 import org.apache.hadoop.hbase.regionserver.OperationStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -58,16 +60,21 @@ import java.util.concurrent.atomic.AtomicLong;
  * 0 row(s) in 0.0050 seconds
  * </p>
  */
-public class WriteSinkCoprocessor implements RegionObserver {
-  private static final Log LOG = LogFactory.getLog(WriteSinkCoprocessor.class);
+public class WriteSinkCoprocessor implements RegionCoprocessor, RegionObserver {
+  private static final Logger LOG = LoggerFactory.getLogger(WriteSinkCoprocessor.class);
   private final AtomicLong ops = new AtomicLong();
+
+  @Override
+  public Optional<RegionObserver> getRegionObserver() {
+    return Optional.of(this);
+  }
+
   private String regionName;
 
   @Override
   public void preOpen(ObserverContext<RegionCoprocessorEnvironment> e) throws IOException {
     regionName = e.getEnvironment().getRegion().getRegionInfo().getRegionNameAsString();
   }
-
 
   @Override
   public void preBatchMutate(final ObserverContext<RegionCoprocessorEnvironment> c,

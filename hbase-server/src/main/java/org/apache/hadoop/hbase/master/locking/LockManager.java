@@ -22,22 +22,22 @@ import java.io.IOException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.master.HMaster;
 import org.apache.hadoop.hbase.procedure2.LockType;
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.hbase.util.NonceKey;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 /**
  * Functions to acquire lock on table/namespace/regions.
  */
 @InterfaceAudience.Private
 public final class LockManager {
-  private static final Log LOG = LogFactory.getLog(LockManager.class);
+  private static final Logger LOG = LoggerFactory.getLogger(LockManager.class);
   private final HMaster master;
   private final RemoteLocks remoteLocks;
 
@@ -60,7 +60,7 @@ public final class LockManager {
     return new MasterLock(tableName, type, description);
   }
 
-  public MasterLock createMasterLock(final HRegionInfo[] regionInfos, final String description) {
+  public MasterLock createMasterLock(final RegionInfo[] regionInfos, final String description) {
     return new MasterLock(regionInfos, description);
   }
 
@@ -81,7 +81,7 @@ public final class LockManager {
   public class MasterLock {
     private final String namespace;
     private final TableName tableName;
-    private final HRegionInfo[] regionInfos;
+    private final RegionInfo[] regionInfos;
     private final LockType type;
     private final String description;
 
@@ -105,7 +105,7 @@ public final class LockManager {
       this.description = description;
     }
 
-    public MasterLock(final HRegionInfo[] regionInfos, final String description) {
+    public MasterLock(final RegionInfo[] regionInfos, final String description) {
       this.namespace = null;
       this.tableName = null;
       this.regionInfos = regionInfos;
@@ -229,7 +229,7 @@ public final class LockManager {
     /**
      * @throws IllegalArgumentException if all regions are not from same table.
      */
-    public long requestRegionsLock(final HRegionInfo[] regionInfos, final String description,
+    public long requestRegionsLock(final RegionInfo[] regionInfos, final String description,
         final NonceKey nonceKey)
     throws IllegalArgumentException, IOException {
       master.getMasterCoprocessorHost().preRequestLock(null, null, regionInfos,

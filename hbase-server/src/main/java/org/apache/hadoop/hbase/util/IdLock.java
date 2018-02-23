@@ -25,7 +25,7 @@ import java.util.concurrent.ConcurrentMap;
 
 import org.apache.yetus.audience.InterfaceAudience;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 /**
  * Allows multiple concurrent clients to lock on a numeric id with a minimal
@@ -52,6 +52,7 @@ public class IdLock {
       this.id = id;
     }
 
+    @Override
     public String toString() {
       return "id=" + id + ", numWaiter=" + numWaiters + ", isLocked="
           + locked;

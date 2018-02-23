@@ -29,10 +29,10 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValueUtil;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.monitoring.MonitoredTask;
 import org.apache.hadoop.hbase.regionserver.throttle.ThroughputControlUtil;
 import org.apache.hadoop.hbase.regionserver.throttle.ThroughputController;
+import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * Store flusher interface. Turns a snapshot of memstore into a set of store files (usually one).
@@ -41,9 +41,9 @@ import org.apache.hadoop.hbase.regionserver.throttle.ThroughputController;
 @InterfaceAudience.Private
 abstract class StoreFlusher {
   protected Configuration conf;
-  protected Store store;
+  protected HStore store;
 
-  public StoreFlusher(Configuration conf, Store store) {
+  public StoreFlusher(Configuration conf, HStore store) {
     this.conf = conf;
     this.store = store;
   }
@@ -57,7 +57,8 @@ abstract class StoreFlusher {
    * @return List of files written. Can be empty; must not be null.
    */
   public abstract List<Path> flushSnapshot(MemStoreSnapshot snapshot, long cacheFlushSeqNum,
-      MonitoredTask status, ThroughputController throughputController) throws IOException;
+      MonitoredTask status, ThroughputController throughputController,
+      FlushLifeCycleTracker tracker) throws IOException;
 
   protected void finalizeWriter(StoreFileWriter writer, long cacheFlushSeqNum,
       MonitoredTask status) throws IOException {
@@ -77,21 +78,20 @@ abstract class StoreFlusher {
    * @param smallestReadPoint
    * @return The scanner; null if coprocessor is canceling the flush.
    */
-  protected InternalScanner createScanner(List<KeyValueScanner> snapshotScanners,
-      long smallestReadPoint) throws IOException {
-    InternalScanner scanner = null;
+  protected final InternalScanner createScanner(List<KeyValueScanner> snapshotScanners,
+      long smallestReadPoint, FlushLifeCycleTracker tracker) throws IOException {
+    ScanInfo scanInfo;
     if (store.getCoprocessorHost() != null) {
-      scanner = store.getCoprocessorHost().preFlushScannerOpen(store, snapshotScanners,
-          smallestReadPoint);
+      scanInfo = store.getCoprocessorHost().preFlushScannerOpen(store, tracker);
+    } else {
+      scanInfo = store.getScanInfo();
     }
-    if (scanner == null) {
-      scanner = new StoreScanner(store, store.getScanInfo(), OptionalInt.empty(), snapshotScanners,
-          ScanType.COMPACT_RETAIN_DELETES, smallestReadPoint, HConstants.OLDEST_TIMESTAMP);
-    }
+    InternalScanner scanner = new StoreScanner(store, scanInfo, snapshotScanners,
+        ScanType.COMPACT_RETAIN_DELETES, smallestReadPoint, HConstants.OLDEST_TIMESTAMP);
     assert scanner != null;
     if (store.getCoprocessorHost() != null) {
       try {
-        return store.getCoprocessorHost().preFlush(store, scanner);
+        return store.getCoprocessorHost().preFlush(store, scanner, tracker);
       } catch (IOException ioe) {
         scanner.close();
         throw ioe;
@@ -119,7 +119,7 @@ abstract class StoreFlusher {
     boolean hasMore;
     String flushName = ThroughputControlUtil.getNameForThrottling(store, "flush");
     // no control on system table (such as meta, namespace, etc) flush
-    boolean control = throughputController != null && !store.getRegionInfo().isSystemTable();
+    boolean control = throughputController != null && !store.getRegionInfo().getTable().isSystemTable();
     if (control) {
       throughputController.start(flushName);
     }

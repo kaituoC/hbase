@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -27,21 +26,26 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.SortedSet;
 import java.util.UUID;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.testclassification.MiscTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
+import org.junit.ClassRule;
 import org.junit.Test;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.ComparisonChain;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Multimap;
-
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.com.google.common.collect.ComparisonChain;
+import org.apache.hbase.thirdparty.com.google.common.collect.Multimap;
 
 @Category({MiscTests.class, SmallTests.class})
 public class TestRegionSplitCalculator {
-  private static final Log LOG = LogFactory.getLog(TestRegionSplitCalculator.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestRegionSplitCalculator.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestRegionSplitCalculator.class);
 
   /**
    * This is range uses a user specified start and end keys. It also has an
@@ -68,6 +72,7 @@ public class TestRegionSplitCalculator {
       return end;
     }
 
+    @Override
     public String toString() {
       return "[" + Bytes.toString(start) + ", " + Bytes.toString(end) + "]";
     }
@@ -135,8 +140,7 @@ public class TestRegionSplitCalculator {
     LOG.info("Standard");
     String res = dump(sc.getSplits(), regions);
     checkDepths(sc.getSplits(), regions, 1, 1, 1, 0);
-    assertEquals(res, "A:\t[A, B]\t\n" + "B:\t[B, C]\t\n" + "C:\t[C, D]\t\n"
-        + "D:\t\n");
+    assertEquals("A:\t[A, B]\t\n" + "B:\t[B, C]\t\n" + "C:\t[C, D]\t\nD:\t\n", res);
   }
 
   @Test

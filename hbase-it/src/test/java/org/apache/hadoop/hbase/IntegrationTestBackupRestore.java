@@ -25,8 +25,6 @@ import java.util.List;
 import java.util.Set;
 
 import org.apache.commons.cli.CommandLine;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -46,15 +44,16 @@ import org.apache.hadoop.hbase.client.HTable;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.testclassification.IntegrationTests;
 import org.apache.hadoop.util.ToolRunner;
-import org.apache.hadoop.hbase.shaded.com.google.common.base.MoreObjects;
+import org.apache.hbase.thirdparty.com.google.common.base.MoreObjects;
 import org.junit.After;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.base.Objects;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.apache.hbase.thirdparty.com.google.common.base.Objects;
+import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 
 /**
  * An integration test to detect regressions in HBASE-7912. Create
@@ -66,7 +65,7 @@ import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
 @Category(IntegrationTests.class)
 public class IntegrationTestBackupRestore extends IntegrationTestBase {
   private static final String CLASS_NAME = IntegrationTestBackupRestore.class.getSimpleName();
-  protected static final Log LOG = LogFactory.getLog(IntegrationTestBackupRestore.class);
+  protected static final Logger LOG = LoggerFactory.getLogger(IntegrationTestBackupRestore.class);
   protected static final TableName TABLE_NAME1 = TableName.valueOf(CLASS_NAME + ".table1");
   protected static final TableName TABLE_NAME2 = TableName.valueOf(CLASS_NAME + ".table2");
   protected static final String COLUMN_NAME = "f";
@@ -164,8 +163,7 @@ public class IntegrationTestBackupRestore extends IntegrationTestBase {
 
     try (Connection conn = util.getConnection();
          Admin admin = conn.getAdmin();
-         BackupAdmin client = new BackupAdminImpl(conn);) {
-
+         BackupAdmin client = new BackupAdminImpl(conn)) {
       // #0- insert some data to table TABLE_NAME1, TABLE_NAME2
       loadData(TABLE_NAME1, rowsInBatch);
       loadData(TABLE_NAME2, rowsInBatch);

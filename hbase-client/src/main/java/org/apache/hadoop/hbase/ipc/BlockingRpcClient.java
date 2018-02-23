@@ -17,7 +17,7 @@
  */
 package org.apache.hadoop.hbase.ipc;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 import java.io.IOException;
 import java.net.SocketAddress;
@@ -67,6 +67,7 @@ public class BlockingRpcClient extends AbstractRpcClient<BlockingRpcConnection> 
    * Creates a connection. Can be overridden by a subclass for testing.
    * @param remoteId - the ConnectionId to use for the connection creation.
    */
+  @Override
   protected BlockingRpcConnection createConnection(ConnectionId remoteId) throws IOException {
     return new BlockingRpcConnection(this, remoteId);
   }

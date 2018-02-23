@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,6 +17,7 @@
  */
 package org.apache.hadoop.hbase.mapreduce;
 
+import static org.apache.hadoop.hbase.regionserver.HStoreFile.BLOOM_FILTER_TYPE_KEY;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -38,9 +38,6 @@ import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -48,10 +45,10 @@ import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.hbase.ArrayBackedTag;
-import org.apache.hadoop.hbase.CategoryBasedTimeout;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.CompatibilitySingletonFactory;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
@@ -61,10 +58,10 @@ import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.HadoopShims;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.PerformanceEvaluation;
+import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.Tag;
 import org.apache.hadoop.hbase.TagType;
-import org.apache.hadoop.hbase.TagUtil;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
@@ -84,8 +81,7 @@ import org.apache.hadoop.hbase.io.hfile.HFile.Reader;
 import org.apache.hadoop.hbase.io.hfile.HFileScanner;
 import org.apache.hadoop.hbase.regionserver.BloomType;
 import org.apache.hadoop.hbase.regionserver.HRegion;
-import org.apache.hadoop.hbase.regionserver.Store;
-import org.apache.hadoop.hbase.regionserver.StoreFile;
+import org.apache.hadoop.hbase.regionserver.HStore;
 import org.apache.hadoop.hbase.regionserver.TestHRegionFileSystem;
 import org.apache.hadoop.hbase.regionserver.TimeRangeTracker;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
@@ -94,7 +90,6 @@ import org.apache.hadoop.hbase.tool.LoadIncrementalHFiles;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.util.ReflectionUtils;
-import org.apache.hadoop.hbase.util.Writables;
 import org.apache.hadoop.hdfs.DistributedFileSystem;
 import org.apache.hadoop.hdfs.protocol.BlockStoragePolicy;
 import org.apache.hadoop.hdfs.protocol.HdfsFileStatus;
@@ -105,12 +100,13 @@ import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.RecordWriter;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
+import org.junit.ClassRule;
 import org.junit.Ignore;
-import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-import org.junit.rules.TestRule;
 import org.mockito.Mockito;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Simple test for {@link HFileOutputFormat2}.
@@ -120,8 +116,11 @@ import org.mockito.Mockito;
  */
 @Category({VerySlowMapReduceTests.class, LargeTests.class})
 public class TestHFileOutputFormat2  {
-  @Rule public final TestRule timeout = CategoryBasedTimeout.builder().
-      withTimeout(this.getClass()).withLookingForStuckThread(true).build();
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestHFileOutputFormat2.class);
+
   private final static int ROWSPERSPLIT = 1024;
 
   public static final byte[] FAMILY_NAME = TestHRegionFileSystem.FAMILY_NAME;
@@ -132,7 +131,7 @@ public class TestHFileOutputFormat2  {
 
   private HBaseTestingUtility util = new HBaseTestingUtility();
 
-  private static final Log LOG = LogFactory.getLog(TestHFileOutputFormat2.class);
+  private static final Logger LOG = LoggerFactory.getLogger(TestHFileOutputFormat2.class);
 
   /**
    * Simple mapper that makes KeyValue output.
@@ -399,8 +398,7 @@ public class TestHFileOutputFormat2  {
       assertNotNull(range);
 
       // unmarshall and check values.
-      TimeRangeTracker timeRangeTracker = new TimeRangeTracker();
-      Writables.copyWritable(range, timeRangeTracker);
+      TimeRangeTracker timeRangeTracker =TimeRangeTracker.parseFrom(range);
       LOG.info(timeRangeTracker.getMin() +
           "...." + timeRangeTracker.getMax());
       assertEquals(1000, timeRangeTracker.getMin());
@@ -440,12 +438,12 @@ public class TestHFileOutputFormat2  {
     // Set start and end rows for partitioner.
     SimpleTotalOrderPartitioner.setStartKey(job.getConfiguration(), startKey);
     SimpleTotalOrderPartitioner.setEndKey(job.getConfiguration(), endKey);
-    job.setReducerClass(KeyValueSortReducer.class);
+    job.setReducerClass(CellSortReducer.class);
     job.setOutputFormatClass(HFileOutputFormat2.class);
     job.setNumReduceTasks(4);
     job.getConfiguration().setStrings("io.serializations", conf.get("io.serializations"),
         MutationSerialization.class.getName(), ResultSerialization.class.getName(),
-        KeyValueSerialization.class.getName());
+        CellSerialization.class.getName());
 
     FileOutputFormat.setOutputPath(job, testDir);
     assertTrue(job.waitForCompletion(false));
@@ -493,8 +491,7 @@ public class TestHFileOutputFormat2  {
         HFileScanner scanner = reader.getScanner(false, false, false);
         scanner.seekTo();
         Cell cell = scanner.getCell();
-        List<Tag> tagsFromCell = TagUtil.asList(cell.getTagsArray(), cell.getTagsOffset(),
-            cell.getTagsLength());
+        List<Tag> tagsFromCell = PrivateCellUtil.getTags(cell);
         assertTrue(tagsFromCell.size() > 0);
         for (Tag tag : tagsFromCell) {
           assertTrue(tag.getType() == TagType.TTL_TAG_TYPE);
@@ -715,7 +712,7 @@ public class TestHFileOutputFormat2  {
             assertEquals(FAMILIES.length, res.rawCells().length);
             Cell first = res.rawCells()[0];
             for (Cell kv : res.rawCells()) {
-              assertTrue(CellUtil.matchingRow(first, kv));
+              assertTrue(CellUtil.matchingRows(first, kv));
               assertTrue(Bytes.equals(CellUtil.cloneValue(first), CellUtil.cloneValue(kv)));
             }
           }
@@ -764,7 +761,7 @@ public class TestHFileOutputFormat2  {
     job.setWorkingDirectory(util.getDataTestDirOnTestFS("runIncrementalPELoad"));
     job.getConfiguration().setStrings("io.serializations", conf.get("io.serializations"),
         MutationSerialization.class.getName(), ResultSerialization.class.getName(),
-        KeyValueSerialization.class.getName());
+        CellSerialization.class.getName());
     setupRandomGeneratorMapper(job, putSortReducer);
     if (tableInfo.size() > 1) {
       MultiTableHFileOutputFormat.configureIncrementalLoad(job, tableInfo);
@@ -1162,7 +1159,7 @@ public class TestHFileOutputFormat2  {
         Reader reader = HFile.createReader(fs, dataFilePath, new CacheConfig(conf), true, conf);
         Map<byte[], byte[]> fileInfo = reader.loadFileInfo();
 
-        byte[] bloomFilter = fileInfo.get(StoreFile.BLOOM_FILTER_TYPE_KEY);
+        byte[] bloomFilter = fileInfo.get(BLOOM_FILTER_TYPE_KEY);
         if (bloomFilter == null) bloomFilter = Bytes.toBytes("NONE");
         assertEquals("Incorrect bloom filter used for column family " + familyStr +
           "(reader: " + reader + ")",
@@ -1258,7 +1255,7 @@ public class TestHFileOutputFormat2  {
           public Boolean call() throws Exception {
             List<HRegion> regions = util.getMiniHBaseCluster().getRegions(TABLE_NAMES[0]);
             for (HRegion region : regions) {
-              for (Store store : region.getStores()) {
+              for (HStore store : region.getStores()) {
                 store.closeAndArchiveCompactedFiles();
               }
             }
@@ -1277,7 +1274,7 @@ public class TestHFileOutputFormat2  {
         public Boolean call() throws Exception {
           List<HRegion> regions = util.getMiniHBaseCluster().getRegions(TABLE_NAMES[0]);
           for (HRegion region : regions) {
-            for (Store store : region.getStores()) {
+            for (HStore store : region.getStores()) {
               store.closeAndArchiveCompactedFiles();
             }
           }

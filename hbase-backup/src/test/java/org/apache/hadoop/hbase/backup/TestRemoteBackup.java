@@ -1,23 +1,27 @@
 /**
- * Licensed to the Apache Software Foundation (ASF) under one or more contributor license
- * agreements. See the NOTICE file distributed with this work for additional information regarding
- * copyright ownership. The ASF licenses this file to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance with the License. You may obtain a
- * copy of the License at http://www.apache.org/licenses/LICENSE-2.0 Unless required by applicable
- * law or agreed to in writing, software distributed under the License is distributed on an "AS IS"
- * BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License
- * for the specific language governing permissions and limitations under the License.
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.backup;
 
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
 import java.util.concurrent.CountDownLatch;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.TableName;
@@ -32,25 +36,33 @@ import org.apache.hadoop.hbase.snapshot.SnapshotTestingUtils;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.Assert;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
+import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 
 @Category(LargeTests.class)
 public class TestRemoteBackup extends TestBackupBase {
 
-  private static final Log LOG = LogFactory.getLog(TestRemoteBackup.class);
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestRemoteBackup.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestRemoteBackup.class);
 
   @Override
-  public void setUp () throws Exception {
+  public void setUp() throws Exception {
     useSecondCluster = true;
     super.setUp();
   }
 
   /**
    * Verify that a remote full backup is created on a single table with data correctly.
-   * @throws Exception
+   *
+   * @throws Exception if an operation on the table fails
    */
   @Test
   public void testFullBackupRemote() throws Exception {
@@ -60,28 +72,25 @@ public class TestRemoteBackup extends TestBackupBase {
     final byte[] fam3Name = Bytes.toBytes("f3");
     final byte[] fam2Name = Bytes.toBytes("f2");
     final Connection conn = ConnectionFactory.createConnection(conf1);
-    Thread t = new Thread() {
-      @Override
-      public void run() {
-        try {
-          latch.await();
-        } catch (InterruptedException ie) {
-        }
-        try {
-          HTable t1 = (HTable) conn.getTable(table1);
-          Put p1;
-          for (int i = 0; i < NB_ROWS_IN_FAM3; i++) {
-            p1 = new Put(Bytes.toBytes("row-t1" + i));
-            p1.addColumn(fam3Name, qualName, Bytes.toBytes("val" + i));
-            t1.put(p1);
-          }
-          LOG.debug("Wrote " + NB_ROWS_IN_FAM3 + " rows into family3");
-          t1.close();
-        } catch (IOException ioe) {
-          throw new RuntimeException(ioe);
-        }
+    Thread t = new Thread(() -> {
+      try {
+        latch.await();
+      } catch (InterruptedException ie) {
       }
-    };
+      try {
+        HTable t1 = (HTable) conn.getTable(table1);
+        Put p1;
+        for (int i = 0; i < NB_ROWS_IN_FAM3; i++) {
+          p1 = new Put(Bytes.toBytes("row-t1" + i));
+          p1.addColumn(fam3Name, qualName, Bytes.toBytes("val" + i));
+          t1.put(p1);
+        }
+        LOG.debug("Wrote " + NB_ROWS_IN_FAM3 + " rows into family3");
+        t1.close();
+      } catch (IOException ioe) {
+        throw new RuntimeException(ioe);
+      }
+    });
     t.start();
 
     table1Desc.addFamily(new HColumnDescriptor(fam3Name));

@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -25,7 +25,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
-import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentSkipListMap;
 
@@ -36,11 +35,13 @@ import org.apache.hadoop.hbase.CellScannable;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.ChoreService;
 import org.apache.hadoop.hbase.CoordinatedStateManager;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.ZooKeeperConnectionException;
 import org.apache.hadoop.hbase.client.ClusterConnection;
+import org.apache.hadoop.hbase.client.Connection;
+import org.apache.hadoop.hbase.client.RegionInfo;
+import org.apache.hadoop.hbase.client.RegionInfoBuilder;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.locking.EntityLock;
@@ -59,19 +60,22 @@ import org.apache.hadoop.hbase.regionserver.RegionServerAccounting;
 import org.apache.hadoop.hbase.regionserver.RegionServerServices;
 import org.apache.hadoop.hbase.regionserver.SecureBulkLoadManager;
 import org.apache.hadoop.hbase.regionserver.ServerNonceManager;
+import org.apache.hadoop.hbase.regionserver.compactions.CompactionRequester;
 import org.apache.hadoop.hbase.regionserver.throttle.ThroughputController;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.zookeeper.MetaTableLocator;
-import org.apache.hadoop.hbase.zookeeper.ZooKeeperWatcher;
+import org.apache.hadoop.hbase.zookeeper.ZKWatcher;
 import org.apache.zookeeper.KeeperException;
 
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.RpcController;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.ServiceException;
+import org.apache.hbase.thirdparty.com.google.protobuf.RpcController;
+import org.apache.hbase.thirdparty.com.google.protobuf.ServiceException;
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.ClearCompactionQueuesRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.ClearCompactionQueuesResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.ClearRegionBlockCacheRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.ClearRegionBlockCacheResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.CloseRegionRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.CloseRegionResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.CompactRegionRequest;
@@ -122,7 +126,6 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.ClientProtos.ScanReques
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ClientProtos.ScanResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.QuotaProtos.GetSpaceQuotaSnapshotsRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.QuotaProtos.GetSpaceQuotaSnapshotsResponse;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProtos.RegionStateTransition.TransitionCode;
 
 /**
  * A mock RegionServer implementation.
@@ -135,7 +138,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProto
 class MockRegionServer implements AdminProtos.AdminService.BlockingInterface,
 ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   private final ServerName sn;
-  private final ZooKeeperWatcher zkw;
+  private final ZKWatcher zkw;
   private final Configuration conf;
   private final Random random = new Random();
 
@@ -188,7 +191,7 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   throws ZooKeeperConnectionException, IOException {
     this.sn = sn;
     this.conf = conf;
-    this.zkw = new ZooKeeperWatcher(conf, sn.toString(), this, true);
+    this.zkw = new ZKWatcher(conf, sn.toString(), this, true);
   }
 
   /**
@@ -219,7 +222,6 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
 
   @Override
   public boolean isStopped() {
-    // TODO Auto-generated method stub
     return false;
   }
 
@@ -263,19 +265,16 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   }
 
   @Override
-  public void addToOnlineRegions(Region r) {
-    // TODO Auto-generated method stub
+  public void addRegion(HRegion r) {
   }
 
   @Override
-  public boolean removeFromOnlineRegions(Region r, ServerName destination) {
-    // TODO Auto-generated method stub
+  public boolean removeRegion(HRegion r, ServerName destination) {
     return false;
   }
 
   @Override
-  public HRegion getFromOnlineRegions(String encodedRegionName) {
-    // TODO Auto-generated method stub
+  public HRegion getRegion(String encodedRegionName) {
     return null;
   }
 
@@ -285,7 +284,7 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   }
 
   @Override
-  public ZooKeeperWatcher getZooKeeper() {
+  public ZKWatcher getZooKeeper() {
     return this.zkw;
   }
 
@@ -316,13 +315,14 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
 
   @Override
   public FlushRequester getFlushRequester() {
-    // TODO Auto-generated method stub
     return null;
   }
-
+  @Override
+  public CompactionRequester getCompactionRequestor() {
+    return null;
+  }
   @Override
   public RegionServerAccounting getRegionServerAccounting() {
-    // TODO Auto-generated method stub
     return null;
   }
 
@@ -332,31 +332,22 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   }
 
   @Override
-  public void postOpenDeployTasks(Region r) throws KeeperException, IOException {
-    // TODO Auto-generated method stub
-  }
-
-  @Override
   public void postOpenDeployTasks(PostOpenDeployContext context) throws KeeperException,
       IOException {
-    // TODO Auto-generated method stub
   }
 
   @Override
   public RpcServerInterface getRpcServer() {
-    // TODO Auto-generated method stub
     return null;
   }
 
   @Override
   public ConcurrentSkipListMap<byte[], Boolean> getRegionsInTransitionInRS() {
-    // TODO Auto-generated method stub
     return null;
   }
 
   @Override
   public FileSystem getFileSystem() {
-    // TODO Auto-generated method stub
     return null;
   }
 
@@ -376,7 +367,6 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   @Override
   public MutateResponse mutate(RpcController controller, MutateRequest request)
       throws ServiceException {
-    // TODO Auto-generated method stub
     return null;
   }
 
@@ -415,7 +405,6 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   @Override
   public BulkLoadHFileResponse bulkLoadHFile(RpcController controller,
       BulkLoadHFileRequest request) throws ServiceException {
-    // TODO Auto-generated method stub
     return null;
   }
 
@@ -428,7 +417,6 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   @Override
   public ClientProtos.MultiResponse multi(
       RpcController controller, MultiRequest request) throws ServiceException {
-    // TODO Auto-generated method stub
     return null;
   }
 
@@ -436,7 +424,7 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   public GetRegionInfoResponse getRegionInfo(RpcController controller,
       GetRegionInfoRequest request) throws ServiceException {
     GetRegionInfoResponse.Builder builder = GetRegionInfoResponse.newBuilder();
-    builder.setRegionInfo(HRegionInfo.convert(HRegionInfo.FIRST_META_REGIONINFO));
+    builder.setRegionInfo(ProtobufUtil.toRegionInfo(RegionInfoBuilder.FIRST_META_REGIONINFO));
     return builder.build();
   }
 
@@ -456,99 +444,80 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   @Override
   public GetStoreFileResponse getStoreFile(RpcController controller,
       GetStoreFileRequest request) throws ServiceException {
-    // TODO Auto-generated method stub
     return null;
   }
 
   @Override
   public GetOnlineRegionResponse getOnlineRegion(RpcController controller,
       GetOnlineRegionRequest request) throws ServiceException {
-    // TODO Auto-generated method stub
     return null;
   }
 
   @Override
-  public List<Region> getOnlineRegions() {
+  public List<Region> getRegions() {
     return null;
   }
 
   @Override
   public OpenRegionResponse openRegion(RpcController controller,
       OpenRegionRequest request) throws ServiceException {
-    // TODO Auto-generated method stub
     return null;
   }
 
   @Override
   public WarmupRegionResponse warmupRegion(RpcController controller,
       WarmupRegionRequest request) throws ServiceException {
-    //TODO Auto-generated method stub
     return null;
   }
   @Override
   public CloseRegionResponse closeRegion(RpcController controller,
       CloseRegionRequest request) throws ServiceException {
-    // TODO Auto-generated method stub
     return null;
   }
 
   @Override
   public FlushRegionResponse flushRegion(RpcController controller,
       FlushRegionRequest request) throws ServiceException {
-    // TODO Auto-generated method stub
     return null;
   }
 
   @Override
   public CompactRegionResponse compactRegion(RpcController controller,
       CompactRegionRequest request) throws ServiceException {
-    // TODO Auto-generated method stub
     return null;
   }
 
   @Override
   public ReplicateWALEntryResponse replicateWALEntry(RpcController controller,
       ReplicateWALEntryRequest request) throws ServiceException {
-    // TODO Auto-generated method stub
     return null;
   }
 
   @Override
   public RollWALWriterResponse rollWALWriter(RpcController controller,
       RollWALWriterRequest request) throws ServiceException {
-    // TODO Auto-generated method stub
     return null;
   }
 
   @Override
   public GetServerInfoResponse getServerInfo(RpcController controller,
       GetServerInfoRequest request) throws ServiceException {
-    // TODO Auto-generated method stub
     return null;
   }
 
   @Override
   public StopServerResponse stopServer(RpcController controller,
       StopServerRequest request) throws ServiceException {
-    // TODO Auto-generated method stub
     return null;
   }
 
   @Override
-  public List<Region> getOnlineRegions(TableName tableName) throws IOException {
-    // TODO Auto-generated method stub
-    return null;
-  }
-
-  @Override
-  public Set<TableName> getOnlineTables() {
-    // TODO Auto-generated method stub
+  public List<Region> getRegions(TableName tableName) throws IOException {
     return null;
   }
 
   @Override
   public Leases getLeases() {
-    // TODO Auto-generated method stub
     return null;
   }
 
@@ -558,7 +527,7 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   }
 
   @Override
-  public WAL getWAL(HRegionInfo regionInfo) throws IOException {
+  public WAL getWAL(RegionInfo regionInfo) throws IOException {
     return null;
   }
 
@@ -586,13 +555,6 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   public ReplicateWALEntryResponse
       replay(RpcController controller, ReplicateWALEntryRequest request)
       throws ServiceException {
-    // TODO Auto-generated method stub
-    return null;
-  }
-
-  @Override
-  public Map<String, Region> getRecoveringRegions() {
-    // TODO Auto-generated method stub
     return null;
   }
 
@@ -608,31 +570,18 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   }
 
   @Override
-  public boolean reportRegionStateTransition(TransitionCode code, HRegionInfo... hris) {
-    return false;
-  }
-
-  @Override
-  public boolean reportRegionStateTransition(TransitionCode code, long openSeqNum,
-      HRegionInfo... hris) {
-    return false;
-  }
-
-  @Override
   public boolean reportRegionStateTransition(RegionStateTransitionContext context) {
     return false;
   }
 
   @Override
   public boolean registerService(com.google.protobuf.Service service) {
-    // TODO Auto-generated method stub
     return false;
   }
 
   @Override
   public CoprocessorServiceResponse execRegionServerService(RpcController controller,
       CoprocessorServiceRequest request) throws ServiceException {
-    // TODO Auto-generated method stub
     return null;
   }
 
@@ -640,6 +589,13 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   public UpdateConfigurationResponse updateConfiguration(
       RpcController controller, UpdateConfigurationRequest request)
       throws ServiceException {
+    return null;
+  }
+
+  @Override
+  public ClearRegionBlockCacheResponse clearRegionBlockCache(RpcController controller,
+                                                             ClearRegionBlockCacheRequest request)
+    throws ServiceException {
     return null;
   }
 
@@ -674,7 +630,7 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   }
 
   @Override
-  public EntityLock regionLock(List<HRegionInfo> regionInfos, String description, Abortable abort)
+  public EntityLock regionLock(List<RegionInfo> regionInfos, String description, Abortable abort)
       throws IOException {
     return null;
   }
@@ -715,6 +671,11 @@ ClientProtos.ClientService.BlockingInterface, RegionServerServices {
   public GetSpaceQuotaSnapshotsResponse getSpaceQuotaSnapshots(
       RpcController controller, GetSpaceQuotaSnapshotsRequest request)
       throws ServiceException {
+    return null;
+  }
+
+  @Override
+  public Connection createConnection(Configuration conf) throws IOException {
     return null;
   }
 }

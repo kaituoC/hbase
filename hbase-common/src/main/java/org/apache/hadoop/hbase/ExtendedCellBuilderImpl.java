@@ -17,8 +17,10 @@
  */
 package org.apache.hadoop.hbase;
 
+import java.util.List;
+
+import org.apache.commons.lang3.ArrayUtils;
 import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.hadoop.hbase.util.ArrayUtils;
 
 @InterfaceAudience.Private
 public abstract class ExtendedCellBuilderImpl implements ExtendedCellBuilder {
@@ -32,7 +34,7 @@ public abstract class ExtendedCellBuilderImpl implements ExtendedCellBuilder {
   protected int qOffset = 0;
   protected int qLength = 0;
   protected long timestamp = HConstants.LATEST_TIMESTAMP;
-  protected Byte type = null;
+  protected KeyValue.Type type = null;
   protected byte[] value = null;
   protected int vOffset = 0;
   protected int vLength = 0;
@@ -43,7 +45,7 @@ public abstract class ExtendedCellBuilderImpl implements ExtendedCellBuilder {
 
   @Override
   public ExtendedCellBuilder setRow(final byte[] row) {
-    return setRow(row, 0, ArrayUtils.length(row));
+    return setRow(row, 0, ArrayUtils.getLength(row));
   }
 
   @Override
@@ -56,7 +58,7 @@ public abstract class ExtendedCellBuilderImpl implements ExtendedCellBuilder {
 
   @Override
   public ExtendedCellBuilder setFamily(final byte[] family) {
-    return setFamily(family, 0, ArrayUtils.length(family));
+    return setFamily(family, 0, ArrayUtils.getLength(family));
   }
 
   @Override
@@ -69,7 +71,7 @@ public abstract class ExtendedCellBuilderImpl implements ExtendedCellBuilder {
 
   @Override
   public ExtendedCellBuilder setQualifier(final byte[] qualifier) {
-    return setQualifier(qualifier, 0, ArrayUtils.length(qualifier));
+    return setQualifier(qualifier, 0, ArrayUtils.getLength(qualifier));
   }
 
   @Override
@@ -87,14 +89,20 @@ public abstract class ExtendedCellBuilderImpl implements ExtendedCellBuilder {
   }
 
   @Override
+  public ExtendedCellBuilder setType(final Cell.Type type) {
+    this.type = PrivateCellUtil.toTypeByte(type);
+    return this;
+  }
+
+  @Override
   public ExtendedCellBuilder setType(final byte type) {
-    this.type = type;
+    this.type = KeyValue.Type.codeToType(type);
     return this;
   }
 
   @Override
   public ExtendedCellBuilder setValue(final byte[] value) {
-    return setValue(value, 0, ArrayUtils.length(value));
+    return setValue(value, 0, ArrayUtils.getLength(value));
   }
 
   @Override
@@ -107,7 +115,7 @@ public abstract class ExtendedCellBuilderImpl implements ExtendedCellBuilder {
 
   @Override
   public ExtendedCellBuilder setTags(final byte[] tags) {
-    return setTags(tags, 0, ArrayUtils.length(tags));
+    return setTags(tags, 0, ArrayUtils.getLength(tags));
   }
 
   @Override
@@ -116,6 +124,12 @@ public abstract class ExtendedCellBuilderImpl implements ExtendedCellBuilder {
     this.tagsOffset = tagsOffset;
     this.tagsLength = tagsLength;
     return this;
+  }
+
+  @Override
+  public ExtendedCellBuilder setTags(List<Tag> tags) {
+    byte[] tagBytes = TagUtil.fromList(tags);
+    return setTags(tagBytes);
   }
 
   @Override

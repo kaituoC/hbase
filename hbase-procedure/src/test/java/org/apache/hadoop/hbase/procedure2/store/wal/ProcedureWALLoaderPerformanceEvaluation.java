@@ -70,7 +70,7 @@ public class ProcedureWALLoaderPerformanceEvaluation extends AbstractHBaseTool {
   private WALProcedureStore store;
   static byte[] serializedState;
 
-  private class LoadCounter implements ProcedureStore.ProcedureLoader {
+  private static class LoadCounter implements ProcedureStore.ProcedureLoader {
     public LoadCounter() {}
 
     @Override
@@ -126,7 +126,7 @@ public class ProcedureWALLoaderPerformanceEvaluation extends AbstractHBaseTool {
     Path logDir = new Path(testDir, "proc-logs");
     System.out.println("\n\nLogs directory : " + logDir.toString() + "\n\n");
     fs.delete(logDir, true);
-    store = ProcedureTestingUtility.createWalStore(conf, fs, logDir);
+    store = ProcedureTestingUtility.createWalStore(conf, logDir);
     store.start(1);
     store.recoverLease();
     store.load(new LoadCounter());
@@ -165,8 +165,7 @@ public class ProcedureWALLoaderPerformanceEvaluation extends AbstractHBaseTool {
   private void writeWals() throws IOException {
     List<Integer> procStates = shuffleProcWriteSequence();
     TestProcedure[] procs = new TestProcedure[numProcs + 1];  // 0 is not used.
-    int numProcsPerWal = numWals > 0 ? (int)Math.ceil(procStates.size() / numWals)
-        : Integer.MAX_VALUE;
+    int numProcsPerWal = numWals > 0 ? procStates.size() / numWals : Integer.MAX_VALUE;
     long startTime = currentTimeMillis();
     long lastTime = startTime;
     for (int i = 0; i < procStates.size(); ++i) {

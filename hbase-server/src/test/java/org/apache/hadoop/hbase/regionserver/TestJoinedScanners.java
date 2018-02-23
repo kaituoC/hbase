@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,15 +21,13 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
-
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.GnuParser;
 import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Option;
 import org.apache.commons.cli.Options;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HTableDescriptor;
@@ -47,10 +44,13 @@ import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.RegionServerTests;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Test performance improvement of joined scanners optimization:
@@ -58,7 +58,12 @@ import org.junit.rules.TestName;
  */
 @Category({RegionServerTests.class, LargeTests.class})
 public class TestJoinedScanners {
-  private static final Log LOG = LogFactory.getLog(TestJoinedScanners.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestJoinedScanners.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestJoinedScanners.class);
 
   private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   private static final String DIR = TEST_UTIL.getDataTestDir("TestJoinedScanners").toString();
@@ -129,7 +134,7 @@ public class TestJoinedScanners {
           puts.clear();
         }
       }
-      if (puts.size() >= 0) {
+      if (!puts.isEmpty()) {
         ht.put(puts);
         puts.clear();
       }
@@ -188,24 +193,24 @@ public class TestJoinedScanners {
       "Data block encoding; Default: FAST_DIFF");
     encodingOption.setRequired(false);
     options.addOption(encodingOption);
-    
+
     Option ratioOption = new Option("r", "selectionRatio", true,
       "Ratio of selected rows using essential column family");
     ratioOption.setRequired(false);
     options.addOption(ratioOption);
-    
+
     Option widthOption = new Option("w", "valueWidth", true,
       "Width of value for non-essential column family");
     widthOption.setRequired(false);
     options.addOption(widthOption);
-    
+
     CommandLineParser parser = new GnuParser();
     CommandLine cmd = parser.parse(options, args);
     if (args.length < 1) {
       HelpFormatter formatter = new HelpFormatter();
       formatter.printHelp("TestJoinedScanners", options, true);
     }
-    
+
     if (cmd.hasOption("e")) {
       blockEncoding = DataBlockEncoding.valueOf(cmd.getOptionValue("e"));
     }

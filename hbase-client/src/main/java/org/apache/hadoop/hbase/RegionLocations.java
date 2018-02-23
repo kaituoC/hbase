@@ -20,9 +20,10 @@ package org.apache.hadoop.hbase;
 
 import java.util.Collection;
 
-import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.RegionReplicaUtil;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * Container for holding a list of {@link HRegionLocation}'s that correspond to the
@@ -143,14 +144,14 @@ public class RegionLocations {
    */
   public RegionLocations remove(HRegionLocation location) {
     if (location == null) return this;
-    if (location.getRegionInfo() == null) return this;
+    if (location.getRegion() == null) return this;
     int replicaId = location.getRegionInfo().getReplicaId();
     if (replicaId >= locations.length) return this;
 
     // check whether something to remove. HRL.compareTo() compares ONLY the
     // serverName. We want to compare the HRI's as well.
     if (locations[replicaId] == null
-        || !location.getRegionInfo().equals(locations[replicaId].getRegionInfo())
+        || RegionInfo.COMPARATOR.compare(location.getRegion(), locations[replicaId].getRegion()) != 0
         || !location.equals(locations[replicaId])) {
       return this;
     }

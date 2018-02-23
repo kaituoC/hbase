@@ -24,38 +24,40 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellBuilderFactory;
+import org.apache.hadoop.hbase.CellBuilderType;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.MetaTableAccessor;
 import org.apache.hadoop.hbase.RegionLocations;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.master.MasterServices;
-import org.apache.hadoop.hbase.master.RegionState;
 import org.apache.hadoop.hbase.master.RegionState.State;
 import org.apache.hadoop.hbase.procedure2.util.StringUtils;
-import org.apache.hadoop.hbase.util.MultiHConnection;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
+import org.apache.hadoop.hbase.util.MultiHConnection;
 import org.apache.hadoop.hbase.zookeeper.MetaTableLocator;
+import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.zookeeper.KeeperException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.base.Preconditions;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.base.Preconditions;
 
 /**
  * Store Region State to hbase:meta table.
  */
 @InterfaceAudience.Private
 public class RegionStateStore {
-  private static final Log LOG = LogFactory.getLog(RegionStateStore.class);
+  private static final Logger LOG = LoggerFactory.getLogger(RegionStateStore.class);
 
   /** The delimiter for meta columns for replicaIds &gt; 0 */
   protected static final char META_REPLICA_ID_DELIMITER = '_';
@@ -79,7 +81,7 @@ public class RegionStateStore {
   }
 
   public interface RegionStateVisitor {
-    void visitRegionState(HRegionInfo regionInfo, State state,
+    void visitRegionState(RegionInfo regionInfo, State state,
       ServerName regionLocation, ServerName lastHost, long openSeqNum);
   }
 
@@ -90,10 +92,15 @@ public class RegionStateStore {
       @Override
       public boolean visit(final Result r) throws IOException {
         if (r !=  null && !r.isEmpty()) {
-          long st = System.currentTimeMillis();
+          long st = 0;
+          if (LOG.isTraceEnabled()) {
+            st = System.currentTimeMillis();
+          }
           visitMetaEntry(visitor, r);
-          long et = System.currentTimeMillis();
-          LOG.info("[T] LOAD META PERF " + StringUtils.humanTimeDiff(et - st));
+          if (LOG.isTraceEnabled()) {
+            long et = System.currentTimeMillis();
+            LOG.trace("[T] LOAD META PERF " + StringUtils.humanTimeDiff(et - st));
+          }
         } else if (isDebugEnabled) {
           LOG.debug("NULL result from meta - ignoring but this is strange.");
         }
@@ -114,7 +121,7 @@ public class RegionStateStore {
       final HRegionLocation hrl = locations[i];
       if (hrl == null) continue;
 
-      final HRegionInfo regionInfo = hrl.getRegionInfo();
+      final RegionInfo regionInfo = hrl.getRegionInfo();
       if (regionInfo == null) continue;
 
       final int replicaId = regionInfo.getReplicaId();
@@ -132,24 +139,20 @@ public class RegionStateStore {
     }
   }
 
-  public void updateRegionLocation(final HRegionInfo regionInfo, final State state,
-      final ServerName regionLocation, final ServerName lastHost, final long openSeqNum,
-      final long pid)
+  public void updateRegionLocation(RegionStates.RegionStateNode regionStateNode)
       throws IOException {
-    if (regionInfo.isMetaRegion()) {
-      updateMetaLocation(regionInfo, regionLocation);
+    if (regionStateNode.getRegionInfo().isMetaRegion()) {
+      updateMetaLocation(regionStateNode.getRegionInfo(), regionStateNode.getRegionLocation());
     } else {
-      updateUserRegionLocation(regionInfo, state, regionLocation, lastHost, openSeqNum, pid);
+      long openSeqNum = regionStateNode.getState() == State.OPEN ?
+          regionStateNode.getOpenSeqNum() : HConstants.NO_SEQNUM;
+      updateUserRegionLocation(regionStateNode.getRegionInfo(), regionStateNode.getState(),
+          regionStateNode.getRegionLocation(), regionStateNode.getLastHost(), openSeqNum,
+          regionStateNode.getProcedure().getProcId());
     }
   }
 
-  public void updateRegionState(final long openSeqNum, final long pid,
-      final RegionState newState, final RegionState oldState) throws IOException {
-    updateRegionLocation(newState.getRegion(), newState.getState(), newState.getServerName(),
-        oldState != null ? oldState.getServerName() : null, openSeqNum, pid);
-  }
-
-  protected void updateMetaLocation(final HRegionInfo regionInfo, final ServerName serverName)
+  protected void updateMetaLocation(final RegionInfo regionInfo, final ServerName serverName)
       throws IOException {
     try {
       MetaTableLocator.setMetaLocation(master.getZooKeeper(), serverName,
@@ -159,7 +162,7 @@ public class RegionStateStore {
     }
   }
 
-  protected void updateUserRegionLocation(final HRegionInfo regionInfo, final State state,
+  protected void updateUserRegionLocation(final RegionInfo regionInfo, final State state,
       final ServerName regionLocation, final ServerName lastHost, final long openSeqNum,
       final long pid)
       throws IOException {
@@ -177,13 +180,25 @@ public class RegionStateStore {
     } else if (regionLocation != null && !regionLocation.equals(lastHost)) {
       // Ideally, if no regionLocation, write null to the hbase:meta but this will confuse clients
       // currently; they want a server to hit. TODO: Make clients wait if no location.
-      put.addImmutable(HConstants.CATALOG_FAMILY, getServerNameColumn(replicaId),
-          Bytes.toBytes(regionLocation.getServerName()));
+      put.add(CellBuilderFactory.create(CellBuilderType.SHALLOW_COPY)
+          .setRow(put.getRow())
+          .setFamily(HConstants.CATALOG_FAMILY)
+          .setQualifier(getServerNameColumn(replicaId))
+          .setTimestamp(put.getTimeStamp())
+          .setType(Cell.Type.Put)
+          .setValue(Bytes.toBytes(regionLocation.getServerName()))
+          .build());
       info.append(", regionLocation=").append(regionLocation);
     }
-    put.addImmutable(HConstants.CATALOG_FAMILY, getStateColumn(replicaId),
-      Bytes.toBytes(state.name()));
-    LOG.info(info);
+    put.add(CellBuilderFactory.create(CellBuilderType.SHALLOW_COPY)
+        .setRow(put.getRow())
+        .setFamily(HConstants.CATALOG_FAMILY)
+        .setQualifier(getStateColumn(replicaId))
+        .setTimestamp(put.getTimeStamp())
+        .setType(Cell.Type.Put)
+        .setValue(Bytes.toBytes(state.name()))
+        .build());
+    LOG.info(info.toString());
 
     final boolean serialReplication = hasSerialReplicationScope(regionInfo.getTable());
     if (serialReplication && state == State.OPEN) {
@@ -195,7 +210,7 @@ public class RegionStateStore {
     }
   }
 
-  protected void updateRegionLocation(final HRegionInfo regionInfo, final State state,
+  protected void updateRegionLocation(final RegionInfo regionInfo, final State state,
       final Put... put) throws IOException {
     synchronized (this) {
       if (multiHConnection == null) {
@@ -219,8 +234,8 @@ public class RegionStateStore {
   // ============================================================================================
   //  Update Region Splitting State helpers
   // ============================================================================================
-  public void splitRegion(final HRegionInfo parent, final HRegionInfo hriA,
-      final HRegionInfo hriB, final ServerName serverName)  throws IOException {
+  public void splitRegion(final RegionInfo parent, final RegionInfo hriA,
+      final RegionInfo hriB, final ServerName serverName)  throws IOException {
     final TableDescriptor htd = getTableDescriptor(parent.getTable());
     MetaTableAccessor.splitRegion(master.getConnection(), parent, hriA, hriB, serverName,
         getRegionReplication(htd), hasSerialReplicationScope(htd));
@@ -229,8 +244,8 @@ public class RegionStateStore {
   // ============================================================================================
   //  Update Region Merging State helpers
   // ============================================================================================
-  public void mergeRegions(final HRegionInfo parent, final HRegionInfo hriA,
-      final HRegionInfo hriB, final ServerName serverName)  throws IOException {
+  public void mergeRegions(final RegionInfo parent, final RegionInfo hriA,
+      final RegionInfo hriB, final ServerName serverName)  throws IOException {
     final TableDescriptor htd = getTableDescriptor(parent.getTable());
     MetaTableAccessor.mergeRegions(master.getConnection(), parent, hriA, hriB, serverName,
         getRegionReplication(htd), EnvironmentEdgeManager.currentTime(),
@@ -240,11 +255,11 @@ public class RegionStateStore {
   // ============================================================================================
   //  Delete Region State helpers
   // ============================================================================================
-  public void deleteRegion(final HRegionInfo regionInfo) throws IOException {
+  public void deleteRegion(final RegionInfo regionInfo) throws IOException {
     deleteRegions(Collections.singletonList(regionInfo));
   }
 
-  public void deleteRegions(final List<HRegionInfo> regions) throws IOException {
+  public void deleteRegions(final List<RegionInfo> regions) throws IOException {
     MetaTableAccessor.deleteRegions(master.getConnection(), regions);
   }
 
@@ -300,7 +315,7 @@ public class RegionStateStore {
     return replicaId == 0
         ? HConstants.SERVERNAME_QUALIFIER
         : Bytes.toBytes(HConstants.SERVERNAME_QUALIFIER_STR + META_REPLICA_ID_DELIMITER
-          + String.format(HRegionInfo.REPLICA_ID_FORMAT, replicaId));
+          + String.format(RegionInfo.REPLICA_ID_FORMAT, replicaId));
   }
 
   // ==========================================================================
@@ -310,18 +325,22 @@ public class RegionStateStore {
   /**
    * Pull the region state from a catalog table {@link Result}.
    * @param r Result to pull the region state from
-   * @return the region state, or OPEN if there's no value written.
+   * @return the region state, or null if unknown.
    */
-  protected State getRegionState(final Result r, int replicaId) {
+  @VisibleForTesting
+  public static State getRegionState(final Result r, int replicaId) {
     Cell cell = r.getColumnLatestCell(HConstants.CATALOG_FAMILY, getStateColumn(replicaId));
-    if (cell == null || cell.getValueLength() == 0) return State.OPENING;
-    return State.valueOf(Bytes.toString(cell.getValueArray(), cell.getValueOffset(), cell.getValueLength()));
+    if (cell == null || cell.getValueLength() == 0) {
+      return null;
+    }
+    return State.valueOf(Bytes.toString(cell.getValueArray(), cell.getValueOffset(),
+        cell.getValueLength()));
   }
 
   private static byte[] getStateColumn(int replicaId) {
     return replicaId == 0
         ? HConstants.STATE_QUALIFIER
         : Bytes.toBytes(HConstants.STATE_QUALIFIER_STR + META_REPLICA_ID_DELIMITER
-          + String.format(HRegionInfo.REPLICA_ID_FORMAT, replicaId));
+          + String.format(RegionInfo.REPLICA_ID_FORMAT, replicaId));
   }
 }

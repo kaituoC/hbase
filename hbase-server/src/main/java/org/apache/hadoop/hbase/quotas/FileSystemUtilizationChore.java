@@ -23,26 +23,24 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.ScheduledChore;
-import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.regionserver.HRegion;
 import org.apache.hadoop.hbase.regionserver.HRegionServer;
 import org.apache.hadoop.hbase.regionserver.Region;
 import org.apache.hadoop.hbase.regionserver.Store;
-import org.apache.hadoop.hbase.regionserver.StoreFile;
-import org.apache.hadoop.hbase.regionserver.StoreFileReader;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * A chore which computes the size of each {@link HRegion} on the FileSystem hosted by the given {@link HRegionServer}.
  */
 @InterfaceAudience.Private
 public class FileSystemUtilizationChore extends ScheduledChore {
-  private static final Log LOG = LogFactory.getLog(FileSystemUtilizationChore.class);
+  private static final Logger LOG = LoggerFactory.getLogger(FileSystemUtilizationChore.class);
   static final String FS_UTILIZATION_CHORE_PERIOD_KEY = "hbase.regionserver.quotas.fs.utilization.chore.period";
   static final int FS_UTILIZATION_CHORE_PERIOD_DEFAULT = 1000 * 60 * 5; // 5 minutes in millis
 
@@ -76,8 +74,8 @@ public class FileSystemUtilizationChore extends ScheduledChore {
       numberOfCyclesToSkip--;
       return;
     }
-    final Map<HRegionInfo,Long> onlineRegionSizes = new HashMap<>();
-    final Set<Region> onlineRegions = new HashSet<>(rs.getOnlineRegions());
+    final Map<RegionInfo, Long> onlineRegionSizes = new HashMap<>();
+    final Set<Region> onlineRegions = new HashSet<>(rs.getRegions());
     // Process the regions from the last run if we have any. If we are somehow having difficulty
     // processing the Regions, we want to avoid creating a backlog in memory of Region objs.
     Iterator<Region> oldRegionsToProcess = getLeftoverRegions();
@@ -121,7 +119,7 @@ public class FileSystemUtilizationChore extends ScheduledChore {
         continue;
       }
       // Avoid computing the size of region replicas.
-      if (HRegionInfo.DEFAULT_REPLICA_ID != region.getRegionInfo().getReplicaId()) {
+      if (RegionInfo.DEFAULT_REPLICA_ID != region.getRegionInfo().getReplicaId()) {
         skippedRegionReplicas++;
         continue;
       }
@@ -185,7 +183,7 @@ public class FileSystemUtilizationChore extends ScheduledChore {
    * @return {@code false} if FileSystemUtilizationChore should pause reporting to master,
    *    {@code true} otherwise.
    */
-  boolean reportRegionSizesToMaster(Map<HRegionInfo,Long> onlineRegionSizes) {
+  boolean reportRegionSizesToMaster(Map<RegionInfo,Long> onlineRegionSizes) {
     return this.rs.reportRegionSizesForQuotas(onlineRegionSizes);
   }
 

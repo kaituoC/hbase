@@ -17,12 +17,16 @@
  */
 package org.apache.hadoop.hbase.mapreduce;
 
+import static org.apache.hadoop.hbase.regionserver.HStoreFile.BULKLOAD_TASK_KEY;
+import static org.apache.hadoop.hbase.regionserver.HStoreFile.BULKLOAD_TIME_KEY;
+import static org.apache.hadoop.hbase.regionserver.HStoreFile.EXCLUDE_FROM_MINOR_COMPACTION_KEY;
+import static org.apache.hadoop.hbase.regionserver.HStoreFile.MAJOR_COMPACTION_KEY;
+
 import java.io.IOException;
 import java.io.UnsupportedEncodingException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -35,16 +39,18 @@ import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
-import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.hadoop.hbase.client.TableDescriptor;
+import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.HRegionLocation;
+import org.apache.hadoop.hbase.HTableDescriptor;
+import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.PrivateCellUtil;
+import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.Connection;
@@ -52,10 +58,8 @@ import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.RegionLocator;
 import org.apache.hadoop.hbase.client.Table;
+import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.fs.HFileSystem;
-import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionLocation;
-import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.io.compress.Compression.Algorithm;
@@ -65,28 +69,29 @@ import org.apache.hadoop.hbase.io.hfile.HFile;
 import org.apache.hadoop.hbase.io.hfile.HFileContext;
 import org.apache.hadoop.hbase.io.hfile.HFileContextBuilder;
 import org.apache.hadoop.hbase.io.hfile.HFileWriterImpl;
-import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.regionserver.BloomType;
 import org.apache.hadoop.hbase.regionserver.HStore;
-import org.apache.hadoop.hbase.regionserver.StoreFile;
 import org.apache.hadoop.hbase.regionserver.StoreFileWriter;
-import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.FSUtils;
+import org.apache.hadoop.hbase.util.MapReduceExtendedCell;
 import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.SequenceFile;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Job;
+import org.apache.hadoop.mapreduce.OutputCommitter;
 import org.apache.hadoop.mapreduce.OutputFormat;
 import org.apache.hadoop.mapreduce.RecordWriter;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputCommitter;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.mapreduce.lib.partition.TotalOrderPartitioner;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 /**
  * Writes HFiles. Passed Cells must arrive in order.
@@ -100,7 +105,7 @@ import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTe
 @InterfaceAudience.Public
 public class HFileOutputFormat2
     extends FileOutputFormat<ImmutableBytesWritable, Cell> {
-  private static final Log LOG = LogFactory.getLog(HFileOutputFormat2.class);
+  private static final Logger LOG = LoggerFactory.getLogger(HFileOutputFormat2.class);
   static class TableInfo {
     private TableDescriptor tableDesctiptor;
     private RegionLocator regionLocator;
@@ -129,10 +134,9 @@ public class HFileOutputFormat2
     }
   }
 
-  protected static final byte[] tableSeparator = ";".getBytes(StandardCharsets.UTF_8);
+  protected static final byte[] tableSeparator = Bytes.toBytes(";");
 
-  protected static byte[] combineTableNameSuffix(byte[] tableName,
-                                       byte[] suffix ) {
+  protected static byte[] combineTableNameSuffix(byte[] tableName, byte[] suffix) {
     return Bytes.add(tableName, tableSeparator, suffix);
   }
 
@@ -167,13 +171,13 @@ public class HFileOutputFormat2
   static final String MULTI_TABLE_HFILEOUTPUTFORMAT_CONF_KEY =
           "hbase.mapreduce.use.multi.table.hfileoutputformat";
 
-  public static final String STORAGE_POLICY_PROPERTY = "hbase.hstore.storagepolicy";
+  public static final String STORAGE_POLICY_PROPERTY = HStore.BLOCK_STORAGE_POLICY_KEY;
   public static final String STORAGE_POLICY_PROPERTY_CF_PREFIX = STORAGE_POLICY_PROPERTY + ".";
 
   @Override
   public RecordWriter<ImmutableBytesWritable, Cell> getRecordWriter(
       final TaskAttemptContext context) throws IOException, InterruptedException {
-    return createRecordWriter(context);
+    return createRecordWriter(context, this.getOutputCommitter(context));
   }
 
   protected static byte[] getTableNameSuffixedWithFamily(byte[] tableName, byte[] family) {
@@ -181,12 +185,11 @@ public class HFileOutputFormat2
   }
 
   static <V extends Cell> RecordWriter<ImmutableBytesWritable, V>
-      createRecordWriter(final TaskAttemptContext context)
+      createRecordWriter(final TaskAttemptContext context, final OutputCommitter committer)
           throws IOException {
 
     // Get the path of the temporary output file
-    final Path outputPath = FileOutputFormat.getOutputPath(context);
-    final Path outputDir = new FileOutputCommitter(outputPath, context).getWorkPath();
+    final Path outputDir = ((FileOutputCommitter)committer).getWorkPath();
     final Configuration conf = context.getConfiguration();
     final boolean writeMultipleTables = conf.getBoolean(MULTI_TABLE_HFILEOUTPUTFORMAT_CONF_KEY, false) ;
     final String writeTableNames = conf.get(OUTPUT_TABLE_NAME_CONF_KEY);
@@ -229,22 +232,21 @@ public class HFileOutputFormat2
       private final Map<byte[], WriterLength> writers =
               new TreeMap<>(Bytes.BYTES_COMPARATOR);
       private byte[] previousRow = HConstants.EMPTY_BYTE_ARRAY;
-      private final byte[] now = Bytes.toBytes(EnvironmentEdgeManager.currentTime());
+      private final long now = EnvironmentEdgeManager.currentTime();
       private boolean rollRequested = false;
 
       @Override
       public void write(ImmutableBytesWritable row, V cell)
           throws IOException {
-        KeyValue kv = KeyValueUtil.ensureKeyValue(cell);
-
+        Cell kv = cell;
         // null input == user explicitly wants to flush
         if (row == null && kv == null) {
-          rollWriters();
+          rollWriters(null);
           return;
         }
 
         byte[] rowKey = CellUtil.cloneRow(kv);
-        long length = kv.getLength();
+        int length = (PrivateCellUtil.estimatedSerializedSizeOf(kv)) - Bytes.SIZEOF_INT;
         byte[] family = CellUtil.cloneFamily(kv);
         byte[] tableNameBytes = null;
         if (writeMultipleTables) {
@@ -254,7 +256,7 @@ public class HFileOutputFormat2
                     "' not" + " expected");
           }
         } else {
-          tableNameBytes = writeTableNames.getBytes(StandardCharsets.UTF_8);
+          tableNameBytes = Bytes.toBytes(writeTableNames);
         }
         byte[] tableAndFamily = getTableNameSuffixedWithFamily(tableNameBytes, family);
         WriterLength wl = this.writers.get(tableAndFamily);
@@ -273,15 +275,13 @@ public class HFileOutputFormat2
           configureStoragePolicy(conf, fs, tableAndFamily, writerPath);
         }
 
-        // If any of the HFiles for the column families has reached
-        // maxsize, we need to roll all the writers
         if (wl != null && wl.written + length >= maxsize) {
           this.rollRequested = true;
         }
 
         // This can only happen once a row is finished though
         if (rollRequested && Bytes.compareTo(this.previousRow, rowKey) != 0) {
-          rollWriters();
+          rollWriters(wl);
         }
 
         // create a new WAL writer, if necessary
@@ -333,7 +333,7 @@ public class HFileOutputFormat2
         }
 
         // we now have the proper WAL writer. full steam ahead
-        kv.updateLatestStamp(this.now);
+        PrivateCellUtil.updateLatestStamp(cell, this.now);
         wl.writer.append(kv);
         wl.written += length;
 
@@ -341,17 +341,25 @@ public class HFileOutputFormat2
         this.previousRow = rowKey;
       }
 
-      private void rollWriters() throws IOException {
-        for (WriterLength wl : this.writers.values()) {
-          if (wl.writer != null) {
-            LOG.info(
-                "Writer=" + wl.writer.getPath() + ((wl.written == 0)? "": ", wrote=" + wl.written));
-            close(wl.writer);
+      private void rollWriters(WriterLength writerLength) throws IOException {
+        if (writerLength != null) {
+          closeWriter(writerLength);
+        } else {
+          for (WriterLength wl : this.writers.values()) {
+            closeWriter(wl);
           }
-          wl.writer = null;
-          wl.written = 0;
         }
         this.rollRequested = false;
+      }
+
+      private void closeWriter(WriterLength wl) throws IOException {
+        if (wl.writer != null) {
+          LOG.info(
+              "Writer=" + wl.writer.getPath() + ((wl.written == 0)? "": ", wrote=" + wl.written));
+          close(wl.writer);
+        }
+        wl.writer = null;
+        wl.written = 0;
       }
 
       /*
@@ -398,12 +406,12 @@ public class HFileOutputFormat2
           wl.writer =
               new StoreFileWriter.Builder(conf, new CacheConfig(tempConf), fs)
                   .withOutputDir(familydir).withBloomType(bloomType)
-                  .withComparator(CellComparator.COMPARATOR).withFileContext(hFileContext).build();
+                  .withComparator(CellComparator.getInstance()).withFileContext(hFileContext).build();
         } else {
           wl.writer =
               new StoreFileWriter.Builder(conf, new CacheConfig(tempConf), new HFileSystem(fs))
                   .withOutputDir(familydir).withBloomType(bloomType)
-                  .withComparator(CellComparator.COMPARATOR).withFileContext(hFileContext)
+                  .withComparator(CellComparator.getInstance()).withFileContext(hFileContext)
                   .withFavoredNodes(favoredNodes).build();
         }
 
@@ -413,13 +421,13 @@ public class HFileOutputFormat2
 
       private void close(final StoreFileWriter w) throws IOException {
         if (w != null) {
-          w.appendFileInfo(StoreFile.BULKLOAD_TIME_KEY,
+          w.appendFileInfo(BULKLOAD_TIME_KEY,
               Bytes.toBytes(System.currentTimeMillis()));
-          w.appendFileInfo(StoreFile.BULKLOAD_TASK_KEY,
+          w.appendFileInfo(BULKLOAD_TASK_KEY,
               Bytes.toBytes(context.getTaskAttemptID().toString()));
-          w.appendFileInfo(StoreFile.MAJOR_COMPACTION_KEY,
+          w.appendFileInfo(MAJOR_COMPACTION_KEY,
               Bytes.toBytes(true));
-          w.appendFileInfo(StoreFile.EXCLUDE_FROM_MINOR_COMPACTION_KEY,
+          w.appendFileInfo(EXCLUDE_FROM_MINOR_COMPACTION_KEY,
               Bytes.toBytes(compactionExclude));
           w.appendTrackedTimestampsToMetadata();
           w.close();
@@ -574,10 +582,11 @@ public class HFileOutputFormat2
     configureIncrementalLoad(job, singleTableInfo, HFileOutputFormat2.class);
   }
 
-  static void configureIncrementalLoad(Job job, List<TableInfo> multiTableInfo, Class<? extends OutputFormat<?, ?>> cls) throws IOException {
+  static void configureIncrementalLoad(Job job, List<TableInfo> multiTableInfo,
+      Class<? extends OutputFormat<?, ?>> cls) throws IOException {
     Configuration conf = job.getConfiguration();
     job.setOutputKeyClass(ImmutableBytesWritable.class);
-    job.setOutputValueClass(KeyValue.class);
+    job.setOutputValueClass(MapReduceExtendedCell.class);
     job.setOutputFormatClass(cls);
 
     if (multiTableInfo.stream().distinct().count() != multiTableInfo.size()) {
@@ -591,8 +600,9 @@ public class HFileOutputFormat2
     // Based on the configured map output class, set the correct reducer to properly
     // sort the incoming values.
     // TODO it would be nice to pick one or the other of these formats.
-    if (KeyValue.class.equals(job.getMapOutputValueClass())) {
-      job.setReducerClass(KeyValueSortReducer.class);
+    if (KeyValue.class.equals(job.getMapOutputValueClass())
+        || MapReduceExtendedCell.class.equals(job.getMapOutputValueClass())) {
+      job.setReducerClass(CellSortReducer.class);
     } else if (Put.class.equals(job.getMapOutputValueClass())) {
       job.setReducerClass(PutSortReducer.class);
     } else if (Text.class.equals(job.getMapOutputValueClass())) {
@@ -603,7 +613,7 @@ public class HFileOutputFormat2
 
     conf.setStrings("io.serializations", conf.get("io.serializations"),
         MutationSerialization.class.getName(), ResultSerialization.class.getName(),
-        KeyValueSerialization.class.getName());
+        CellSerialization.class.getName());
 
     if (conf.getBoolean(LOCALITY_SENSITIVE_CONF_KEY, DEFAULT_LOCALITY_SENSITIVE)) {
       LOG.info("bulkload locality sensitive enabled");
@@ -651,7 +661,7 @@ public class HFileOutputFormat2
     Configuration conf = job.getConfiguration();
 
     job.setOutputKeyClass(ImmutableBytesWritable.class);
-    job.setOutputValueClass(KeyValue.class);
+    job.setOutputValueClass(MapReduceExtendedCell.class);
     job.setOutputFormatClass(HFileOutputFormat2.class);
 
     ArrayList<TableDescriptor> singleTableDescriptor = new ArrayList<>(1);
@@ -769,7 +779,7 @@ public class HFileOutputFormat2
         continue;
       }
       try {
-        confValMap.put(URLDecoder.decode(familySplit[0], "UTF-8").getBytes(StandardCharsets.UTF_8),
+        confValMap.put(Bytes.toBytes(URLDecoder.decode(familySplit[0], "UTF-8")),
             URLDecoder.decode(familySplit[1], "UTF-8"));
       } catch (UnsupportedEncodingException e) {
         // will not happen with UTF-8 encoding

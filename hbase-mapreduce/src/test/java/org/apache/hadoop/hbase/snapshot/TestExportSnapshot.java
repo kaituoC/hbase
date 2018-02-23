@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.snapshot;
 
 import static org.apache.hadoop.util.ToolRunner.run;
@@ -28,23 +27,19 @@ import java.net.URI;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.CategoryBasedTimeout;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Admin;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.master.snapshot.SnapshotManager;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotDescription;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotRegionManifest;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.VerySlowMapReduceTests;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -53,22 +48,28 @@ import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.Ignore;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
-import org.junit.rules.TestRule;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotDescription;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotRegionManifest;
 
 /**
  * Test Export Snapshot Tool
  */
-@Ignore
 @Category({VerySlowMapReduceTests.class, LargeTests.class})
 public class TestExportSnapshot {
-  @Rule public final TestRule timeout = CategoryBasedTimeout.builder().
-      withTimeout(this.getClass()).withLookingForStuckThread(true).build();
-  private static final Log LOG = LogFactory.getLog(TestExportSnapshot.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestExportSnapshot.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestExportSnapshot.class);
 
   protected final static HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
 
@@ -138,7 +139,7 @@ public class TestExportSnapshot {
   }
 
   protected interface RegionPredicate {
-    boolean evaluate(final HRegionInfo regionInfo);
+    boolean evaluate(final RegionInfo regionInfo);
   }
 
   protected RegionPredicate getBypassRegionPredicate() {
@@ -314,7 +315,7 @@ public class TestExportSnapshot {
     SnapshotReferenceUtil.visitReferencedFiles(conf, fs, exportedSnapshot,
           new SnapshotReferenceUtil.SnapshotVisitor() {
         @Override
-        public void storeFile(final HRegionInfo regionInfo, final String family,
+        public void storeFile(final RegionInfo regionInfo, final String family,
             final SnapshotRegionManifest.StoreFile storeFile) throws IOException {
           if (bypassregionPredicate != null && bypassregionPredicate.evaluate(regionInfo))
             return;
@@ -350,7 +351,7 @@ public class TestExportSnapshot {
     FileStatus[] list = FSUtils.listStatus(fs, dir);
     if (list != null) {
       for (FileStatus fstat: list) {
-        LOG.debug(fstat.getPath());
+        LOG.debug(Objects.toString(fstat.getPath()));
         if (fstat.isDirectory()) {
           files.addAll(listFiles(fs, root, fstat.getPath()));
         } else {

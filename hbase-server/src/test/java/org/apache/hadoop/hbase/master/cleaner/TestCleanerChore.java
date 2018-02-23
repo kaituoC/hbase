@@ -17,17 +17,18 @@
  */
 package org.apache.hadoop.hbase.master.cleaner;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import java.io.IOException;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import java.util.Random;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.Stoppable;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
@@ -35,24 +36,30 @@ import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.util.StoppableImplementation;
 import org.junit.After;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category({MasterTests.class, SmallTests.class})
 public class TestCleanerChore {
 
-  private static final Log LOG = LogFactory.getLog(TestCleanerChore.class);
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestCleanerChore.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestCleanerChore.class);
   private static final HBaseTestingUtility UTIL = new HBaseTestingUtility();
 
   @After
   public void cleanup() throws Exception {
     // delete and recreate the test directory, ensuring a clean test dir between tests
     UTIL.cleanupTestDir();
-}
-
+  }
 
   @Test
   public void testSavesFilesOnRequest() throws Exception {
@@ -145,7 +152,7 @@ public class TestCleanerChore {
     // touch a new file
     fs.create(file).close();
     assertTrue("Test file didn't get created.", fs.exists(file));
-    
+
     FileStatus fStat = fs.getFileStatus(parent);
     chore.chore();
     // make sure we never checked the directory
@@ -216,7 +223,7 @@ public class TestCleanerChore {
         FSUtils.logFileSystemState(fs, testDir, LOG);
         return (Boolean) invocation.callRealMethod();
       }
-    }).when(spy).isFileDeletable(Mockito.any(FileStatus.class));
+    }).when(spy).isFileDeletable(Mockito.any());
 
     // run the chore
     chore.chore();
@@ -225,7 +232,7 @@ public class TestCleanerChore {
     assertTrue("Added file unexpectedly deleted", fs.exists(addedFile));
     assertTrue("Parent directory deleted unexpectedly", fs.exists(parent));
     assertFalse("Original file unexpectedly retained", fs.exists(file));
-    Mockito.verify(spy, Mockito.times(1)).isFileDeletable(Mockito.any(FileStatus.class));
+    Mockito.verify(spy, Mockito.times(1)).isFileDeletable(Mockito.any());
     Mockito.reset(spy);
   }
 
@@ -274,19 +281,16 @@ public class TestCleanerChore {
         FSUtils.logFileSystemState(fs, testDir, LOG);
         return (Boolean) invocation.callRealMethod();
       }
-    }).when(spy).isFileDeletable(Mockito.any(FileStatus.class));
+    }).when(spy).isFileDeletable(Mockito.any());
 
-    // attempt to delete the directory, which
-    if (chore.checkAndDeleteDirectory(parent)) {
-      throw new Exception(
-          "Reported success deleting directory, should have failed when adding file mid-iteration");
-    }
+    // run the chore
+    chore.chore();
 
     // make sure all the directories + added file exist, but the original file is deleted
     assertTrue("Added file unexpectedly deleted", fs.exists(racyFile));
     assertTrue("Parent directory deleted unexpectedly", fs.exists(parent));
     assertFalse("Original file unexpectedly retained", fs.exists(file));
-    Mockito.verify(spy, Mockito.times(1)).isFileDeletable(Mockito.any(FileStatus.class));
+    Mockito.verify(spy, Mockito.times(1)).isFileDeletable(Mockito.any());
   }
 
   @Test
@@ -355,6 +359,82 @@ public class TestCleanerChore {
     assertTrue("Directory got deleted", fs.exists(parent));
   }
 
+  @Test
+  public void testOnConfigurationChange() throws Exception {
+    int availableProcessorNum = Runtime.getRuntime().availableProcessors();
+    if (availableProcessorNum == 1) { // no need to run this test
+      return;
+    }
+
+    // have at least 2 available processors/cores
+    int    initPoolSize = availableProcessorNum / 2;
+    int changedPoolSize = availableProcessorNum;
+
+    Stoppable stop = new StoppableImplementation();
+    Configuration conf = UTIL.getConfiguration();
+    Path testDir = UTIL.getDataTestDir();
+    FileSystem fs = UTIL.getTestFileSystem();
+    String confKey = "hbase.test.cleaner.delegates";
+    conf.set(confKey, AlwaysDelete.class.getName());
+    conf.set(CleanerChore.CHORE_POOL_SIZE, String.valueOf(initPoolSize));
+    AllValidPaths chore = new AllValidPaths("test-file-cleaner", stop, conf, fs, testDir, confKey);
+    chore.setEnabled(true);
+    // Create subdirs under testDir
+    int dirNums = 6;
+    Path[] subdirs = new Path[dirNums];
+    for (int i = 0; i < dirNums; i++) {
+      subdirs[i] = new Path(testDir, "subdir-" + i);
+      fs.mkdirs(subdirs[i]);
+    }
+    // Under each subdirs create 6 files
+    for (Path subdir : subdirs) {
+      createFiles(fs, subdir, 6);
+    }
+    // Start chore
+    Thread t = new Thread(() -> chore.chore());
+    t.setDaemon(true);
+    t.start();
+    // Change size of chore's pool
+    conf.set(CleanerChore.CHORE_POOL_SIZE, String.valueOf(changedPoolSize));
+    chore.onConfigurationChange(conf);
+    assertEquals(changedPoolSize, chore.getChorePoolSize());
+    // Stop chore
+    t.join();
+  }
+
+  @Test
+  public void testMinimumNumberOfThreads() throws Exception {
+    Stoppable stop = new StoppableImplementation();
+    Configuration conf = UTIL.getConfiguration();
+    Path testDir = UTIL.getDataTestDir();
+    FileSystem fs = UTIL.getTestFileSystem();
+    String confKey = "hbase.test.cleaner.delegates";
+    conf.set(confKey, AlwaysDelete.class.getName());
+    conf.set(CleanerChore.CHORE_POOL_SIZE, "2");
+    AllValidPaths chore = new AllValidPaths("test-file-cleaner", stop, conf, fs, testDir, confKey);
+    int numProcs = Runtime.getRuntime().availableProcessors();
+    // Sanity
+    assertEquals(numProcs, chore.calculatePoolSize(Integer.toString(numProcs)));
+    // The implementation does not allow us to set more threads than we have processors
+    assertEquals(numProcs, chore.calculatePoolSize(Integer.toString(numProcs + 2)));
+    // Force us into the branch that is multiplying 0.0 against the number of processors
+    assertEquals(1, chore.calculatePoolSize("0.0"));
+  }
+
+  private void createFiles(FileSystem fs, Path parentDir, int numOfFiles) throws IOException {
+    Random random = new Random();
+    for (int i = 0; i < numOfFiles; i++) {
+      int xMega = 1 + random.nextInt(3); // size of each file is between 1~3M
+      try (FSDataOutputStream fsdos = fs.create(new Path(parentDir, "file-" + i))) {
+        for (int m = 0; m < xMega; m++) {
+          byte[] M = new byte[1024 * 1024];
+          random.nextBytes(M);
+          fsdos.write(M);
+        }
+      }
+    }
+  }
+
   private static class AllValidPaths extends CleanerChore<BaseHFileCleanerDelegate> {
 
     public AllValidPaths(String name, Stoppable s, Configuration conf, FileSystem fs,
@@ -367,7 +447,7 @@ public class TestCleanerChore {
     protected boolean validate(Path file) {
       return true;
     }
-  };
+  }
 
   public static class AlwaysDelete extends BaseHFileCleanerDelegate {
     @Override

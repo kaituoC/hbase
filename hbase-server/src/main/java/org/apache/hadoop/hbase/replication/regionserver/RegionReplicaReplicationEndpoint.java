@@ -32,8 +32,6 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.CellScanner;
@@ -41,16 +39,15 @@ import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseIOException;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.RegionLocations;
 import org.apache.hadoop.hbase.TableDescriptors;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotFoundException;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.ClusterConnection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.client.RegionAdminServiceCallable;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.RegionReplicaUtil;
 import org.apache.hadoop.hbase.client.RetryingCallable;
 import org.apache.hadoop.hbase.client.RpcRetryingCallerFactory;
@@ -58,10 +55,6 @@ import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.ipc.HBaseRpcController;
 import org.apache.hadoop.hbase.ipc.RpcControllerFactory;
 import org.apache.hadoop.hbase.protobuf.ReplicationProtbufUtil;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.ReplicateWALEntryResponse;
-import org.apache.hadoop.hbase.replication.BaseWALEntryFilter;
-import org.apache.hadoop.hbase.replication.ChainWALEntryFilter;
 import org.apache.hadoop.hbase.replication.HBaseReplicationEndpoint;
 import org.apache.hadoop.hbase.replication.WALEntryFilter;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -74,10 +67,13 @@ import org.apache.hadoop.hbase.wal.WALSplitter.PipelineController;
 import org.apache.hadoop.hbase.wal.WALSplitter.RegionEntryBuffer;
 import org.apache.hadoop.hbase.wal.WALSplitter.SinkWriter;
 import org.apache.hadoop.util.StringUtils;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.cache.Cache;
-import org.apache.hadoop.hbase.shaded.com.google.common.cache.CacheBuilder;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.apache.hbase.thirdparty.com.google.common.cache.Cache;
+import org.apache.hbase.thirdparty.com.google.common.cache.CacheBuilder;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.ReplicateWALEntryResponse;
 
 /**
  * A {@link org.apache.hadoop.hbase.replication.ReplicationEndpoint} endpoint
@@ -87,7 +83,7 @@ import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
 @InterfaceAudience.Private
 public class RegionReplicaReplicationEndpoint extends HBaseReplicationEndpoint {
 
-  private static final Log LOG = LogFactory.getLog(RegionReplicaReplicationEndpoint.class);
+  private static final Logger LOG = LoggerFactory.getLogger(RegionReplicaReplicationEndpoint.class);
 
   // Can be configured differently than hbase.client.retries.number
   private static String CLIENT_RETRIES_NUMBER
@@ -109,44 +105,6 @@ public class RegionReplicaReplicationEndpoint extends HBaseReplicationEndpoint {
 
   private ExecutorService pool;
 
-  /**
-   * Skips the entries which has original seqId. Only entries persisted via distributed log replay
-   * have their original seq Id fields set.
-   */
-  private static class SkipReplayedEditsFilter extends BaseWALEntryFilter {
-    @Override
-    public Entry filter(Entry entry) {
-      // if orig seq id is set, skip replaying the entry
-      if (entry.getKey().getOrigLogSeqNum() > 0) {
-        return null;
-      }
-      return entry;
-    }
-  }
-
-  @Override
-  public WALEntryFilter getWALEntryfilter() {
-    WALEntryFilter superFilter = super.getWALEntryfilter();
-    WALEntryFilter skipReplayedEditsFilter = getSkipReplayedEditsFilter();
-
-    if (superFilter == null) {
-      return skipReplayedEditsFilter;
-    }
-
-    if (skipReplayedEditsFilter == null) {
-      return superFilter;
-    }
-
-    ArrayList<WALEntryFilter> filters = Lists.newArrayList();
-    filters.add(superFilter);
-    filters.add(skipReplayedEditsFilter);
-    return new ChainWALEntryFilter(filters);
-  }
-
-  protected WALEntryFilter getSkipReplayedEditsFilter() {
-    return new SkipReplayedEditsFilter();
-  }
-
   @Override
   public void init(Context context) throws IOException {
     super.init(context);
@@ -160,11 +118,12 @@ public class RegionReplicaReplicationEndpoint extends HBaseReplicationEndpoint {
     int defaultNumRetries = conf.getInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER,
       HConstants.DEFAULT_HBASE_CLIENT_RETRIES_NUMBER);
     if (defaultNumRetries > 10) {
-      int mult = conf.getInt("hbase.client.serverside.retries.multiplier", 10);
+      int mult = conf.getInt(HConstants.HBASE_CLIENT_SERVERSIDE_RETRIES_MULTIPLIER,
+        HConstants.DEFAULT_HBASE_CLIENT_SERVERSIDE_RETRIES_MULTIPLIER);
       defaultNumRetries = defaultNumRetries / mult; // reset if HRS has multiplied this already
     }
 
-    conf.setInt("hbase.client.serverside.retries.multiplier", 1);
+    conf.setInt(HConstants.HBASE_CLIENT_SERVERSIDE_RETRIES_MULTIPLIER, 1);
     int numRetries = conf.getInt(CLIENT_RETRIES_NUMBER, defaultNumRetries);
     conf.setInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, numRetries);
 
@@ -201,8 +160,7 @@ public class RegionReplicaReplicationEndpoint extends HBaseReplicationEndpoint {
       try {
         outputSink.finishWritingAndClose();
       } catch (IOException ex) {
-        LOG.warn("Got exception while trying to close OutputSink");
-        LOG.warn(ex);
+        LOG.warn("Got exception while trying to close OutputSink", ex);
       }
     }
     if (this.pool != null) {
@@ -400,7 +358,7 @@ public class RegionReplicaReplicationEndpoint extends HBaseReplicationEndpoint {
         // check if the table requires memstore replication
         // some unit-test drop the table, so we should do a bypass check and always replicate.
         TableDescriptor htd = tableDescriptors.get(tableName);
-        requiresReplication = htd == null || htd.hasRegionMemstoreReplication();
+        requiresReplication = htd == null || htd.hasRegionMemStoreReplication();
         memstoreReplicationEnabled.put(tableName, requiresReplication);
       }
 
@@ -534,7 +492,7 @@ public class RegionReplicaReplicationEndpoint extends HBaseReplicationEndpoint {
       for (int replicaId = 0; replicaId < locations.size(); replicaId++) {
         HRegionLocation location = locations.getRegionLocation(replicaId);
         if (!RegionReplicaUtil.isDefaultReplica(replicaId)) {
-          HRegionInfo regionInfo = location == null
+          RegionInfo regionInfo = location == null
               ? RegionReplicaUtil.getRegionInfoForReplica(
                 locations.getDefaultRegionLocation().getRegionInfo(), replicaId)
               : location.getRegionInfo();
@@ -615,7 +573,7 @@ public class RegionReplicaReplicationEndpoint extends HBaseReplicationEndpoint {
 
     public RegionReplicaReplayCallable(ClusterConnection connection,
         RpcControllerFactory rpcControllerFactory, TableName tableName,
-        HRegionLocation location, HRegionInfo regionInfo, byte[] row,List<Entry> entries,
+        HRegionLocation location, RegionInfo regionInfo, byte[] row,List<Entry> entries,
         AtomicLong skippedEntries) {
       super(connection, rpcControllerFactory, location, tableName, row, regionInfo.getReplicaId());
       this.entries = entries;
@@ -623,6 +581,7 @@ public class RegionReplicaReplicationEndpoint extends HBaseReplicationEndpoint {
       this.initialEncodedRegionName = regionInfo.getEncodedNameAsBytes();
     }
 
+    @Override
     public ReplicateWALEntryResponse call(HBaseRpcController controller) throws Exception {
       // Check whether we should still replay this entry. If the regions are changed, or the
       // entry is not coming form the primary region, filter it out because we do not need it.

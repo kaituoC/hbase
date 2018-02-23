@@ -34,24 +34,24 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.concurrent.locks.ReentrantLock;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.io.HeapSize;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
-import org.apache.hadoop.hbase.io.hfile.bucket.BucketCache;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ClassSize;
 import org.apache.hadoop.hbase.util.HasThread;
 import org.apache.hadoop.util.StringUtils;
-import org.codehaus.jackson.annotate.JsonIgnore;
-import org.codehaus.jackson.annotate.JsonIgnoreProperties;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-import org.apache.hadoop.hbase.shaded.com.google.common.base.MoreObjects;
-import org.apache.hadoop.hbase.shaded.com.google.common.base.Objects;
-import org.apache.hadoop.hbase.shaded.com.google.common.util.concurrent.ThreadFactoryBuilder;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.base.MoreObjects;
+import org.apache.hbase.thirdparty.com.google.common.base.Objects;
+import org.apache.hbase.thirdparty.com.google.common.util.concurrent.ThreadFactoryBuilder;
+
+import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
 /**
  * A block cache implementation that is memory-aware using {@link HeapSize},
@@ -99,7 +99,7 @@ import org.apache.hadoop.hbase.shaded.com.google.common.util.concurrent.ThreadFa
 @JsonIgnoreProperties({"encodingCountsForTest"})
 public class LruBlockCache implements ResizableBlockCache, HeapSize {
 
-  private static final Log LOG = LogFactory.getLog(LruBlockCache.class);
+  private static final Logger LOG = LoggerFactory.getLogger(LruBlockCache.class);
 
   /**
    * Percentage of total size that eviction will evict until; e.g. if set to .8, then we will keep
@@ -222,7 +222,11 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
   /** Whether in-memory hfile's data block has higher priority when evicting */
   private boolean forceInMemory;
 
-  /** Where to send victims (blocks evicted/missing from the cache) */
+  /**
+   * Where to send victims (blocks evicted/missing from the cache). This is used only when we use an
+   * external cache as L2.
+   * Note: See org.apache.hadoop.hbase.io.hfile.MemcachedBlockCache
+   */
   private BlockCache victimHandler = null;
 
   /**
@@ -359,9 +363,7 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
    * @param inMemory if block is in-memory
    */
   @Override
-  public void cacheBlock(BlockCacheKey cacheKey, Cacheable buf, boolean inMemory,
-      final boolean cacheDataInL1) {
-
+  public void cacheBlock(BlockCacheKey cacheKey, Cacheable buf, boolean inMemory) {
     if (buf.heapSize() > maxBlockSize) {
       // If there are a lot of blocks that are too
       // big this can make the logs way too noisy.
@@ -446,8 +448,9 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
    * @param cacheKey block's cache key
    * @param buf      block buffer
    */
+  @Override
   public void cacheBlock(BlockCacheKey cacheKey, Cacheable buf) {
-    cacheBlock(cacheKey, buf, false, false);
+    cacheBlock(cacheKey, buf, false);
   }
 
   /**
@@ -498,7 +501,7 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
           if (result instanceof HFileBlock && ((HFileBlock) result).usesSharedMemory()) {
             result = ((HFileBlock) result).deepClone();
           }
-          cacheBlock(cacheKey, result, /* inMemory = */ false, /* cacheData = */ true);
+          cacheBlock(cacheKey, result, /* inMemory = */ false);
         }
         return result;
       }
@@ -576,14 +579,7 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
       // update the stats counter.
       stats.evicted(block.getCachedTime(), block.getCacheKey().isPrimary());
       if (victimHandler != null) {
-        if (victimHandler instanceof BucketCache) {
-          boolean wait = getCurrentSize() < acceptableSize();
-          boolean inMemory = block.getPriority() == BlockPriority.MEMORY;
-          ((BucketCache) victimHandler).cacheBlockWithWait(block.getCacheKey(), block.getBuffer(),
-              inMemory, true, wait);
-        } else {
-          victimHandler.cacheBlock(block.getCacheKey(), block.getBuffer());
-        }
+        victimHandler.cacheBlock(block.getCacheKey(), block.getBuffer());
       }
     }
     return block.heapSize();
@@ -799,6 +795,7 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
       return totalSize;
     }
 
+    @Override
     public int compareTo(BlockBucket that) {
       return Long.compare(this.overflow(), that.overflow());
     }
@@ -975,6 +972,7 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
    * <p>Includes: total accesses, hits, misses, evicted blocks, and runs
    * of the eviction processes.
    */
+  @Override
   public CacheStats getStats() {
     return this.stats;
   }
@@ -1101,6 +1099,7 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
     return (long) Math.floor(this.maxSize * this.memoryFactor * this.minFactor);
   }
 
+  @Override
   public void shutdown() {
     if (victimHandler != null) {
       victimHandler.shutdown();
@@ -1178,27 +1177,11 @@ public class LruBlockCache implements ResizableBlockCache, HeapSize {
     return map;
   }
 
-  BlockCache getVictimHandler() {
-    return this.victimHandler;
-  }
-
   @Override
   @JsonIgnore
   public BlockCache[] getBlockCaches() {
     if (victimHandler != null)
       return new BlockCache[] {this, this.victimHandler};
     return null;
-  }
-
-  @Override
-  public void returnBlock(BlockCacheKey cacheKey, Cacheable block) {
-    // There is no SHARED type here in L1. But the block might have been served from the Victim
-    // handler L2 cache. (when the Combined mode = false). So just try return this block to
-    // L2 victim handler cache.
-    // Note : In case of CombinedBlockCache, we will have this victimHandler configured for L1
-    // cache. But CombinedBlockCache will only call returnBlock on L2 cache.
-    if (this.victimHandler != null) {
-      this.victimHandler.returnBlock(cacheKey, block);
-    }
   }
 }

@@ -1,5 +1,4 @@
-/*
- *
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,9 +22,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
 
 import java.io.IOException;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.MiniHBaseCluster;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.Put;
@@ -37,8 +34,11 @@ import org.apache.hadoop.hbase.testclassification.ReplicationTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.JVMClusterUtil;
 import org.junit.Before;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Test handling of changes to the number of a peer's regionservers.
@@ -46,7 +46,12 @@ import org.junit.experimental.categories.Category;
 @Category({ReplicationTests.class, LargeTests.class})
 public class TestReplicationChangingPeerRegionservers extends TestReplicationBase {
 
-  private static final Log LOG = LogFactory.getLog(TestReplicationChangingPeerRegionservers.class);
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestReplicationChangingPeerRegionservers.class);
+
+  private static final Logger LOG =
+      LoggerFactory.getLogger(TestReplicationChangingPeerRegionservers.class);
 
   /**
    * @throws java.lang.Exception
@@ -87,7 +92,7 @@ public class TestReplicationChangingPeerRegionservers extends TestReplicationBas
     }
   }
 
-  @Test(timeout = 300000)
+  @Test
   public void testChangingNumberOfPeerRegionServers() throws IOException, InterruptedException {
 
     LOG.info("testSimplePutDelete");

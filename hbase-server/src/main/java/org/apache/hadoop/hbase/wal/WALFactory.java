@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,35 +15,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
-
 package org.apache.hadoop.hbase.wal;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
 
 import java.io.IOException;
 import java.io.InterruptedIOException;
-import java.util.Collections;
 import java.util.List;
-import java.util.OptionalLong;
 import java.util.concurrent.atomic.AtomicReference;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.yetus.audience.InterfaceAudience;
-// imports for things that haven't moved from regionserver.wal yet.
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.regionserver.wal.MetricsWAL;
 import org.apache.hadoop.hbase.regionserver.wal.ProtobufLogReader;
-import org.apache.hadoop.hbase.regionserver.wal.WALActionsListener;
-import org.apache.hadoop.hbase.replication.regionserver.WALFileLengthProvider;
 import org.apache.hadoop.hbase.util.CancelableProgressable;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.LeaseNotRecoveredException;
 import org.apache.hadoop.hbase.wal.WAL.Reader;
 import org.apache.hadoop.hbase.wal.WALProvider.Writer;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 /**
  * Entry point for users of the Write Ahead Log.
@@ -65,20 +57,20 @@ import org.apache.hadoop.hbase.wal.WALProvider.Writer;
  * Alternatively, you may provide a custom implementation of {@link WALProvider} by class name.
  */
 @InterfaceAudience.Private
-public class WALFactory implements WALFileLengthProvider {
+public class WALFactory {
 
-  private static final Log LOG = LogFactory.getLog(WALFactory.class);
+  private static final Logger LOG = LoggerFactory.getLogger(WALFactory.class);
 
   /**
    * Maps between configuration names for providers and implementation classes.
    */
   static enum Providers {
-    defaultProvider(FSHLogProvider.class),
+    defaultProvider(AsyncFSWALProvider.class),
     filesystem(FSHLogProvider.class),
     multiwal(RegionGroupingProvider.class),
     asyncfs(AsyncFSWALProvider.class);
 
-    Class<? extends WALProvider> clazz;
+    final Class<? extends WALProvider> clazz;
     Providers(Class<? extends WALProvider> clazz) {
       this.clazz = clazz;
     }
@@ -87,15 +79,15 @@ public class WALFactory implements WALFileLengthProvider {
   public static final String WAL_PROVIDER = "hbase.wal.provider";
   static final String DEFAULT_WAL_PROVIDER = Providers.defaultProvider.name();
 
-  static final String META_WAL_PROVIDER = "hbase.wal.meta_provider";
+  public static final String META_WAL_PROVIDER = "hbase.wal.meta_provider";
   static final String DEFAULT_META_WAL_PROVIDER = Providers.defaultProvider.name();
 
   final String factoryId;
-  final WALProvider provider;
+  private final WALProvider provider;
   // The meta updates are written to a different wal. If this
   // regionserver holds meta regions, then this ref will be non-null.
   // lazily intialized; most RegionServers don't deal with META
-  final AtomicReference<WALProvider> metaProvider = new AtomicReference<>();
+  private final AtomicReference<WALProvider> metaProvider = new AtomicReference<>();
 
   /**
    * Configuration-specified WAL Reader used when a custom reader is requested
@@ -138,43 +130,38 @@ public class WALFactory implements WALFileLengthProvider {
     }
   }
 
-  WALProvider createProvider(Class<? extends WALProvider> clazz,
-      List<WALActionsListener> listeners, String providerId) throws IOException {
+  WALProvider createProvider(Class<? extends WALProvider> clazz, String providerId)
+      throws IOException {
     LOG.info("Instantiating WALProvider of type " + clazz);
     try {
-      final WALProvider result = clazz.newInstance();
-      result.init(this, conf, listeners, providerId);
+      final WALProvider result = clazz.getDeclaredConstructor().newInstance();
+      result.init(this, conf, providerId);
       return result;
-    } catch (InstantiationException exception) {
+    } catch (Exception e) {
       LOG.error("couldn't set up WALProvider, the configured class is " + clazz);
-      LOG.debug("Exception details for failure to load WALProvider.", exception);
-      throw new IOException("couldn't set up WALProvider", exception);
-    } catch (IllegalAccessException exception) {
-      LOG.error("couldn't set up WALProvider, the configured class is " + clazz);
-      LOG.debug("Exception details for failure to load WALProvider.", exception);
-      throw new IOException("couldn't set up WALProvider", exception);
+      LOG.debug("Exception details for failure to load WALProvider.", e);
+      throw new IOException("couldn't set up WALProvider", e);
     }
   }
 
   /**
-   * instantiate a provider from a config property.
-   * requires conf to have already been set (as well as anything the provider might need to read).
+   * instantiate a provider from a config property. requires conf to have already been set (as well
+   * as anything the provider might need to read).
    */
-  WALProvider getProvider(final String key, final String defaultValue,
-      final List<WALActionsListener> listeners, final String providerId) throws IOException {
+  WALProvider getProvider(String key, String defaultValue, String providerId) throws IOException {
     Class<? extends WALProvider> clazz = getProviderClass(key, defaultValue);
-    return createProvider(clazz, listeners, providerId);
+    WALProvider provider = createProvider(clazz, providerId);
+    provider.addWALActionsListener(new MetricsWAL());
+    return provider;
   }
 
   /**
    * @param conf must not be null, will keep a reference to read params in later reader/writer
-   *     instances.
-   * @param listeners may be null. will be given to all created wals (and not meta-wals)
+   *          instances.
    * @param factoryId a unique identifier for this factory. used i.e. by filesystem implementations
-   *     to make a directory
+   *          to make a directory
    */
-  public WALFactory(final Configuration conf, final List<WALActionsListener> listeners,
-      final String factoryId) throws IOException {
+  public WALFactory(Configuration conf, String factoryId) throws IOException {
     // until we've moved reader/writer construction down into providers, this initialization must
     // happen prior to provider initialization, in case they need to instantiate a reader/writer.
     timeoutMillis = conf.getInt("hbase.hlog.open.timeout", 300000);
@@ -185,12 +172,12 @@ public class WALFactory implements WALFileLengthProvider {
     this.factoryId = factoryId;
     // end required early initialization
     if (conf.getBoolean("hbase.regionserver.hlog.enabled", true)) {
-      provider = getProvider(WAL_PROVIDER, DEFAULT_WAL_PROVIDER, listeners, null);
+      provider = getProvider(WAL_PROVIDER, DEFAULT_WAL_PROVIDER, null);
     } else {
       // special handling of existing configuration behavior.
       LOG.warn("Running with WAL disabled.");
       provider = new DisabledWALProvider();
-      provider.init(this, conf, null, factoryId);
+      provider.init(this, conf, factoryId);
     }
   }
 
@@ -236,32 +223,34 @@ public class WALFactory implements WALFileLengthProvider {
     return provider.getWALs();
   }
 
-  /**
-   * @param identifier may not be null, contents will not be altered
-   * @param namespace could be null, and will use default namespace if null
-   */
-  public WAL getWAL(final byte[] identifier, final byte[] namespace) throws IOException {
-    return provider.getWAL(identifier, namespace);
+  private WALProvider getMetaProvider() throws IOException {
+    for (;;) {
+      WALProvider provider = this.metaProvider.get();
+      if (provider != null) {
+        return provider;
+      }
+      provider = getProvider(META_WAL_PROVIDER, DEFAULT_META_WAL_PROVIDER,
+        AbstractFSWALProvider.META_WAL_PROVIDER_ID);
+      if (metaProvider.compareAndSet(null, provider)) {
+        return provider;
+      } else {
+        // someone is ahead of us, close and try again.
+        provider.close();
+      }
+    }
   }
 
   /**
-   * @param identifier may not be null, contents will not be altered
+   * @param region the region which we want to get a WAL for it. Could be null.
    */
-  public WAL getMetaWAL(final byte[] identifier) throws IOException {
-    WALProvider metaProvider = this.metaProvider.get();
-    if (null == metaProvider) {
-      final WALProvider temp = getProvider(META_WAL_PROVIDER, DEFAULT_META_WAL_PROVIDER,
-          Collections.<WALActionsListener>singletonList(new MetricsWAL()),
-          AbstractFSWALProvider.META_WAL_PROVIDER_ID);
-      if (this.metaProvider.compareAndSet(null, temp)) {
-        metaProvider = temp;
-      } else {
-        // reference must now be to a provider created in another thread.
-        temp.close();
-        metaProvider = this.metaProvider.get();
-      }
+  public WAL getWAL(RegionInfo region) throws IOException {
+    // use different WAL for hbase:meta
+    if (region != null && region.isMetaRegion() &&
+      region.getReplicaId() == RegionInfo.DEFAULT_REPLICA_ID) {
+      return getMetaProvider().getWAL(region);
+    } else {
+      return provider.getWAL(region);
     }
-    return metaProvider.getWAL(identifier, null);
   }
 
   public Reader createReader(final FileSystem fs, final Path path) throws IOException {
@@ -294,7 +283,7 @@ public class WALFactory implements WALFileLengthProvider {
       AbstractFSWALProvider.Reader reader = null;
       while (true) {
         try {
-          reader = lrClass.newInstance();
+          reader = lrClass.getDeclaredConstructor().newInstance();
           reader.init(fs, path, conf, null);
           return reader;
         } catch (IOException e) {
@@ -451,10 +440,5 @@ public class WALFactory implements WALFileLengthProvider {
 
   public final WALProvider getMetaWALProvider() {
     return this.metaProvider.get();
-  }
-
-  @Override
-  public OptionalLong getLogFileSizeIfBeingWritten(Path path) {
-    return getWALs().stream().map(w -> w.getLogFileSizeIfBeingWritten(path)).filter(o -> o.isPresent()).findAny().orElse(OptionalLong.empty());
   }
 }

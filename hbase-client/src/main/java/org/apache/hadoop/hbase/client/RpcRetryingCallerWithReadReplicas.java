@@ -28,8 +28,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HBaseIOException;
@@ -37,6 +35,8 @@ import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.RegionLocations;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.ipc.HBaseRpcController;
 import org.apache.hadoop.hbase.ipc.RpcControllerFactory;
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
@@ -54,7 +54,9 @@ import static org.apache.hadoop.hbase.HConstants.PRIORITY_UNSET;
  */
 @InterfaceAudience.Private
 public class RpcRetryingCallerWithReadReplicas {
-  private static final Log LOG = LogFactory.getLog(RpcRetryingCallerWithReadReplicas.class);
+  private static final Logger LOG =
+      LoggerFactory.getLogger(RpcRetryingCallerWithReadReplicas.class);
+
   protected final ExecutorService pool;
   protected final ClusterConnection cConnection;
   protected final Configuration conf;
@@ -216,6 +218,9 @@ public class RpcRetryingCallerWithReadReplicas {
           if (f != null) {
             return f.get(); //great we got a response
           }
+          if (cConnection.getConnectionMetrics() != null) {
+            cConnection.getConnectionMetrics().incrHedgedReadOps();
+          }
         } catch (ExecutionException e) {
           // We ignore the ExecutionException and continue with the secondary replicas
           if (LOG.isDebugEnabled()) {
@@ -238,12 +243,16 @@ public class RpcRetryingCallerWithReadReplicas {
       addCallsForReplica(cs, rl, 1, rl.size() - 1);
     }
     try {
-      Future<Result> f = cs.pollForFirstSuccessfullyCompletedTask(operationTimeout,
-          TimeUnit.MILLISECONDS, startIndex, endIndex);
+      ResultBoundedCompletionService<Result>.QueueingFuture<Result> f =
+          cs.pollForFirstSuccessfullyCompletedTask(operationTimeout, TimeUnit.MILLISECONDS, startIndex, endIndex);
       if (f == null) {
         throw new RetriesExhaustedException("Timed out after " + operationTimeout +
             "ms. Get is sent to replicas with startIndex: " + startIndex +
             ", endIndex: " + endIndex + ", Locations: " + rl);
+      }
+      if (cConnection.getConnectionMetrics() != null && !isTargetReplicaSpecified &&
+          !skipPrimary && f.getReplicaId() != RegionReplicaUtil.DEFAULT_REPLICA_ID) {
+        cConnection.getConnectionMetrics().incrHedgedReadWin();
       }
       return f.get();
     } catch (ExecutionException e) {

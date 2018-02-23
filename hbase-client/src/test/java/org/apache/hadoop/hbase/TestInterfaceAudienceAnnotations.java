@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase;
 
 import java.io.IOException;
@@ -25,24 +24,25 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.yetus.audience.InterfaceStability;
-import org.apache.hadoop.hbase.testclassification.SmallTests;
-import org.apache.hadoop.hbase.util.Pair;
-import org.apache.hadoop.hbase.util.Triple;
 import org.apache.hadoop.hbase.ClassFinder.And;
 import org.apache.hadoop.hbase.ClassFinder.FileNameFilter;
 import org.apache.hadoop.hbase.ClassFinder.Not;
 import org.apache.hadoop.hbase.ClassTestFinder.TestClassFilter;
 import org.apache.hadoop.hbase.ClassTestFinder.TestFileNameFilter;
+import org.apache.hadoop.hbase.testclassification.SmallTests;
+import org.apache.hadoop.hbase.util.Pair;
+import org.apache.hadoop.hbase.util.Triple;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.yetus.audience.InterfaceStability;
 import org.junit.Assert;
+import org.junit.ClassRule;
 import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Test cases for ensuring our client visible classes have annotations for
@@ -71,22 +71,26 @@ import org.junit.experimental.categories.Category;
 @Category(SmallTests.class)
 public class TestInterfaceAudienceAnnotations {
 
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestInterfaceAudienceAnnotations.class);
+
   private static final String HBASE_PROTOBUF = "org.apache.hadoop.hbase.protobuf.generated";
-  private static final Log LOG = LogFactory.getLog(TestInterfaceAudienceAnnotations.class);
+  private static final Logger LOG = LoggerFactory.getLogger(TestInterfaceAudienceAnnotations.class);
 
   /** Selects classes with generated in their package name */
-  class GeneratedClassFilter implements ClassFinder.ClassFilter {
+  static class GeneratedClassFilter implements ClassFinder.ClassFilter {
     @Override
     public boolean isCandidateClass(Class<?> c) {
       return c.getPackage().getName().contains("generated");
     }
   }
 
-  class ShadedProtobufClassFilter implements ClassFinder.ClassFilter {
+  static class ShadedProtobufClassFilter implements ClassFinder.ClassFilter {
     @Override
     public boolean isCandidateClass(Class<?> c) {
       return c.getPackage().getName().
-          contains("org.apache.hadoop.hbase.shaded.com.google.protobuf");
+          contains("org.apache.hbase.thirdparty.com.google.protobuf");
     }
   }
 
@@ -242,7 +246,7 @@ public class TestInterfaceAudienceAnnotations {
   }
 
   /** Selects classes that are declared public */
-  class PublicClassFilter implements ClassFinder.ClassFilter {
+  static class PublicClassFilter implements ClassFinder.ClassFilter {
     @Override
     public boolean isCandidateClass(Class<?> c) {
       int mod = c.getModifiers();
@@ -251,7 +255,7 @@ public class TestInterfaceAudienceAnnotations {
   }
 
   /** Selects paths (jars and class dirs) only from the main code, not test classes */
-  class MainCodeResourcePathFilter implements ClassFinder.ResourcePathFilter {
+  static class MainCodeResourcePathFilter implements ClassFinder.ResourcePathFilter {
     @Override
     public boolean isCandidatePath(String resourcePath, boolean isJar) {
       return !resourcePath.contains("test-classes") &&
@@ -268,7 +272,7 @@ public class TestInterfaceAudienceAnnotations {
    * - enclosing class is not an interface
    * - name starts with "__CLR"
    */
-  class CloverInstrumentationFilter implements ClassFinder.ClassFilter {
+  static class CloverInstrumentationFilter implements ClassFinder.ClassFilter {
     @Override
     public boolean isCandidateClass(Class<?> clazz) {
       boolean clover = false;
@@ -315,7 +319,7 @@ public class TestInterfaceAudienceAnnotations {
     if (!classes.isEmpty()) {
       LOG.info("These are the classes that DO NOT have @InterfaceAudience annotation:");
       for (Class<?> clazz : classes) {
-        LOG.info(clazz);
+        LOG.info(Objects.toString(clazz));
       }
     }
 
@@ -358,7 +362,7 @@ public class TestInterfaceAudienceAnnotations {
       LOG.info("These are the @InterfaceAudience.Public classes that have @InterfaceStability " +
           "annotation:");
       for (Class<?> clazz : classes) {
-        LOG.info(clazz);
+        LOG.info(Objects.toString(clazz));
       }
     }
 
@@ -403,7 +407,7 @@ public class TestInterfaceAudienceAnnotations {
       LOG.info("These are the @InterfaceAudience.LimitedPrivate classes that DO NOT " +
           "have @InterfaceStability annotation:");
       for (Class<?> clazz : classes) {
-        LOG.info(clazz);
+        LOG.info(Objects.toString(clazz));
       }
     }
     Assert.assertEquals("All classes that are marked with @InterfaceAudience.LimitedPrivate " +

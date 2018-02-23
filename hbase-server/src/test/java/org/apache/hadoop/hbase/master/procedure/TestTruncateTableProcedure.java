@@ -15,41 +15,43 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.master.procedure;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.hbase.CategoryBasedTimeout;
-import org.apache.hadoop.hbase.HRegionInfo;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotDisabledException;
 import org.apache.hadoop.hbase.TableNotFoundException;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.procedure2.Procedure;
 import org.apache.hadoop.hbase.procedure2.ProcedureExecutor;
 import org.apache.hadoop.hbase.procedure2.ProcedureTestingUtility;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
-import org.junit.rules.TestRule;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category({MasterTests.class, MediumTests.class})
 public class TestTruncateTableProcedure extends TestTableDDLProcedureBase {
-  private static final Log LOG = LogFactory.getLog(TestTruncateTableProcedure.class);
-  @Rule public final TestRule timeout = CategoryBasedTimeout.builder().withTimeout(this.getClass()).
-      withLookingForStuckThread(true).build();
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestTruncateTableProcedure.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestTruncateTableProcedure.class);
 
   @Rule
   public TestName name = new TestName();
 
-  @Test(timeout=60000)
+  @Test
   public void testTruncateNotExistentTable() throws Exception {
     final TableName tableName = TableName.valueOf(name.getMethodName());
 
@@ -64,7 +66,7 @@ public class TestTruncateTableProcedure extends TestTableDDLProcedureBase {
     assertTrue(ProcedureTestingUtility.getExceptionCause(result) instanceof TableNotFoundException);
   }
 
-  @Test(timeout=60000)
+  @Test
   public void testTruncateNotDisabledTable() throws Exception {
     final TableName tableName = TableName.valueOf(name.getMethodName());
 
@@ -82,13 +84,13 @@ public class TestTruncateTableProcedure extends TestTableDDLProcedureBase {
       ProcedureTestingUtility.getExceptionCause(result) instanceof TableNotDisabledException);
   }
 
-  @Test(timeout=60000)
+  @Test
   public void testSimpleTruncatePreserveSplits() throws Exception {
     final TableName tableName = TableName.valueOf(name.getMethodName());
     testSimpleTruncate(tableName, true);
   }
 
-  @Test(timeout=60000)
+  @Test
   public void testSimpleTruncateNoPreserveSplits() throws Exception {
     final TableName tableName = TableName.valueOf(name.getMethodName());
     testSimpleTruncate(tableName, false);
@@ -101,7 +103,7 @@ public class TestTruncateTableProcedure extends TestTableDDLProcedureBase {
       Bytes.toBytes("a"), Bytes.toBytes("b"), Bytes.toBytes("c")
     };
 
-    HRegionInfo[] regions = MasterProcedureTestingUtility.createTable(
+    RegionInfo[] regions = MasterProcedureTestingUtility.createTable(
       getMasterProcedureExecutor(), tableName, splitKeys, families);
     // load and verify that there are rows in the table
     MasterProcedureTestingUtility.loadData(
@@ -116,10 +118,12 @@ public class TestTruncateTableProcedure extends TestTableDDLProcedureBase {
       new TruncateTableProcedure(procExec.getEnvironment(), tableName, preserveSplits));
     ProcedureTestingUtility.assertProcNotFailed(procExec, procId);
 
+    // If truncate procedure completed successfully, it means all regions were assigned correctly
+    // and table is enabled now.
     UTIL.waitUntilAllRegionsAssigned(tableName);
 
     // validate the table regions and layout
-    regions = UTIL.getAdmin().getTableRegions(tableName).toArray(new HRegionInfo[0]);
+    regions = UTIL.getAdmin().getTableRegions(tableName).toArray(new RegionInfo[0]);
     if (preserveSplits) {
       assertEquals(1 + splitKeys.length, regions.length);
     } else {
@@ -137,13 +141,13 @@ public class TestTruncateTableProcedure extends TestTableDDLProcedureBase {
     assertEquals(50, UTIL.countRows(tableName));
   }
 
-  @Test(timeout=60000)
+  @Test
   public void testRecoveryAndDoubleExecutionPreserveSplits() throws Exception {
     final TableName tableName = TableName.valueOf(name.getMethodName());
     testRecoveryAndDoubleExecution(tableName, true);
   }
 
-  @Test(timeout=60000)
+  @Test
   public void testRecoveryAndDoubleExecutionNoPreserveSplits() throws Exception {
     final TableName tableName = TableName.valueOf(name.getMethodName());
     testRecoveryAndDoubleExecution(tableName, false);
@@ -157,7 +161,7 @@ public class TestTruncateTableProcedure extends TestTableDDLProcedureBase {
     final byte[][] splitKeys = new byte[][] {
       Bytes.toBytes("a"), Bytes.toBytes("b"), Bytes.toBytes("c")
     };
-    HRegionInfo[] regions = MasterProcedureTestingUtility.createTable(
+    RegionInfo[] regions = MasterProcedureTestingUtility.createTable(
       getMasterProcedureExecutor(), tableName, splitKeys, families);
     // load and verify that there are rows in the table
     MasterProcedureTestingUtility.loadData(
@@ -181,7 +185,7 @@ public class TestTruncateTableProcedure extends TestTableDDLProcedureBase {
     UTIL.waitUntilAllRegionsAssigned(tableName);
 
     // validate the table regions and layout
-    regions = UTIL.getAdmin().getTableRegions(tableName).toArray(new HRegionInfo[0]);
+    regions = UTIL.getAdmin().getTableRegions(tableName).toArray(new RegionInfo[0]);
     if (preserveSplits) {
       assertEquals(1 + splitKeys.length, regions.length);
     } else {

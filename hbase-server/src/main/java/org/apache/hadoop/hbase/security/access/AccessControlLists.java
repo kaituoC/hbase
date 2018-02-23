@@ -18,11 +18,6 @@
 
 package org.apache.hadoop.hbase.security.access;
 
-import org.apache.hadoop.hbase.CompareOperator;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.ArrayListMultimap;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.ListMultimap;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
-
 import java.io.ByteArrayInputStream;
 import java.io.DataInput;
 import java.io.DataInputStream;
@@ -37,21 +32,19 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.AuthUtil;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.Cell.Type;
+import org.apache.hadoop.hbase.CellBuilderFactory;
+import org.apache.hadoop.hbase.CellBuilderType;
 import org.apache.hadoop.hbase.CellUtil;
-import org.apache.hadoop.hbase.HColumnDescriptor;
-import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HTableDescriptor;
+import org.apache.hadoop.hbase.CompareOperator;
 import org.apache.hadoop.hbase.NamespaceDescriptor;
+import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.Tag;
 import org.apache.hadoop.hbase.TagType;
-import org.apache.hadoop.hbase.TagUtil;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.client.Delete;
@@ -63,22 +56,26 @@ import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.exceptions.DeserializationException;
-import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
 import org.apache.hadoop.hbase.filter.QualifierFilter;
 import org.apache.hadoop.hbase.filter.RegexStringComparator;
-import org.apache.hadoop.hbase.master.MasterServices;
 import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.protobuf.generated.AccessControlProtos;
-import org.apache.hadoop.hbase.regionserver.BloomType;
 import org.apache.hadoop.hbase.regionserver.InternalScanner;
 import org.apache.hadoop.hbase.regionserver.Region;
 import org.apache.hadoop.hbase.security.User;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.collect.ArrayListMultimap;
+import org.apache.hbase.thirdparty.com.google.common.collect.ListMultimap;
+import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableFactories;
 import org.apache.hadoop.io.WritableUtils;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Maintains lists of permission grants to users and groups to allow for
@@ -123,28 +120,7 @@ public class AccessControlLists {
    * _acl_ table info: column keys */
   public static final char ACL_KEY_DELIMITER = ',';
 
-  private static final Log LOG = LogFactory.getLog(AccessControlLists.class);
-
-  /**
-   * Create the ACL table
-   * @param master
-   * @throws IOException
-   */
-  static void createACLTable(MasterServices master) throws IOException {
-    /** Table descriptor for ACL table */
-    final HTableDescriptor ACL_TABLEDESC = new HTableDescriptor(ACL_TABLE_NAME)
-        .addFamily(new HColumnDescriptor(ACL_LIST_FAMILY)
-            .setMaxVersions(1)
-            .setInMemory(true)
-            .setBlockCacheEnabled(true)
-            .setBlocksize(8 * 1024)
-            .setBloomFilterType(BloomType.NONE)
-            .setScope(HConstants.REPLICATION_SCOPE_LOCAL)
-            // Set cache data blocks in L1 if more than one cache tier deployed; e.g. this will
-            // be the case if we are using CombinedBlockCache (Bucket Cache).
-            .setCacheDataInL1(true));
-    master.createSystemTable(ACL_TABLEDESC);
-  }
+  private static final Logger LOG = LoggerFactory.getLogger(AccessControlLists.class);
 
   /**
    * Stores a new user permission grant in the access control lists table.
@@ -193,8 +169,14 @@ public class AccessControlLists {
     for (Permission.Action action : actionSet) {
       value[index++] = action.code();
     }
-
-    p.addImmutable(ACL_LIST_FAMILY, key, value);
+    p.add(CellBuilderFactory.create(CellBuilderType.SHALLOW_COPY)
+        .setRow(p.getRow())
+        .setFamily(ACL_LIST_FAMILY)
+        .setQualifier(key)
+        .setTimestamp(p.getTimeStamp())
+        .setType(Type.Put)
+        .setValue(value)
+        .build());
     if (LOG.isDebugEnabled()) {
       LOG.debug("Writing permission with rowKey "+
           Bytes.toString(rowKey)+" "+
@@ -509,7 +491,8 @@ public class AccessControlLists {
     return getPermissions(conf, tableName != null ? tableName.getName() : null, null);
   }
 
-  static ListMultimap<String, TablePermission> getNamespacePermissions(Configuration conf,
+  @VisibleForTesting
+  public static ListMultimap<String, TablePermission> getNamespacePermissions(Configuration conf,
       String namespace) throws IOException {
     return getPermissions(conf, Bytes.toBytes(toNamespaceEntry(namespace)), null);
   }
@@ -765,19 +748,19 @@ public class AccessControlLists {
       return null;
     }
     List<Permission> results = Lists.newArrayList();
-    Iterator<Tag> tagsIterator = CellUtil.tagsIterator(cell);
+    Iterator<Tag> tagsIterator = PrivateCellUtil.tagsIterator(cell);
     while (tagsIterator.hasNext()) {
       Tag tag = tagsIterator.next();
       if (tag.getType() == ACL_TAG_TYPE) {
         // Deserialize the table permissions from the KV
         // TODO: This can be improved. Don't build UsersAndPermissions just to unpack it again,
         // use the builder
-        AccessControlProtos.UsersAndPermissions.Builder builder = 
+        AccessControlProtos.UsersAndPermissions.Builder builder =
             AccessControlProtos.UsersAndPermissions.newBuilder();
         if (tag.hasArray()) {
           ProtobufUtil.mergeFrom(builder, tag.getValueArray(), tag.getValueOffset(), tag.getValueLength());
         } else {
-          ProtobufUtil.mergeFrom(builder, TagUtil.cloneValue(tag));
+          ProtobufUtil.mergeFrom(builder, Tag.cloneValue(tag));
         }
         ListMultimap<String,Permission> kvPerms =
             AccessControlUtil.toUsersAndPermissions(builder.build());

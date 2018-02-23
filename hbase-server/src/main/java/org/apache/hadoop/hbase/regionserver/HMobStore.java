@@ -26,9 +26,8 @@ import java.util.Map;
 import java.util.NavigableSet;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -43,7 +42,6 @@ import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.Tag;
 import org.apache.hadoop.hbase.TagType;
 import org.apache.hadoop.hbase.TagUtil;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.filter.Filter;
@@ -59,6 +57,9 @@ import org.apache.hadoop.hbase.mob.MobUtils;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.HFileArchiveUtil;
 import org.apache.hadoop.hbase.util.IdLock;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The store implementation to save MOBs (medium objects), it extends the HStore.
@@ -78,19 +79,19 @@ import org.apache.hadoop.hbase.util.IdLock;
  */
 @InterfaceAudience.Private
 public class HMobStore extends HStore {
-  private static final Log LOG = LogFactory.getLog(HMobStore.class);
+  private static final Logger LOG = LoggerFactory.getLogger(HMobStore.class);
   private MobCacheConfig mobCacheConfig;
   private Path homePath;
   private Path mobFamilyPath;
-  private volatile long cellsCountCompactedToMob = 0;
-  private volatile long cellsCountCompactedFromMob = 0;
-  private volatile long cellsSizeCompactedToMob = 0;
-  private volatile long cellsSizeCompactedFromMob = 0;
-  private volatile long mobFlushCount = 0;
-  private volatile long mobFlushedCellsCount = 0;
-  private volatile long mobFlushedCellsSize = 0;
-  private volatile long mobScanCellsCount = 0;
-  private volatile long mobScanCellsSize = 0;
+  private AtomicLong cellsCountCompactedToMob = new AtomicLong();
+  private AtomicLong cellsCountCompactedFromMob = new AtomicLong();
+  private AtomicLong cellsSizeCompactedToMob = new AtomicLong();
+  private AtomicLong cellsSizeCompactedFromMob = new AtomicLong();
+  private AtomicLong mobFlushCount = new AtomicLong();
+  private AtomicLong mobFlushedCellsCount = new AtomicLong();
+  private AtomicLong mobFlushedCellsSize = new AtomicLong();
+  private AtomicLong mobScanCellsCount = new AtomicLong();
+  private AtomicLong mobScanCellsSize = new AtomicLong();
   private ColumnFamilyDescriptor family;
   private Map<String, List<Path>> map = new ConcurrentHashMap<>();
   private final IdLock keyLock = new IdLock();
@@ -144,29 +145,26 @@ public class HMobStore extends HStore {
    * the mob files should be performed after the seek in HBase is done.
    */
   @Override
-  protected KeyValueScanner createScanner(Scan scan, final NavigableSet<byte[]> targetCols,
-      long readPt, KeyValueScanner scanner) throws IOException {
-    if (scanner == null) {
-      if (MobUtils.isRefOnlyScan(scan)) {
-        Filter refOnlyFilter = new MobReferenceOnlyFilter();
-        Filter filter = scan.getFilter();
-        if (filter != null) {
-          scan.setFilter(new FilterList(filter, refOnlyFilter));
-        } else {
-          scan.setFilter(refOnlyFilter);
-        }
+  protected KeyValueScanner createScanner(Scan scan, ScanInfo scanInfo,
+      NavigableSet<byte[]> targetCols, long readPt) throws IOException {
+    if (MobUtils.isRefOnlyScan(scan)) {
+      Filter refOnlyFilter = new MobReferenceOnlyFilter();
+      Filter filter = scan.getFilter();
+      if (filter != null) {
+        scan.setFilter(new FilterList(filter, refOnlyFilter));
+      } else {
+        scan.setFilter(refOnlyFilter);
       }
-      scanner = scan.isReversed() ? new ReversedMobStoreScanner(this, getScanInfo(), scan,
-          targetCols, readPt) : new MobStoreScanner(this, getScanInfo(), scan, targetCols, readPt);
     }
-    return scanner;
+    return scan.isReversed() ? new ReversedMobStoreScanner(this, scanInfo, scan, targetCols, readPt)
+        : new MobStoreScanner(this, scanInfo, scan, targetCols, readPt);
   }
 
   /**
    * Creates the mob store engine.
    */
   @Override
-  protected StoreEngine<?, ?, ?, ?> createStoreEngine(Store store, Configuration conf,
+  protected StoreEngine<?, ?, ?, ?> createStoreEngine(HStore store, Configuration conf,
       CellComparator cellComparator) throws IOException {
     MobStoreEngine engine = new MobStoreEngine();
     engine.createComponents(conf, store, cellComparator);
@@ -291,7 +289,7 @@ public class HMobStore extends HStore {
    * @param path the path to the mob file
    */
   private void validateMobFile(Path path) throws IOException {
-    StoreFile storeFile = null;
+    HStoreFile storeFile = null;
     try {
       storeFile = new HStoreFile(region.getFilesystem(), path, conf, this.mobCacheConfig,
           BloomType.NONE, isPrimaryReplicaStore());
@@ -301,7 +299,7 @@ public class HMobStore extends HStore {
       throw e;
     } finally {
       if (storeFile != null) {
-        storeFile.closeReader(false);
+        storeFile.closeStoreFile(false);
       }
     }
   }
@@ -335,7 +333,7 @@ public class HMobStore extends HStore {
       String fileName = MobUtils.getMobFileName(reference);
       Tag tableNameTag = MobUtils.getTableNameTag(reference);
       if (tableNameTag != null) {
-        String tableNameString = TagUtil.getValueAsString(tableNameTag);
+        String tableNameString = Tag.getValueAsString(tableNameTag);
         List<Path> locations = map.get(tableNameString);
         if (locations == null) {
           IdLock.Entry lockEntry = keyLock.getLockEntry(tableNameString.hashCode());
@@ -362,12 +360,15 @@ public class HMobStore extends HStore {
           + "qualifier,timestamp,type and tags but with an empty value to return.");
       result = ExtendedCellBuilderFactory.create(CellBuilderType.DEEP_COPY)
               .setRow(reference.getRowArray(), reference.getRowOffset(), reference.getRowLength())
-              .setFamily(reference.getFamilyArray(), reference.getFamilyOffset(), reference.getFamilyLength())
-              .setQualifier(reference.getQualifierArray(), reference.getQualifierOffset(), reference.getQualifierLength())
+              .setFamily(reference.getFamilyArray(), reference.getFamilyOffset(),
+                reference.getFamilyLength())
+              .setQualifier(reference.getQualifierArray(),
+                reference.getQualifierOffset(), reference.getQualifierLength())
               .setTimestamp(reference.getTimestamp())
               .setType(reference.getTypeByte())
               .setValue(HConstants.EMPTY_BYTE_ARRAY)
-              .setTags(reference.getTagsArray(), reference.getTagsOffset(), reference.getTagsLength())
+              .setTags(reference.getTagsArray(), reference.getTagsOffset(),
+                reference.getTagsLength())
               .build();
     }
     return result;
@@ -453,76 +454,75 @@ public class HMobStore extends HStore {
   }
 
   public void updateCellsCountCompactedToMob(long count) {
-    cellsCountCompactedToMob += count;
+    cellsCountCompactedToMob.addAndGet(count);
   }
 
   public long getCellsCountCompactedToMob() {
-    return cellsCountCompactedToMob;
+    return cellsCountCompactedToMob.get();
   }
 
   public void updateCellsCountCompactedFromMob(long count) {
-    cellsCountCompactedFromMob += count;
+    cellsCountCompactedFromMob.addAndGet(count);
   }
 
   public long getCellsCountCompactedFromMob() {
-    return cellsCountCompactedFromMob;
+    return cellsCountCompactedFromMob.get();
   }
 
   public void updateCellsSizeCompactedToMob(long size) {
-    cellsSizeCompactedToMob += size;
+    cellsSizeCompactedToMob.addAndGet(size);
   }
 
   public long getCellsSizeCompactedToMob() {
-    return cellsSizeCompactedToMob;
+    return cellsSizeCompactedToMob.get();
   }
 
   public void updateCellsSizeCompactedFromMob(long size) {
-    cellsSizeCompactedFromMob += size;
+    cellsSizeCompactedFromMob.addAndGet(size);
   }
 
   public long getCellsSizeCompactedFromMob() {
-    return cellsSizeCompactedFromMob;
+    return cellsSizeCompactedFromMob.get();
   }
 
-  @edu.umd.cs.findbugs.annotations.SuppressWarnings(value = "VO_VOLATILE_INCREMENT")
   public void updateMobFlushCount() {
-    mobFlushCount++;
+    mobFlushCount.incrementAndGet();
   }
 
   public long getMobFlushCount() {
-    return mobFlushCount;
+    return mobFlushCount.get();
   }
 
   public void updateMobFlushedCellsCount(long count) {
-    mobFlushedCellsCount += count;
+    mobFlushedCellsCount.addAndGet(count);
   }
 
   public long getMobFlushedCellsCount() {
-    return mobFlushedCellsCount;
+    return mobFlushedCellsCount.get();
   }
 
   public void updateMobFlushedCellsSize(long size) {
-    mobFlushedCellsSize += size;
+    mobFlushedCellsSize.addAndGet(size);
   }
 
   public long getMobFlushedCellsSize() {
-    return mobFlushedCellsSize;
+    return mobFlushedCellsSize.get();
   }
 
   public void updateMobScanCellsCount(long count) {
-    mobScanCellsCount += count;
+    mobScanCellsCount.addAndGet(count);
   }
 
   public long getMobScanCellsCount() {
-    return mobScanCellsCount;
+    return mobScanCellsCount.get();
   }
 
   public void updateMobScanCellsSize(long size) {
-    mobScanCellsSize += size;
+    mobScanCellsSize.addAndGet(size);
   }
 
   public long getMobScanCellsSize() {
-    return mobScanCellsSize;
+    return mobScanCellsSize.get();
   }
 
   public byte[] getRefCellTags() {

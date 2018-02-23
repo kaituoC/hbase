@@ -22,25 +22,31 @@ import static org.junit.Assert.assertTrue;
 
 import java.util.EnumSet;
 import java.util.List;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.ClusterMetrics.Option;
 import org.apache.hadoop.hbase.ClusterStatus;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.ServerLoad;
 import org.apache.hadoop.hbase.ServerName;
-import org.apache.hadoop.hbase.ClusterStatus.Option;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.ReplicationTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.JVMClusterUtil;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category({ReplicationTests.class, MediumTests.class})
 public class TestReplicationStatus extends TestReplicationBase {
-  private static final Log LOG = LogFactory.getLog(TestReplicationStatus.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestReplicationStatus.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestReplicationStatus.class);
   private static final String PEER_ID = "2";
 
   /**
@@ -51,7 +57,7 @@ public class TestReplicationStatus extends TestReplicationBase {
    * test : status.getLoad(server).getReplicationLoadSink()
    * * @throws Exception
    */
-  @Test(timeout = 300000)
+  @Test
   public void testReplicationStatus() throws Exception {
     LOG.info("testReplicationStatus");
 
@@ -68,7 +74,8 @@ public class TestReplicationStatus extends TestReplicationBase {
         htable1.put(p);
       }
 
-      ClusterStatus status = hbaseAdmin.getClusterStatus(EnumSet.of(Option.LIVE_SERVERS));
+      ClusterStatus status = new ClusterStatus(hbaseAdmin.getClusterMetrics(
+        EnumSet.of(Option.LIVE_SERVERS)));
 
       for (JVMClusterUtil.RegionServerThread thread : utility1.getHBaseCluster()
           .getRegionServerThreads()) {
@@ -91,7 +98,7 @@ public class TestReplicationStatus extends TestReplicationBase {
       // Stop rs1, then the queue of rs1 will be transfered to rs0
       utility1.getHBaseCluster().getRegionServer(1).stop("Stop RegionServer");
       Thread.sleep(10000);
-      status = hbaseAdmin.getClusterStatus(EnumSet.of(Option.LIVE_SERVERS));
+      status = new ClusterStatus(hbaseAdmin.getClusterMetrics(EnumSet.of(Option.LIVE_SERVERS)));
       ServerName server = utility1.getHBaseCluster().getRegionServer(0).getServerName();
       ServerLoad sl = status.getLoad(server);
       List<ReplicationLoadSource> rLoadSourceList = sl.getReplicationLoadSourceList();

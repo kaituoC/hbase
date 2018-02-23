@@ -39,8 +39,6 @@ import java.util.List;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseConfiguration;
@@ -49,14 +47,16 @@ import org.apache.hadoop.hbase.backup.impl.BackupAdminImpl;
 import org.apache.hadoop.hbase.backup.impl.BackupManager;
 import org.apache.hadoop.hbase.backup.impl.BackupSystemTable;
 import org.apache.hadoop.hbase.backup.util.BackupUtils;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.util.AbstractHBaseTool;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.util.ToolRunner;
 import org.apache.log4j.Level;
-import org.apache.log4j.Logger;
+import org.apache.log4j.LogManager;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  *
@@ -65,8 +65,7 @@ import org.apache.log4j.Logger;
  */
 @InterfaceAudience.Private
 public class RestoreDriver extends AbstractHBaseTool {
-
-  private static final Log LOG = LogFactory.getLog(RestoreDriver.class);
+  private static final Logger LOG = LoggerFactory.getLogger(RestoreDriver.class);
   private CommandLine cmd;
 
   private static final String USAGE_STRING =
@@ -81,9 +80,9 @@ public class RestoreDriver extends AbstractHBaseTool {
     init();
   }
 
-  protected void init() throws IOException {
+  protected void init() {
     // disable irrelevant loggers to avoid it mess up command output
-    LogUtils.disableZkAndClientLoggers(LOG);
+    LogUtils.disableZkAndClientLoggers();
   }
 
   private int parseAndRun(String[] args) throws IOException {
@@ -96,9 +95,8 @@ public class RestoreDriver extends AbstractHBaseTool {
     System.out.println(BackupRestoreConstants.VERIFY_BACKUP);
 
     // enable debug logging
-    Logger backupClientLogger = Logger.getLogger("org.apache.hadoop.hbase.backup");
     if (cmd.hasOption(OPTION_DEBUG)) {
-      backupClientLogger.setLevel(Level.DEBUG);
+      LogManager.getLogger("org.apache.hadoop.hbase.backup").setLevel(Level.DEBUG);
     }
 
     // whether to overwrite to existing table if any, false by default
@@ -143,11 +141,11 @@ public class RestoreDriver extends AbstractHBaseTool {
 
     String backupRootDir = remainArgs[0];
     String backupId = remainArgs[1];
-    String tables = null;
+    String tables;
     String tableMapping =
         cmd.hasOption(OPTION_TABLE_MAPPING) ? cmd.getOptionValue(OPTION_TABLE_MAPPING) : null;
     try (final Connection conn = ConnectionFactory.createConnection(conf);
-        BackupAdmin client = new BackupAdminImpl(conn);) {
+        BackupAdmin client = new BackupAdminImpl(conn)) {
       // Check backup set
       if (cmd.hasOption(OPTION_SET)) {
         String setName = cmd.getOptionValue(OPTION_SET);
@@ -191,7 +189,11 @@ public class RestoreDriver extends AbstractHBaseTool {
       throws IOException {
     try (final BackupSystemTable table = new BackupSystemTable(conn)) {
       List<TableName> tables = table.describeBackupSet(name);
-      if (tables == null) return null;
+
+      if (tables == null) {
+        return null;
+      }
+
       return StringUtils.join(tables, BackupRestoreConstants.TABLENAME_DELIMITER_IN_COMMAND);
     }
   }
@@ -206,7 +208,6 @@ public class RestoreDriver extends AbstractHBaseTool {
     addOptWithArg(OPTION_TABLE, OPTION_TABLE_LIST_DESC);
     addOptWithArg(OPTION_TABLE_MAPPING, OPTION_TABLE_MAPPING_DESC);
     addOptWithArg(OPTION_YARN_QUEUE_NAME, OPTION_YARN_QUEUE_NAME_RESTORE_DESC);
-
   }
 
   @Override
@@ -229,7 +230,7 @@ public class RestoreDriver extends AbstractHBaseTool {
   }
 
   @Override
-  public int run(String[] args) throws IOException {
+  public int run(String[] args) {
     if (conf == null) {
       LOG.error("Tool configuration is not initialized");
       throw new NullPointerException("conf");
@@ -263,7 +264,7 @@ public class RestoreDriver extends AbstractHBaseTool {
     return ret;
   }
 
-  protected void printToolUsage() throws IOException {
+  protected void printToolUsage() {
     System.out.println(USAGE_STRING);
     HelpFormatter helpFormatter = new HelpFormatter();
     helpFormatter.setLeftPadding(2);

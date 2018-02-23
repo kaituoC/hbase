@@ -26,28 +26,34 @@ import java.net.NetworkInterface;
 import java.util.Enumeration;
 import java.util.List;
 import java.util.Locale;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.master.LoadBalancer;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.RegionServerTests;
 import org.apache.hadoop.hbase.zookeeper.ZKUtil;
-import org.apache.hadoop.hbase.zookeeper.ZooKeeperWatcher;
+import org.apache.hadoop.hbase.zookeeper.ZKWatcher;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Tests for the hostname specification by region server
  */
 @Category({RegionServerTests.class, MediumTests.class})
 public class TestRegionServerHostname {
-  private static final Log LOG = LogFactory.getLog(TestRegionServerHostname.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestRegionServerHostname.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestRegionServerHostname.class);
 
   private HBaseTestingUtility TEST_UTIL;
 
@@ -65,13 +71,13 @@ public class TestRegionServerHostname {
     TEST_UTIL.shutdownMiniCluster();
   }
 
-  @Test (timeout=30000)
+  @Test
   public void testInvalidRegionServerHostnameAbortsServer() throws Exception {
     String invalidHostname = "hostAddr.invalid";
     TEST_UTIL.getConfiguration().set(HRegionServer.RS_HOSTNAME_KEY, invalidHostname);
     HRegionServer hrs = null;
     try {
-      hrs = new HRegionServer(TEST_UTIL.getConfiguration(), null);
+      hrs = new HRegionServer(TEST_UTIL.getConfiguration());
     } catch (IllegalArgumentException iae) {
       assertTrue(iae.getMessage(),
         iae.getMessage().contains("Failed resolve of " + invalidHostname) ||
@@ -80,7 +86,7 @@ public class TestRegionServerHostname {
     assertNull("Failed to validate against invalid hostname", hrs);
   }
 
-  @Test(timeout=120000)
+  @Test
   public void testRegionServerHostname() throws Exception {
     Enumeration<NetworkInterface> netInterfaceList = NetworkInterface.getNetworkInterfaces();
     while (netInterfaceList.hasMoreElements()) {
@@ -99,7 +105,7 @@ public class TestRegionServerHostname {
         TEST_UTIL.getConfiguration().set(HRegionServer.RS_HOSTNAME_KEY, hostName);
         TEST_UTIL.startMiniCluster(NUM_MASTERS, NUM_RS);
         try {
-          ZooKeeperWatcher zkw = TEST_UTIL.getZooKeeperWatcher();
+          ZKWatcher zkw = TEST_UTIL.getZooKeeperWatcher();
           List<String> servers = ZKUtil.listChildrenNoWatch(zkw, zkw.znodePaths.rsZNode);
           // there would be NUM_RS+1 children - one for the master
           assertTrue(servers.size() ==
@@ -116,7 +122,7 @@ public class TestRegionServerHostname {
     }
   }
 
-  @Test(timeout=30000)
+  @Test
   public void testConflictRegionServerHostnameConfigurationsAbortServer() throws Exception {
     Enumeration<NetworkInterface> netInterfaceList = NetworkInterface.getNetworkInterfaces();
     while (netInterfaceList.hasMoreElements()) {
@@ -153,14 +159,14 @@ public class TestRegionServerHostname {
     }
   }
 
-  @Test(timeout=30000)
+  @Test
   public void testRegionServerHostnameReportedToMaster() throws Exception {
     TEST_UTIL.getConfiguration().setBoolean(HRegionServer.RS_HOSTNAME_DISABLE_MASTER_REVERSEDNS_KEY,
     true);
     TEST_UTIL.startMiniCluster(NUM_MASTERS, NUM_RS);
     boolean tablesOnMaster = LoadBalancer.isTablesOnMaster(TEST_UTIL.getConfiguration());
     int expectedRS = NUM_RS + (tablesOnMaster? 1: 0);
-    try (ZooKeeperWatcher zkw = TEST_UTIL.getZooKeeperWatcher()) {
+    try (ZKWatcher zkw = TEST_UTIL.getZooKeeperWatcher()) {
       List<String> servers = ZKUtil.listChildrenNoWatch(zkw, zkw.znodePaths.rsZNode);
       assertEquals(expectedRS, servers.size());
     }

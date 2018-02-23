@@ -36,7 +36,7 @@
     <license.bundles.jquery>true</license.bundles.jquery>
   </properties>
   <build>
-    <!-- Makes sure the resources get added before they are processed
+    <!-- Make sure resources get added before they are processed
       by placing this first -->
     <resources>
       <!-- Add the build webabpps to the classpth -->
@@ -131,20 +131,6 @@
             <exclude>mapred-site.xml</exclude>
           </excludes>
         </configuration>
-      </plugin>
-      <!-- Make a jar and put the sources in the jar -->
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-source-plugin</artifactId>
-        <executions>
-          <execution>
-            <phase>package</phase>
-            <goals>
-              <goal>jar</goal>
-              <goal>test-jar</goal>
-            </goals>
-          </execution>
-        </executions>
       </plugin>
       <!-- General ant tasks, bound to different build phases -->
       <plugin>
@@ -251,15 +237,8 @@
       <plugin>
         <artifactId>maven-surefire-plugin</artifactId>
         <configuration>
-          <properties>
-            <property>
-              <name>listener</name>
-              <value>org.apache.hadoop.hbase.ServerResourceCheckerJUnitListener</value>
-            </property>
-          </properties>
           <systemPropertyVariables>
             <test.build.webapps>target/test-classes/webapps</test.build.webapps>
-            <org.apache.hadoop.hbase.shaded.io.netty.packagePrefix>org.apache.hadoop.hbase.shaded.</org.apache.hadoop.hbase.shaded.io.netty.packagePrefix>
           </systemPropertyVariables>
         </configuration>
       </plugin>
@@ -321,19 +300,6 @@
                     <ignore></ignore>
                   </action>
                 </pluginExecution>
-                <pluginExecution>
-                  <pluginExecutionFilter>
-                    <groupId>org.apache.maven.plugins</groupId>
-                    <artifactId>maven-compiler-plugin</artifactId>
-                    <versionRange>[3.2,)</versionRange>
-                    <goals>
-                      <goal>compile</goal>
-                    </goals>
-                  </pluginExecutionFilter>
-                  <action>
-                    <ignore></ignore>
-                  </action>
-                </pluginExecution>
               </pluginExecutions>
             </lifecycleMappingMetadata>
           </configuration>
@@ -360,6 +326,16 @@
       <artifactId>hbase-common</artifactId>
     </dependency>
     <dependency>
+      <groupId>org.apache.hbase</groupId>
+      <artifactId>hbase-http</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hbase</groupId>
+      <artifactId>hbase-http</artifactId>
+      <type>test-jar</type>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
       <!--Needed by the visiblity tags and acl CPEP things
            in here in hbase-server (that should be out in hbase-endpoints
            or integrated). -->
@@ -380,12 +356,11 @@
     </dependency>
     <dependency>
       <groupId>org.apache.hbase</groupId>
-      <artifactId>hbase-replication</artifactId>
+      <artifactId>hbase-zookeeper</artifactId>
     </dependency>
     <dependency>
       <groupId>org.apache.hbase</groupId>
-      <artifactId>hbase-prefix-tree</artifactId>
-      <scope>runtime</scope>
+      <artifactId>hbase-replication</artifactId>
     </dependency>
     <dependency>
       <groupId>org.apache.hbase</groupId>
@@ -407,6 +382,12 @@
     </dependency>
     <dependency>
       <groupId>org.apache.hbase</groupId>
+      <artifactId>hbase-zookeeper</artifactId>
+      <type>test-jar</type>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.hbase</groupId>
       <artifactId>hbase-metrics-api</artifactId>
     </dependency>
     <dependency>
@@ -417,7 +398,6 @@
     <dependency>
       <groupId>org.apache.hbase</groupId>
       <artifactId>hbase-resource-bundle</artifactId>
-      <version>${project.version}</version>
       <optional>true</optional>
     </dependency>
     <dependency>
@@ -460,51 +440,12 @@
     </dependency>
     <dependency>
       <groupId>org.eclipse.jetty</groupId>
-      <artifactId>jetty-util</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.eclipse.jetty</groupId>
-      <artifactId>jetty-util-ajax</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.eclipse.jetty</groupId>
-      <artifactId>jetty-jsp</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.eclipse.jetty</groupId>
       <artifactId>jetty-webapp</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.eclipse.jetty</groupId>
-      <artifactId>jetty-http</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.eclipse.jetty</groupId>
-      <artifactId>jetty-security</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.glassfish.jersey.containers</groupId>
-      <artifactId>jersey-container-servlet-core</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.glassfish.jersey.media</groupId>
-      <artifactId>jersey-media-json-jackson1</artifactId>
     </dependency>
     <dependency>
       <!--For JspC used in ant task-->
       <groupId>org.glassfish.web</groupId>
       <artifactId>javax.servlet.jsp</artifactId>
-    </dependency>
-    <!-- Specifically needed for jetty-jsp, included
-         to bypass version scanning that hits a bad repo
-         see HBASE-18831 -->
-    <dependency>
-      <groupId>org.glassfish</groupId>
-      <artifactId>javax.el</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.codehaus.jackson</groupId>
-      <artifactId>jackson-core-asl</artifactId>
     </dependency>
     <dependency>
       <groupId>org.codehaus.jettison</groupId>
@@ -515,10 +456,6 @@
             <artifactId>stax-api</artifactId>
           </exclusion>
         </exclusions>
-    </dependency>
-    <dependency>
-      <groupId>org.codehaus.jackson</groupId>
-      <artifactId>jackson-mapper-asl</artifactId>
     </dependency>
     <!-- General dependencies -->
     <dependency>
@@ -547,12 +484,16 @@
       <artifactId>commons-lang3</artifactId>
     </dependency>
     <dependency>
-      <groupId>commons-logging</groupId>
-      <artifactId>commons-logging</artifactId>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
     </dependency>
     <dependency>
       <groupId>org.apache.commons</groupId>
       <artifactId>commons-math3</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-log4j12</artifactId>
     </dependency>
     <dependency>
       <groupId>log4j</groupId>
@@ -578,7 +519,12 @@
     <!-- tracing Dependencies -->
     <dependency>
       <groupId>org.apache.htrace</groupId>
+      <artifactId>htrace-core4</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.htrace</groupId>
       <artifactId>htrace-core</artifactId>
+      <version>${htrace-hadoop.version}</version>
     </dependency>
     <dependency>
       <groupId>com.lmax</groupId>
@@ -638,7 +584,7 @@
     </dependency>
     <dependency>
       <groupId>org.mockito</groupId>
-      <artifactId>mockito-all</artifactId>
+      <artifactId>mockito-core</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>
@@ -791,24 +737,12 @@
         <dependency>
           <groupId>org.apache.hadoop</groupId>
           <artifactId>hadoop-hdfs</artifactId>
-          <exclusions>
-            <exclusion>
-              <groupId>com.google.guava</groupId>
-              <artifactId>guava</artifactId>
-            </exclusion>
-          </exclusions>
         </dependency>
         <dependency>
           <groupId>org.apache.hadoop</groupId>
           <artifactId>hadoop-hdfs</artifactId>
           <type>test-jar</type>
           <scope>test</scope>
-          <exclusions>
-            <exclusion>
-              <groupId>com.google.guava</groupId>
-              <artifactId>guava</artifactId>
-            </exclusion>
-          </exclusions>
         </dependency>
         <dependency>
           <groupId>org.apache.hadoop</groupId>
@@ -818,6 +752,10 @@
             <exclusion>
               <groupId>com.google.guava</groupId>
               <artifactId>guava</artifactId>
+            </exclusion>
+            <exclusion>
+              <groupId>org.apache.zookeeper</groupId>
+              <artifactId>zookeeper</artifactId>
             </exclusion>
           </exclusions>
         </dependency>
@@ -865,9 +803,6 @@
           <value>3.0</value>
         </property>
       </activation>
-      <properties>
-        <hadoop.version>${hadoop-three.version}</hadoop.version>
-      </properties>
       <dependencies>
         <dependency>
           <groupId>org.apache.hadoop</groupId>
@@ -880,26 +815,25 @@
         </dependency>
         <dependency>
           <groupId>org.apache.hadoop</groupId>
+          <artifactId>hadoop-hdfs</artifactId>
+        </dependency>
+        <dependency>
+          <groupId>org.apache.hadoop</groupId>
           <artifactId>hadoop-annotations</artifactId>
           <version>${hadoop-three.version}</version>
         </dependency>
         <dependency>
           <groupId>org.apache.hadoop</groupId>
           <artifactId>hadoop-minicluster</artifactId>
-          <exclusions>
-            <exclusion>
-              <groupId>com.google.guava</groupId>
-              <artifactId>guava</artifactId>
-            </exclusion>
-          </exclusions>
+          <scope>test</scope>
         </dependency>
-        <!-- Hadoop needs Netty 3.x at test scope for the minicluster -->
+        <!-- Hadoop needs Netty 3.x at test scope for the minicluster>
         <dependency>
           <groupId>io.netty</groupId>
           <artifactId>netty</artifactId>
           <version>${netty.hadoop.version}</version>
           <scope>test</scope>
-        </dependency>
+        </dependency-->
       </dependencies>
       <build>
         <plugins>

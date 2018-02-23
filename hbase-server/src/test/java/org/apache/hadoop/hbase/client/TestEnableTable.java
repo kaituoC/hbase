@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,13 +17,16 @@
  */
 package org.apache.hadoop.hbase.client;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HConstants;
@@ -34,32 +36,38 @@ import org.apache.hadoop.hbase.MetaTableAccessor;
 import org.apache.hadoop.hbase.MiniHBaseCluster;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.coprocessor.CoprocessorHost;
+import org.apache.hadoop.hbase.coprocessor.MasterCoprocessor;
 import org.apache.hadoop.hbase.coprocessor.MasterCoprocessorEnvironment;
 import org.apache.hadoop.hbase.coprocessor.MasterObserver;
 import org.apache.hadoop.hbase.coprocessor.ObserverContext;
 import org.apache.hadoop.hbase.master.HMaster;
-import org.apache.hadoop.hbase.shaded.com.google.common.base.Predicate;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Iterables;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.JVMClusterUtil;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
+import org.apache.hbase.thirdparty.com.google.common.base.Predicate;
+import org.apache.hbase.thirdparty.com.google.common.collect.Iterables;
+import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 
 @Category({ MasterTests.class, MediumTests.class })
 public class TestEnableTable {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestEnableTable.class);
+
   private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
-  private static final Log LOG = LogFactory.getLog(TestEnableTable.class);
+  private static final Logger LOG = LoggerFactory.getLogger(TestEnableTable.class);
   private static final byte[] FAMILYNAME = Bytes.toBytes("fam");
 
   @Rule
@@ -77,7 +85,7 @@ public class TestEnableTable {
     TEST_UTIL.shutdownMiniCluster();
   }
 
-  @Test(timeout = 300000)
+  @Test
   public void testEnableTableWithNoRegionServers() throws Exception {
     final TableName tableName = TableName.valueOf(name.getMethodName());
     final MiniHBaseCluster cluster = TEST_UTIL.getHBaseCluster();
@@ -141,7 +149,7 @@ public class TestEnableTable {
    * @throws IOException
    * @throws InterruptedException
    */
-  @Test(timeout=60000)
+  @Test
   public void testDeleteForSureClearsAllTableRowsFromMeta()
   throws IOException, InterruptedException {
     final TableName tableName = TableName.valueOf(name.getMethodName());
@@ -189,9 +197,14 @@ public class TestEnableTable {
     }
   }
 
-  public  static class MasterSyncObserver implements MasterObserver {
+  public  static class MasterSyncObserver implements MasterCoprocessor, MasterObserver {
     volatile CountDownLatch tableCreationLatch = null;
     volatile CountDownLatch tableDeletionLatch = null;
+
+    @Override
+    public Optional<MasterObserver> getMasterObserver() {
+      return Optional.of(this);
+    }
 
     @Override
     public void postCompletedCreateTableAction(
@@ -222,8 +235,8 @@ public class TestEnableTable {
   throws Exception {
     // NOTE: We need a latch because admin is not sync,
     // so the postOp coprocessor method may be called after the admin operation returned.
-    MasterSyncObserver observer = (MasterSyncObserver)testUtil.getHBaseCluster().getMaster()
-      .getMasterCoprocessorHost().findCoprocessor(MasterSyncObserver.class.getName());
+    MasterSyncObserver observer = testUtil.getHBaseCluster().getMaster()
+      .getMasterCoprocessorHost().findCoprocessor(MasterSyncObserver.class);
     observer.tableCreationLatch = new CountDownLatch(1);
     Admin admin = testUtil.getAdmin();
     if (splitKeys != null) {
@@ -240,8 +253,8 @@ public class TestEnableTable {
   throws Exception {
     // NOTE: We need a latch because admin is not sync,
     // so the postOp coprocessor method may be called after the admin operation returned.
-    MasterSyncObserver observer = (MasterSyncObserver)testUtil.getHBaseCluster().getMaster()
-      .getMasterCoprocessorHost().findCoprocessor(MasterSyncObserver.class.getName());
+    MasterSyncObserver observer = testUtil.getHBaseCluster().getMaster()
+      .getMasterCoprocessorHost().findCoprocessor(MasterSyncObserver.class);
     observer.tableDeletionLatch = new CountDownLatch(1);
     Admin admin = testUtil.getAdmin();
     try {

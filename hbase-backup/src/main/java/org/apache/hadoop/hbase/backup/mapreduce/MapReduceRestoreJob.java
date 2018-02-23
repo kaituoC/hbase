@@ -23,18 +23,17 @@ import static org.apache.hadoop.hbase.backup.util.BackupUtils.succeeded;
 import java.io.IOException;
 
 import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.backup.BackupRestoreConstants;
 import org.apache.hadoop.hbase.backup.RestoreJob;
 import org.apache.hadoop.hbase.backup.util.BackupUtils;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.tool.LoadIncrementalHFiles;
 import org.apache.hadoop.util.Tool;
-
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * MapReduce implementation of {@link RestoreJob}
@@ -48,7 +47,7 @@ import org.apache.hadoop.util.Tool;
  */
 @InterfaceAudience.Private
 public class MapReduceRestoreJob implements RestoreJob {
-  public static final Log LOG = LogFactory.getLog(MapReduceRestoreJob.class);
+  public static final Logger LOG = LoggerFactory.getLogger(MapReduceRestoreJob.class);
 
   private Tool player;
   private Configuration conf;
@@ -59,7 +58,6 @@ public class MapReduceRestoreJob implements RestoreJob {
   @Override
   public void run(Path[] dirPaths, TableName[] tableNames, TableName[] newTableNames,
       boolean fullBackupRestore) throws IOException {
-
     String bulkOutputConfKey;
 
     player = new MapReduceHFileSplitterJob();
@@ -77,7 +75,6 @@ public class MapReduceRestoreJob implements RestoreJob {
     }
 
     for (int i = 0; i < tableNames.length; i++) {
-
       LOG.info("Restore " + tableNames[i] + " into " + newTableNames[i]);
 
       Path bulkOutputPath =
@@ -85,14 +82,13 @@ public class MapReduceRestoreJob implements RestoreJob {
             getConf());
       Configuration conf = getConf();
       conf.set(bulkOutputConfKey, bulkOutputPath.toString());
-      String[] playerArgs =
-          {
-              dirs,
-              fullBackupRestore ? newTableNames[i].getNameAsString() : tableNames[i]
-                  .getNameAsString() };
+      String[] playerArgs = {
+        dirs, fullBackupRestore ? newTableNames[i].getNameAsString() : tableNames[i]
+              .getNameAsString()
+      };
 
-      int result = 0;
-      int loaderResult = 0;
+      int result;
+      int loaderResult;
       try {
 
         player.setConf(getConf());
@@ -116,7 +112,7 @@ public class MapReduceRestoreJob implements RestoreJob {
         }
         LOG.debug("Restore Job finished:" + result);
       } catch (Exception e) {
-        LOG.error(e);
+        LOG.error(e.toString(), e);
         throw new IOException("Can not restore from backup directory " + dirs
             + " (check Hadoop and HBase logs) ", e);
       }
@@ -132,5 +128,4 @@ public class MapReduceRestoreJob implements RestoreJob {
   public void setConf(Configuration conf) {
     this.conf = conf;
   }
-
 }

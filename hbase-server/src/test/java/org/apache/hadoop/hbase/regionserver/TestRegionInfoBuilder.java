@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -25,9 +24,9 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.io.IOException;
-
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.TableName;
@@ -36,21 +35,29 @@ import org.apache.hadoop.hbase.client.RegionInfoBuilder;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.exceptions.DeserializationException;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.UnsafeByteOperations;
-import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos;
 import org.apache.hadoop.hbase.testclassification.RegionServerTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSTableDescriptors;
 import org.apache.hadoop.hbase.util.MD5Hash;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
 
+import org.apache.hbase.thirdparty.com.google.protobuf.UnsafeByteOperations;
+
+import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos;
+
 @Category({RegionServerTests.class, SmallTests.class})
 public class TestRegionInfoBuilder {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestRegionInfoBuilder.class);
+
   @Rule
   public TestName name = new TestName();
 
@@ -86,7 +93,7 @@ public class TestRegionInfoBuilder {
     RegionInfo ri = RegionInfoBuilder.FIRST_META_REGIONINFO;
     byte [] bytes = RegionInfo.toByteArray(ri);
     RegionInfo pbri = RegionInfo.parseFrom(bytes);
-    assertTrue(ri.equals(pbri));
+    assertTrue(RegionInfo.COMPARATOR.compare(ri, pbri) == 0);
   }
 
   @Test
@@ -189,7 +196,7 @@ public class TestRegionInfoBuilder {
 
   @Test
   public void testMetaTables() {
-    assertTrue(RegionInfoBuilder.FIRST_META_REGIONINFO.isMetaTable());
+    assertTrue(RegionInfoBuilder.FIRST_META_REGIONINFO.isMetaRegion());
   }
 
   @Test
@@ -286,7 +293,7 @@ public class TestRegionInfoBuilder {
             .setReplicaId(replicaId).build();
 
     // convert two times, compare
-    RegionInfo convertedRi = ProtobufUtil.toRegionInfo(ProtobufUtil.toProtoRegionInfo(ri));
+    RegionInfo convertedRi = ProtobufUtil.toRegionInfo(ProtobufUtil.toRegionInfo(ri));
 
     assertEquals(ri, convertedRi);
 

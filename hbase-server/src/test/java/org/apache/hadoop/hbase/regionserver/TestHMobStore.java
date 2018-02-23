@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,6 +17,8 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
+import static org.apache.hadoop.hbase.regionserver.Store.PRIORITY_USER;
+
 import java.io.IOException;
 import java.security.Key;
 import java.security.SecureRandom;
@@ -30,18 +31,15 @@ import java.util.List;
 import java.util.NavigableSet;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentSkipListSet;
-
 import javax.crypto.spec.SecretKeySpec;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.ArrayBackedTag;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.CellComparator;
+import org.apache.hadoop.hbase.CellComparatorImpl;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
@@ -71,15 +69,23 @@ import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.wal.WALFactory;
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
 import org.mockito.Mockito;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category(MediumTests.class)
 public class TestHMobStore {
-  public static final Log LOG = LogFactory.getLog(TestHMobStore.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestHMobStore.class);
+
+  public static final Logger LOG = LoggerFactory.getLogger(TestHMobStore.class);
   @Rule public TestName name = new TestName();
 
   private HMobStore store;
@@ -159,9 +165,8 @@ public class TestHMobStore {
     ChunkCreator.initialize(MemStoreLABImpl.CHUNK_SIZE_DEFAULT, false, 0, 0, 0, null);
     final Configuration walConf = new Configuration(conf);
     FSUtils.setRootDir(walConf, basedir);
-    final WALFactory wals = new WALFactory(walConf, null, methodName);
-    region = new HRegion(tableDir, wals.getWAL(info.getEncodedNameAsBytes(),
-            info.getTable().getNamespace()), fs, conf, info, htd, null);
+    final WALFactory wals = new WALFactory(walConf, methodName);
+    region = new HRegion(tableDir, wals.getWAL(info), fs, conf, info, htd, null);
     store = new HMobStore(region, hcd, conf);
     if(testStore) {
       init(conf, hcd);
@@ -226,7 +231,7 @@ public class TestHMobStore {
 
     List<Cell> results = new ArrayList<>();
     scanner.next(results);
-    Collections.sort(results, CellComparator.COMPARATOR);
+    Collections.sort(results, CellComparatorImpl.COMPARATOR);
     scanner.close();
 
     //Compare
@@ -271,7 +276,7 @@ public class TestHMobStore {
 
     List<Cell> results = new ArrayList<>();
     scanner.next(results);
-    Collections.sort(results, CellComparator.COMPARATOR);
+    Collections.sort(results, CellComparatorImpl.COMPARATOR);
     scanner.close();
 
     //Compare
@@ -316,7 +321,7 @@ public class TestHMobStore {
 
     List<Cell> results = new ArrayList<>();
     scanner.next(results);
-    Collections.sort(results, CellComparator.COMPARATOR);
+    Collections.sort(results, CellComparatorImpl.COMPARATOR);
     scanner.close();
 
     //Compare
@@ -361,7 +366,7 @@ public class TestHMobStore {
 
     List<Cell> results = new ArrayList<>();
     scanner.next(results);
-    Collections.sort(results, CellComparator.COMPARATOR);
+    Collections.sort(results, CellComparatorImpl.COMPARATOR);
     scanner.close();
 
     //Compare
@@ -413,7 +418,7 @@ public class TestHMobStore {
 
     List<Cell> results = new ArrayList<>();
     scanner.next(results);
-    Collections.sort(results, CellComparator.COMPARATOR);
+    Collections.sort(results, CellComparatorImpl.COMPARATOR);
     scanner.close();
 
     //Compare
@@ -480,7 +485,7 @@ public class TestHMobStore {
    * @throws IOException
    */
   private static void flushStore(HMobStore store, long id) throws IOException {
-    StoreFlushContext storeFlushCtx = store.createFlushContext(id);
+    StoreFlushContext storeFlushCtx = store.createFlushContext(id, FlushLifeCycleTracker.DUMMY);
     storeFlushCtx.prepare();
     storeFlushCtx.flushCache(Mockito.mock(MonitoredTask.class));
     storeFlushCtx.commit(Mockito.mock(MonitoredTask.class));
@@ -518,7 +523,7 @@ public class TestHMobStore {
     this.store.add(new KeyValue(row, family, qf6, 1, value), null);
     flush(2);
 
-    Collection<StoreFile> storefiles = this.store.getStorefiles();
+    Collection<HStoreFile> storefiles = this.store.getStorefiles();
     checkMobHFileEncrytption(storefiles);
 
     // Scan the values
@@ -529,7 +534,7 @@ public class TestHMobStore {
 
     List<Cell> results = new ArrayList<>();
     scanner.next(results);
-    Collections.sort(results, CellComparator.COMPARATOR);
+    Collections.sort(results, CellComparatorImpl.COMPARATOR);
     scanner.close();
     Assert.assertEquals(expected.size(), results.size());
     for(int i=0; i<results.size(); i++) {
@@ -539,7 +544,7 @@ public class TestHMobStore {
     // Trigger major compaction
     this.store.triggerMajorCompaction();
     Optional<CompactionContext> requestCompaction =
-        this.store.requestCompaction(Store.PRIORITY_USER, CompactionLifeCycleTracker.DUMMY, null);
+        this.store.requestCompaction(PRIORITY_USER, CompactionLifeCycleTracker.DUMMY, null);
     this.store.compact(requestCompaction.get(), NoLimitThroughputController.INSTANCE, null);
     Assert.assertEquals(1, this.store.getStorefiles().size());
 
@@ -547,8 +552,8 @@ public class TestHMobStore {
     checkMobHFileEncrytption(this.store.getStorefiles());
   }
 
-  private void checkMobHFileEncrytption(Collection<StoreFile> storefiles) {
-    StoreFile storeFile = storefiles.iterator().next();
+  private void checkMobHFileEncrytption(Collection<HStoreFile> storefiles) {
+    HStoreFile storeFile = storefiles.iterator().next();
     HFile.Reader reader = storeFile.getReader().getHFileReader();
     byte[] encryptionKey = reader.getTrailer().getEncryptionKey();
     Assert.assertTrue(null != encryptionKey);

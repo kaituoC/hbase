@@ -21,9 +21,8 @@ package org.apache.hadoop.hbase.backup;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
@@ -34,29 +33,38 @@ import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.coprocessor.ObserverContext;
+import org.apache.hadoop.hbase.coprocessor.RegionCoprocessor;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.coprocessor.RegionObserver;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * An Observer to facilitate backup operations
  */
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.CONFIG)
-public class BackupObserver implements RegionObserver {
-  private static final Log LOG = LogFactory.getLog(BackupObserver.class);
+public class BackupObserver implements RegionCoprocessor, RegionObserver {
+  private static final Logger LOG = LoggerFactory.getLogger(BackupObserver.class);
+
   @Override
-  public boolean postBulkLoadHFile(ObserverContext<RegionCoprocessorEnvironment> ctx,
-    List<Pair<byte[], String>> stagingFamilyPaths, Map<byte[], List<Path>> finalPaths,
-    boolean hasLoaded) throws IOException {
+  public Optional<RegionObserver> getRegionObserver() {
+    return Optional.of(this);
+  }
+
+  @Override
+  public void postBulkLoadHFile(ObserverContext<RegionCoprocessorEnvironment> ctx,
+    List<Pair<byte[], String>> stagingFamilyPaths, Map<byte[], List<Path>> finalPaths)
+        throws IOException {
     Configuration cfg = ctx.getEnvironment().getConfiguration();
-    if (!hasLoaded) {
+    if (finalPaths == null) {
       // there is no need to record state
-      return hasLoaded;
+      return;
     }
-    if (finalPaths == null || !BackupManager.isBackupEnabled(cfg)) {
+    if (!BackupManager.isBackupEnabled(cfg)) {
       LOG.debug("skipping recording bulk load in postBulkLoadHFile since backup is disabled");
-      return hasLoaded;
+      return;
     }
     try (Connection connection = ConnectionFactory.createConnection(cfg);
         BackupSystemTable tbl = new BackupSystemTable(connection)) {
@@ -67,13 +75,11 @@ public class BackupObserver implements RegionObserver {
         if (LOG.isTraceEnabled()) {
           LOG.trace(tableName + " has not gone thru full backup");
         }
-        return hasLoaded;
+        return;
       }
       tbl.writePathsPostBulkLoad(tableName, info.getEncodedNameAsBytes(), finalPaths);
-      return hasLoaded;
     } catch (IOException ioe) {
       LOG.error("Failed to get tables which have been fully backed up", ioe);
-      return false;
     }
   }
   @Override

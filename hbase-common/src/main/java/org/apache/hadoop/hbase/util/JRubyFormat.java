@@ -23,8 +23,9 @@ import java.util.Map;
 import java.util.Map.Entry;
 
 import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.hadoop.hbase.shaded.com.google.common.escape.Escaper;
-import org.apache.hadoop.hbase.shaded.com.google.common.escape.Escapers;
+
+import org.apache.hbase.thirdparty.com.google.common.escape.Escaper;
+import org.apache.hbase.thirdparty.com.google.common.escape.Escapers;
 
 /**
  * Utility class for converting objects to JRuby.

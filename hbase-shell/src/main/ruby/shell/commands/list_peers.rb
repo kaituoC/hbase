@@ -23,7 +23,13 @@ module Shell
     class ListPeers < Command
       def help
         <<-EOF
-List all replication peer clusters.
+  List all replication peer clusters.
+
+  If replicate_all flag is false, the namespaces and table-cfs in peer config
+  will be replicated to peer cluster.
+
+  If replicate_all flag is true, all user tables will be replicate to peer
+  cluster, except that the namespaces and table-cfs in peer config.
 
   hbase> list_peers
 EOF
@@ -33,16 +39,22 @@ EOF
         peers = replication_admin.list_peers
 
         formatter.header(%w[PEER_ID CLUSTER_KEY ENDPOINT_CLASSNAME
-                            STATE NAMESPACES TABLE_CFS BANDWIDTH])
+                            STATE REPLICATE_ALL NAMESPACES TABLE_CFS BANDWIDTH])
 
         peers.each do |peer|
           id = peer.getPeerId
           state = peer.isEnabled ? 'ENABLED' : 'DISABLED'
           config = peer.getPeerConfig
-          namespaces = replication_admin.show_peer_namespaces(config)
-          tableCFs = replication_admin.show_peer_tableCFs(id)
+          if config.replicateAllUserTables
+            namespaces = replication_admin.show_peer_exclude_namespaces(config)
+            tableCFs = replication_admin.show_peer_exclude_tableCFs(config)
+          else
+            namespaces = replication_admin.show_peer_namespaces(config)
+            tableCFs = replication_admin.show_peer_tableCFs_by_config(config)
+          end
           formatter.row([id, config.getClusterKey,
-                         config.getReplicationEndpointImpl, state, namespaces, tableCFs,
+                         config.getReplicationEndpointImpl, state,
+                         config.replicateAllUserTables, namespaces, tableCFs,
                          config.getBandwidth])
         end
 

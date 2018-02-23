@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,26 +17,28 @@
  */
 package org.apache.hadoop.hbase.master;
 
+import com.google.protobuf.Service;
+
 import java.io.IOException;
 import java.util.List;
 
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.Server;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableDescriptors;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotDisabledException;
 import org.apache.hadoop.hbase.TableNotFoundException;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.MasterSwitchType;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.executor.ExecutorService;
+import org.apache.hadoop.hbase.favored.FavoredNodesManager;
 import org.apache.hadoop.hbase.master.assignment.AssignmentManager;
 import org.apache.hadoop.hbase.master.locking.LockManager;
-import org.apache.hadoop.hbase.favored.FavoredNodesManager;
 import org.apache.hadoop.hbase.master.normalizer.RegionNormalizer;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
+import org.apache.hadoop.hbase.master.replication.ReplicationPeerManager;
 import org.apache.hadoop.hbase.master.snapshot.SnapshotManager;
 import org.apache.hadoop.hbase.procedure.MasterProcedureManagerHost;
 import org.apache.hadoop.hbase.procedure2.LockedResource;
@@ -48,12 +49,15 @@ import org.apache.hadoop.hbase.quotas.MasterQuotaManager;
 import org.apache.hadoop.hbase.replication.ReplicationException;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
 import org.apache.hadoop.hbase.replication.ReplicationPeerDescription;
+import org.apache.yetus.audience.InterfaceAudience;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-import com.google.protobuf.Service;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 /**
- * Services Master supplies
+ * A curated subset of services provided by {@link HMaster}.
+ * For use internally only. Passed to Managers, Services and Chores so can pass less-than-a
+ * full-on HMaster at test-time. Be judicious adding API. Changes cause ripples through
+ * the code base.
  */
 @InterfaceAudience.Private
 public interface MasterServices extends Server {
@@ -131,7 +135,7 @@ public interface MasterServices extends Server {
    * @return Tripped when Master has finished initialization.
    */
   @VisibleForTesting
-  public ProcedureEvent getInitializedEvent();
+  public ProcedureEvent<?> getInitializedEvent();
 
   /**
    * @return Master's instance of {@link MetricsMaster}
@@ -291,7 +295,7 @@ public interface MasterServices extends Server {
    * @throws IOException
    */
   long mergeRegions(
-      final HRegionInfo[] regionsToMerge,
+      final RegionInfo[] regionsToMerge,
       final boolean forcible,
       final long nonceGroup,
       final long nonce) throws IOException;
@@ -306,7 +310,7 @@ public interface MasterServices extends Server {
    * @throws IOException
    */
   long splitRegion(
-      final HRegionInfo regionInfo,
+      final RegionInfo regionInfo,
       final byte [] splitRow,
       final long nonceGroup,
       final long nonce) throws IOException;
@@ -412,11 +416,6 @@ public interface MasterServices extends Server {
    */
   public LoadBalancer getLoadBalancer();
 
-  /**
-   * @return True if this master is stopping.
-   */
-  boolean isStopping();
-
   boolean isSplitOrMergeEnabled(MasterSwitchType switchType);
 
   /**
@@ -428,27 +427,28 @@ public interface MasterServices extends Server {
    * Add a new replication peer for replicating data to slave cluster
    * @param peerId a short name that identifies the peer
    * @param peerConfig configuration for the replication slave cluster
+   * @param enabled peer state, true if ENABLED and false if DISABLED
    */
-  void addReplicationPeer(String peerId, ReplicationPeerConfig peerConfig)
+  long addReplicationPeer(String peerId, ReplicationPeerConfig peerConfig, boolean enabled)
       throws ReplicationException, IOException;
 
   /**
    * Removes a peer and stops the replication
    * @param peerId a short name that identifies the peer
    */
-  void removeReplicationPeer(String peerId) throws ReplicationException, IOException;
+  long removeReplicationPeer(String peerId) throws ReplicationException, IOException;
 
   /**
    * Restart the replication stream to the specified peer
    * @param peerId a short name that identifies the peer
    */
-  void enableReplicationPeer(String peerId) throws ReplicationException, IOException;
+  long enableReplicationPeer(String peerId) throws ReplicationException, IOException;
 
   /**
    * Stop the replication stream to the specified peer
    * @param peerId a short name that identifies the peer
    */
-  void disableReplicationPeer(String peerId) throws ReplicationException, IOException;
+  long disableReplicationPeer(String peerId) throws ReplicationException, IOException;
 
   /**
    * Returns the configured ReplicationPeerConfig for the specified peer
@@ -459,11 +459,16 @@ public interface MasterServices extends Server {
       IOException;
 
   /**
+   * Returns the {@link ReplicationPeerManager}.
+   */
+  ReplicationPeerManager getReplicationPeerManager();
+
+  /**
    * Update the peerConfig for the specified peer
    * @param peerId a short name that identifies the peer
    * @param peerConfig new config for the peer
    */
-  void updateReplicationPeerConfig(String peerId, ReplicationPeerConfig peerConfig)
+  long updateReplicationPeerConfig(String peerId, ReplicationPeerConfig peerConfig)
       throws ReplicationException, IOException;
 
   /**
@@ -475,30 +480,17 @@ public interface MasterServices extends Server {
       IOException;
 
   /**
-   * Mark a region server as draining to prevent additional regions from getting assigned to it.
-   * @param server Region servers to drain.
-   */
-  void drainRegionServer(final ServerName server);
-
-  /**
-   * List region servers marked as draining to not get additional regions assigned to them.
-   * @return List of draining servers.
-   */
-  List<ServerName> listDrainingRegionServers();
-
-  /**
-   * Remove drain from a region server to allow additional regions assignments.
-   * @param server Region server to remove drain from.
-   */
-  void removeDrainFromRegionServer(final ServerName server);
-
-  /**
    * @return {@link LockManager} to lock namespaces/tables/regions.
    */
   LockManager getLockManager();
 
   public String getRegionServerVersion(final ServerName sn);
 
+  /**
+   * Called when a new RegionServer is added to the cluster.
+   * Checks if new server has a newer version than any existing server and will move system tables
+   * there if so.
+   */
   public void checkIfShouldMoveSystemRegionAsync();
 
   /**

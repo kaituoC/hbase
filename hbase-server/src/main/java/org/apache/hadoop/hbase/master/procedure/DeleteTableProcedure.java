@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,44 +22,43 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.MetaTableAccessor;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotDisabledException;
 import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.backup.HFileArchiver;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.Delete;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.Table;
-import org.apache.hadoop.hbase.exceptions.HBaseException;
 import org.apache.hadoop.hbase.favored.FavoredNodesManager;
 import org.apache.hadoop.hbase.master.MasterCoprocessorHost;
 import org.apache.hadoop.hbase.master.MasterFileSystem;
 import org.apache.hadoop.hbase.mob.MobConstants;
 import org.apache.hadoop.hbase.mob.MobUtils;
 import org.apache.hadoop.hbase.procedure2.ProcedureStateSerializer;
+import org.apache.hadoop.hbase.regionserver.HRegion;
+import org.apache.hadoop.hbase.util.FSUtils;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.DeleteTableState;
-import org.apache.hadoop.hbase.regionserver.HRegion;
-import org.apache.hadoop.hbase.util.FSUtils;
 
 @InterfaceAudience.Private
 public class DeleteTableProcedure
     extends AbstractStateMachineTableProcedure<DeleteTableState> {
-  private static final Log LOG = LogFactory.getLog(DeleteTableProcedure.class);
+  private static final Logger LOG = LoggerFactory.getLogger(DeleteTableProcedure.class);
 
-  private List<HRegionInfo> regions;
+  private List<RegionInfo> regions;
   private TableName tableName;
 
   public DeleteTableProcedure() {
@@ -133,7 +132,7 @@ public class DeleteTableProcedure
         default:
           throw new UnsupportedOperationException("unhandled state=" + state);
       }
-    } catch (HBaseException|IOException e) {
+    } catch (IOException e) {
       if (isRollbackSupported(state)) {
         setFailure("master-delete-table", e);
       } else {
@@ -145,8 +144,8 @@ public class DeleteTableProcedure
 
   @Override
   protected boolean abort(MasterProcedureEnv env) {
-    // TODO: Current behavior is: with no rollback and no abort support, procedure may stuck
-    // looping in retrying failing step forever. Default behavior of abort is changed to support
+    // TODO: Current behavior is: with no rollback and no abort support, procedure may get stuck
+    // looping in retrying failing a step forever. Default behavior of abort is changed to support
     // aborting all procedures. Override the default wisely. Following code retains the current
     // behavior. Revisit it later.
     return isRollbackSupported(getCurrentState()) ? super.abort(env) : false;
@@ -211,8 +210,8 @@ public class DeleteTableProcedure
         .setUserInfo(MasterProcedureUtil.toProtoUserInfo(getUser()))
         .setTableName(ProtobufUtil.toProtoTableName(tableName));
     if (regions != null) {
-      for (HRegionInfo hri: regions) {
-        state.addRegionInfo(HRegionInfo.convert(hri));
+      for (RegionInfo hri: regions) {
+        state.addRegionInfo(ProtobufUtil.toRegionInfo(hri));
       }
     }
     serializer.serialize(state.build());
@@ -232,7 +231,7 @@ public class DeleteTableProcedure
     } else {
       regions = new ArrayList<>(state.getRegionInfoCount());
       for (HBaseProtos.RegionInfo hri: state.getRegionInfoList()) {
-        regions.add(HRegionInfo.convert(hri));
+        regions.add(ProtobufUtil.toRegionInfo(hri));
       }
     }
   }
@@ -269,7 +268,7 @@ public class DeleteTableProcedure
   }
 
   protected static void deleteFromFs(final MasterProcedureEnv env,
-      final TableName tableName, final List<HRegionInfo> regions,
+      final TableName tableName, final List<RegionInfo> regions,
       final boolean archive) throws IOException {
     final MasterFileSystem mfs = env.getMasterServices().getMasterFileSystem();
     final FileSystem fs = mfs.getFileSystem();
@@ -310,7 +309,7 @@ public class DeleteTableProcedure
 
     // Archive regions from FS (temp directory)
     if (archive) {
-      for (HRegionInfo hri : regions) {
+      for (RegionInfo hri : regions) {
         LOG.debug("Archiving region " + hri.getRegionNameAsString() + " from FS");
         HFileArchiver.archiveRegion(fs, mfs.getRootDir(),
             tempTableDir, HRegion.getRegionDir(tempTableDir, hri.getEncodedName()));
@@ -366,7 +365,7 @@ public class DeleteTableProcedure
   }
 
   protected static void deleteFromMeta(final MasterProcedureEnv env,
-      final TableName tableName, List<HRegionInfo> regions) throws IOException {
+      final TableName tableName, List<RegionInfo> regions) throws IOException {
     MetaTableAccessor.deleteRegions(env.getMasterServices().getConnection(), regions);
 
     // Clean any remaining rows for this table.

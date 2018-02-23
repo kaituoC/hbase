@@ -28,25 +28,22 @@ import java.util.TreeSet;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.MetaTableAccessor;
 import org.apache.hadoop.hbase.MiniHBaseCluster;
 import org.apache.hadoop.hbase.RegionLocations;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.BufferedMutator;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
@@ -63,10 +60,13 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.util.MD5Hash;
 import org.apache.hadoop.hbase.util.ModifyRegionUtils;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @InterfaceAudience.Private
 public class MasterProcedureTestingUtility {
-  private static final Log LOG = LogFactory.getLog(MasterProcedureTestingUtility.class);
+  private static final Logger LOG = LoggerFactory.getLogger(MasterProcedureTestingUtility.class);
 
   private MasterProcedureTestingUtility() { }
 
@@ -148,10 +148,10 @@ public class MasterProcedureTestingUtility {
     return builder.build();
   }
 
-  public static HRegionInfo[] createTable(final ProcedureExecutor<MasterProcedureEnv> procExec,
+  public static RegionInfo[] createTable(final ProcedureExecutor<MasterProcedureEnv> procExec,
       final TableName tableName, final byte[][] splitKeys, String... family) throws IOException {
     TableDescriptor htd = createHTD(tableName, family);
-    HRegionInfo[] regions = ModifyRegionUtils.createHRegionInfos(htd, splitKeys);
+    RegionInfo[] regions = ModifyRegionUtils.createRegionInfos(htd, splitKeys);
     long procId = ProcedureTestingUtility.submitAndWait(procExec,
       new CreateTableProcedure(procExec.getEnvironment(), htd, regions));
     ProcedureTestingUtility.assertProcNotFailed(procExec.getResult(procId));
@@ -159,22 +159,22 @@ public class MasterProcedureTestingUtility {
   }
 
   public static void validateTableCreation(final HMaster master, final TableName tableName,
-      final HRegionInfo[] regions, String... family) throws IOException {
+      final RegionInfo[] regions, String... family) throws IOException {
     validateTableCreation(master, tableName, regions, true, family);
   }
 
   public static void validateTableCreation(final HMaster master, final TableName tableName,
-      final HRegionInfo[] regions, boolean hasFamilyDirs, String... family) throws IOException {
+      final RegionInfo[] regions, boolean hasFamilyDirs, String... family) throws IOException {
     // check filesystem
     final FileSystem fs = master.getMasterFileSystem().getFileSystem();
     final Path tableDir = FSUtils.getTableDir(master.getMasterFileSystem().getRootDir(), tableName);
     assertTrue(fs.exists(tableDir));
     FSUtils.logFileSystemState(fs, tableDir, LOG);
-    List<Path> allRegionDirs = FSUtils.getRegionDirs(fs, tableDir);
+    List<Path> unwantedRegionDirs = FSUtils.getRegionDirs(fs, tableDir);
     for (int i = 0; i < regions.length; ++i) {
       Path regionDir = new Path(tableDir, regions[i].getEncodedName());
       assertTrue(regions[i] + " region dir does not exist", fs.exists(regionDir));
-      assertTrue(allRegionDirs.remove(regionDir));
+      assertTrue(unwantedRegionDirs.remove(regionDir));
       List<Path> allFamilyDirs = FSUtils.getFamilyDirs(fs, regionDir);
       for (int j = 0; j < family.length; ++j) {
         final Path familyDir = new Path(regionDir, family[j]);
@@ -191,7 +191,8 @@ public class MasterProcedureTestingUtility {
       }
       assertTrue("found extraneous families: " + allFamilyDirs, allFamilyDirs.isEmpty());
     }
-    assertTrue("found extraneous regions: " + allRegionDirs, allRegionDirs.isEmpty());
+    assertTrue("found extraneous regions: " + unwantedRegionDirs, unwantedRegionDirs.isEmpty());
+    LOG.debug("Table directory layout is as expected.");
 
     // check meta
     assertTrue(MetaTableAccessor.tableExists(master.getConnection(), tableName));
@@ -230,7 +231,7 @@ public class MasterProcedureTestingUtility {
       public boolean visit(Result rowResult) throws IOException {
         RegionLocations list = MetaTableAccessor.getRegionLocations(rowResult);
         if (list == null) {
-          LOG.warn("No serialized HRegionInfo in " + rowResult);
+          LOG.warn("No serialized RegionInfo in " + rowResult);
           return true;
         }
         HRegionLocation l = list.getRegionLocation();
@@ -366,7 +367,7 @@ public class MasterProcedureTestingUtility {
    * finish.
    * @see #testRecoveryAndDoubleExecution(ProcedureExecutor, long)
    */
-  private static void testRecoveryAndDoubleExecution(
+  public static void testRecoveryAndDoubleExecution(
       final ProcedureExecutor<MasterProcedureEnv> procExec, final long procId,
       final int numSteps, final boolean expectExecRunning) throws Exception {
     ProcedureTestingUtility.waitProcedure(procExec, procId);
@@ -400,7 +401,7 @@ public class MasterProcedureTestingUtility {
    * idempotent. Use this version of the test when the order in which flow steps are executed is
    * not start to finish; where the procedure may vary the flow steps dependent on circumstance
    * found.
-   * @see #testRecoveryAndDoubleExecution(ProcedureExecutor, long, int)
+   * @see #testRecoveryAndDoubleExecution(ProcedureExecutor, long, int, boolean)
    */
   public static void testRecoveryAndDoubleExecution(
       final ProcedureExecutor<MasterProcedureEnv> procExec, final long procId) throws Exception {
@@ -426,6 +427,12 @@ public class MasterProcedureTestingUtility {
   public static void testRollbackAndDoubleExecution(
       final ProcedureExecutor<MasterProcedureEnv> procExec, final long procId,
       final int lastStep) throws Exception {
+    testRollbackAndDoubleExecution(procExec, procId, lastStep, false);
+  }
+
+  public static void testRollbackAndDoubleExecution(
+      final ProcedureExecutor<MasterProcedureEnv> procExec, final long procId,
+      final int lastStep, boolean waitForAsyncProcs) throws Exception {
     // Execute up to last step
     testRecoveryAndDoubleExecution(procExec, procId, lastStep, false);
 
@@ -445,6 +452,19 @@ public class MasterProcedureTestingUtility {
       }
     } finally {
       assertTrue(procExec.unregisterListener(abortListener));
+    }
+
+    if (waitForAsyncProcs) {
+      // Sometimes there are other procedures still executing (including asynchronously spawned by
+      // procId) and due to KillAndToggleBeforeStoreUpdate flag ProcedureExecutor is stopped before
+      // store update. Let all pending procedures finish normally.
+      if (!procExec.isRunning()) {
+        LOG.warn("ProcedureExecutor not running, may have been stopped by pending procedure due to"
+            + " KillAndToggleBeforeStoreUpdate flag.");
+        ProcedureTestingUtility.setKillAndToggleBeforeStoreUpdate(procExec, false);
+        restartMasterProcedureExecutor(procExec);
+        ProcedureTestingUtility.waitNoProcedureRunning(procExec);
+      }
     }
 
     assertEquals(true, procExec.isRunning());

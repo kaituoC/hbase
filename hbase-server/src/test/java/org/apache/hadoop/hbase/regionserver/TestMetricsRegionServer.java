@@ -17,24 +17,31 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
+import static org.junit.Assert.assertNotNull;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.CompatibilityFactory;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
+import org.apache.hadoop.hbase.test.MetricsAssertHelper;
 import org.apache.hadoop.hbase.testclassification.RegionServerTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
-import org.apache.hadoop.hbase.test.MetricsAssertHelper;
 import org.apache.hadoop.hbase.util.JvmPauseMonitor;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-
-import static org.junit.Assert.assertNotNull;
 
 /**
  * Unit test version of rs metrics tests.
  */
 @Category({RegionServerTests.class, SmallTests.class})
 public class TestMetricsRegionServer {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestMetricsRegionServer.class);
+
   public static MetricsAssertHelper HELPER =
       CompatibilityFactory.getInstance(MetricsAssertHelper.class);
 
@@ -50,7 +57,7 @@ public class TestMetricsRegionServer {
   @Before
   public void setUp() {
     wrapper = new MetricsRegionServerWrapperStub();
-    rsm = new MetricsRegionServer(wrapper);
+    rsm = new MetricsRegionServer(wrapper, new Configuration(false));
     serverSource = rsm.getMetricsSource();
   }
 
@@ -119,29 +126,29 @@ public class TestMetricsRegionServer {
   @Test
   public void testSlowCount() {
     for (int i=0; i < 12; i ++) {
-      rsm.updateAppend(12);
-      rsm.updateAppend(1002);
+      rsm.updateAppend(null, 12);
+      rsm.updateAppend(null, 1002);
     }
     for (int i=0; i < 13; i ++) {
-      rsm.updateDeleteBatch(13);
-      rsm.updateDeleteBatch(1003);
+      rsm.updateDeleteBatch(null, 13);
+      rsm.updateDeleteBatch(null, 1003);
     }
     for (int i=0; i < 14; i ++) {
-      rsm.updateGet(14);
-      rsm.updateGet(1004);
+      rsm.updateGet(null, 14);
+      rsm.updateGet(null, 1004);
     }
     for (int i=0; i < 15; i ++) {
-      rsm.updateIncrement(15);
-      rsm.updateIncrement(1005);
+      rsm.updateIncrement(null, 15);
+      rsm.updateIncrement(null, 1005);
     }
     for (int i=0; i < 16; i ++) {
-      rsm.updatePutBatch(16);
-      rsm.updatePutBatch(1006);
+      rsm.updatePutBatch(null, 16);
+      rsm.updatePutBatch(null, 1006);
     }
 
     for (int i=0; i < 17; i ++) {
-      rsm.updatePut(17);
-      rsm.updateDelete(17);
+      rsm.updatePut(null, 17);
+      rsm.updateDelete(null, 17);
       rsm.updateCheckAndDelete(17);
       rsm.updateCheckAndPut(17);
     }

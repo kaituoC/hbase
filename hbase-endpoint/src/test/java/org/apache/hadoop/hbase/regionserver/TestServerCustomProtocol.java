@@ -1,5 +1,4 @@
-/*
- *
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,13 +21,15 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import com.google.protobuf.RpcCallback;
+import com.google.protobuf.RpcController;
+import com.google.protobuf.Service;
+import com.google.protobuf.ServiceException;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.Map;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.hbase.Coprocessor;
 import org.apache.hadoop.hbase.CoprocessorEnvironment;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.TableName;
@@ -38,7 +39,7 @@ import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.client.coprocessor.Batch;
 import org.apache.hadoop.hbase.coprocessor.CoprocessorException;
 import org.apache.hadoop.hbase.coprocessor.CoprocessorHost;
-import org.apache.hadoop.hbase.coprocessor.CoprocessorService;
+import org.apache.hadoop.hbase.coprocessor.RegionCoprocessor;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.coprocessor.protobuf.generated.PingProtos;
 import org.apache.hadoop.hbase.coprocessor.protobuf.generated.PingProtos.CountRequest;
@@ -59,24 +60,26 @@ import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-
-import com.google.protobuf.RpcCallback;
-import com.google.protobuf.RpcController;
-import com.google.protobuf.Service;
-import com.google.protobuf.ServiceException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category({RegionServerTests.class, MediumTests.class})
 public class TestServerCustomProtocol {
-  private static final Log LOG = LogFactory.getLog(TestServerCustomProtocol.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestServerCustomProtocol.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestServerCustomProtocol.class);
   static final String WHOAREYOU = "Who are you?";
   static final String NOBODY = "nobody";
   static final String HELLO = "Hello, ";
 
   /* Test protocol implementation */
-  public static class PingHandler extends PingProtos.PingService
-  implements Coprocessor, CoprocessorService {
+  public static class PingHandler extends PingProtos.PingService implements RegionCoprocessor {
     private int counter = 0;
 
     @Override
@@ -125,8 +128,8 @@ public class TestServerCustomProtocol {
     }
 
     @Override
-    public Service getService() {
-      return this;
+    public Iterable<Service> getServices() {
+      return Collections.singleton(this);
     }
   }
 
@@ -320,7 +323,7 @@ public class TestServerCustomProtocol {
       // rows from 1 region
       assertEquals(1, results.size());
       verifyRegionResults(locator, results, ROW_A);
-  
+
       final String name = "NAME";
       results = hello(table, name, null, ROW_A);
       // Should have gotten results for 1 of the three regions only since we specified
@@ -343,12 +346,12 @@ public class TestServerCustomProtocol {
       // test,,1355943549657.c65d4822d8bdecc033a96451f3a0f55d.
       // test,bbb,1355943549661.110393b070dd1ed93441e0bc9b3ffb7e.
       // test,ccc,1355943549665.c3d6d125141359cbbd2a43eaff3cdf74.
-  
+
       Map<byte [], String> results = ping(table, null, ROW_A);
       // Should contain first region only.
       assertEquals(1, results.size());
       verifyRegionResults(locator, results, ROW_A);
-  
+
       // Test start row + empty end
       results = ping(table, ROW_BC, null);
       assertEquals(2, results.size());
@@ -358,7 +361,7 @@ public class TestServerCustomProtocol {
         results.get(loc.getRegionInfo().getRegionName()));
       verifyRegionResults(locator, results, ROW_B);
       verifyRegionResults(locator, results, ROW_C);
-  
+
       // test empty start + end
       results = ping(table, null, ROW_BC);
       // should contain the first 2 regions
@@ -368,7 +371,7 @@ public class TestServerCustomProtocol {
       loc = locator.getRegionLocation(ROW_C, true);
       assertNull("Should be missing region for row ccc (past stop row)",
           results.get(loc.getRegionInfo().getRegionName()));
-  
+
       // test explicit start + end
       results = ping(table, ROW_AB, ROW_BC);
       // should contain first 2 regions
@@ -378,7 +381,7 @@ public class TestServerCustomProtocol {
       loc = locator.getRegionLocation(ROW_C, true);
       assertNull("Should be missing region for row ccc (past stop row)",
           results.get(loc.getRegionInfo().getRegionName()));
-  
+
       // test single region
       results = ping(table, ROW_B, ROW_BC);
       // should only contain region bbb

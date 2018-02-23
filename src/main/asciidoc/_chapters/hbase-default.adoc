@@ -376,23 +376,6 @@ The WAL file writer implementation.
 .Default
 `org.apache.hadoop.hbase.regionserver.wal.ProtobufLogWriter`
 
-
-[[hbase.master.distributed.log.replay]]
-*`hbase.master.distributed.log.replay`*::
-+
-.Description
-Enable 'distributed log replay' as default engine splitting
-    WAL files on server crash.  This default is new in hbase 1.0.  To fall
-    back to the old mode 'distributed log splitter', set the value to
-    'false'.  'Disributed log replay' improves MTTR because it does not
-    write intermediate files.  'DLR' required that 'hfile.format.version'
-    be set to version 3 or higher.
-
-+
-.Default
-`true`
-
-
 [[hbase.regionserver.global.memstore.size]]
 *`hbase.regionserver.global.memstore.size`*::
 +
@@ -476,7 +459,7 @@ The host name or IP address of the name server (DNS)
 ZooKeeper session timeout in milliseconds. It is used in two different ways.
       First, this value is used in the ZK client that HBase uses to connect to the ensemble.
       It is also used by HBase when it starts a ZK server and it is passed as the 'maxSessionTimeout'. See
-      http://hadoop.apache.org/zookeeper/docs/current/zookeeperProgrammers.html#ch_zkSessions.
+      https://hadoop.apache.org/zookeeper/docs/current/zookeeperProgrammers.html#ch_zkSessions.
       For example, if an HBase region server connects to a ZK ensemble that's also managed
       by HBase, then the
       session timeout will be the one specified by this configuration. But, a region server that connects
@@ -540,7 +523,7 @@ The host name or IP address of the name server (DNS)
 +
 .Description
 Port used by ZooKeeper peers to talk to each other.
-    See http://hadoop.apache.org/zookeeper/docs/r3.1.1/zookeeperStarted.html#sc_RunningReplicatedZooKeeper
+    See https://hadoop.apache.org/zookeeper/docs/r3.1.1/zookeeperStarted.html#sc_RunningReplicatedZooKeeper
     for more information.
 +
 .Default
@@ -552,7 +535,7 @@ Port used by ZooKeeper peers to talk to each other.
 +
 .Description
 Port used by ZooKeeper for leader election.
-    See http://hadoop.apache.org/zookeeper/docs/r3.1.1/zookeeperStarted.html#sc_RunningReplicatedZooKeeper
+    See https://hadoop.apache.org/zookeeper/docs/r3.1.1/zookeeperStarted.html#sc_RunningReplicatedZooKeeper
     for more information.
 +
 .Default
@@ -1264,9 +1247,8 @@ A comma-separated list of sizes for buckets for the bucketcache
 +
 .Description
 The HFile format version to use for new files.
-      Version 3 adds support for tags in hfiles (See http://hbase.apache.org/book.html#hbase.tags).
-      Distributed Log Replay requires that tags are enabled. Also see the configuration
-      'hbase.replication.rpc.codec'.
+      Version 3 adds support for tags in hfiles (See https://hbase.apache.org/book.html#hbase.tags).
+      Also see the configuration 'hbase.replication.rpc.codec'.
 
 +
 .Default
@@ -1964,7 +1946,7 @@ If the DFSClient configuration
 
       Class used to execute the regions balancing when the period occurs.
       See the class comment for more on how it works
-      http://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/master/balancer/StochasticLoadBalancer.html
+      https://hbase.apache.org/devapidocs/org/apache/hadoop/hbase/master/balancer/StochasticLoadBalancer.html
       It replaces the DefaultLoadBalancer as the default (since renamed
       as the SimpleLoadBalancer).
 
@@ -2024,17 +2006,6 @@ A comma-separated list of
 .Default
 ``
 
-
-[[hbase.coordinated.state.manager.class]]
-*`hbase.coordinated.state.manager.class`*::
-+
-.Description
-Fully qualified name of class implementing coordinated state manager.
-+
-.Default
-`org.apache.hadoop.hbase.coordination.ZkCoordinatedStateManager`
-
-
 [[hbase.regionserver.storefile.refresh.period]]
 *`hbase.regionserver.storefile.refresh.period`*::
 +
@@ -2062,7 +2033,7 @@ Fully qualified name of class implementing coordinated state manager.
       If this is enabled, a replication peer named "region_replica_replication" will be created
       which will tail the logs and replicate the mutations to region replicas for tables that
       have region replication > 1. If this is enabled once, disabling this replication also
-      requires disabling the replication peer using shell or ReplicationAdmin java class.
+      requires disabling the replication peer using shell or Admin java class.
       Replication to secondary region replicas works over standard inter-cluster replication.
 
 

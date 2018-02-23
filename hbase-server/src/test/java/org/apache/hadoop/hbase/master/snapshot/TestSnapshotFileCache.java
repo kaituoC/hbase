@@ -24,30 +24,38 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Iterables;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
-import org.apache.hadoop.hbase.HRegionInfo;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos;
-import org.apache.hadoop.hbase.testclassification.MediumTests;
-import org.apache.hadoop.hbase.testclassification.MasterTests;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.snapshot.SnapshotDescriptionUtils;
 import org.apache.hadoop.hbase.snapshot.SnapshotReferenceUtil;
 import org.apache.hadoop.hbase.snapshot.SnapshotTestingUtils.SnapshotMock;
+import org.apache.hadoop.hbase.testclassification.MasterTests;
+import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.com.google.common.collect.Iterables;
+import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
+
+import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos;
 
 /**
  * Test that we correctly reload the cache, filter directories, etc.
@@ -55,7 +63,11 @@ import org.junit.experimental.categories.Category;
 @Category({MasterTests.class, MediumTests.class})
 public class TestSnapshotFileCache {
 
-  private static final Log LOG = LogFactory.getLog(TestSnapshotFileCache.class);
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestSnapshotFileCache.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestSnapshotFileCache.class);
   private static final HBaseTestingUtility UTIL = new HBaseTestingUtility();
   private static long sequenceId = 0;
   private static FileSystem fs;
@@ -80,7 +92,7 @@ public class TestSnapshotFileCache {
     fs.delete(snapshotDir, true);
   }
 
-  @Test(timeout = 10000000)
+  @Test
   public void testLoadAndDelete() throws IOException {
     // don't refresh the cache unless we tell it to
     long period = Long.MAX_VALUE;
@@ -180,7 +192,7 @@ public class TestSnapshotFileCache {
     SnapshotReferenceUtil
         .visitReferencedFiles(UTIL.getConfiguration(), fs, builder.getSnapshotsDir(),
             new SnapshotReferenceUtil.SnapshotVisitor() {
-              @Override public void storeFile(HRegionInfo regionInfo, String familyName,
+              @Override public void storeFile(RegionInfo regionInfo, String familyName,
                   SnapshotProtos.SnapshotRegionManifest.StoreFile storeFile) throws IOException {
                 FileStatus status = mockStoreFile(storeFile.getName());
                 allStoreFiles.add(status);
@@ -198,12 +210,13 @@ public class TestSnapshotFileCache {
   }
 
   class SnapshotFiles implements SnapshotFileCache.SnapshotFileInspector {
+    @Override
     public Collection<String> filesUnderSnapshot(final Path snapshotDir) throws IOException {
       Collection<String> files =  new HashSet<>();
       files.addAll(SnapshotReferenceUtil.getHFileNames(UTIL.getConfiguration(), fs, snapshotDir));
       return files;
     }
-  };
+  }
 
   private SnapshotMock.SnapshotBuilder createAndTestSnapshotV1(final SnapshotFileCache cache,
       final String name, final boolean tmp, final boolean removeOnExit) throws IOException {

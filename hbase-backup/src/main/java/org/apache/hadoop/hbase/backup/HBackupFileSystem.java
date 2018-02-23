@@ -22,8 +22,6 @@ package org.apache.hadoop.hbase.backup;
 import java.io.IOException;
 import java.util.HashMap;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -31,14 +29,16 @@ import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.backup.impl.BackupManifest;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * View to an on-disk Backup Image FileSytem Provides the set of methods necessary to interact with
  * the on-disk Backup Image data.
  */
 @InterfaceAudience.Private
-public class HBackupFileSystem {
-  public static final Log LOG = LogFactory.getLog(HBackupFileSystem.class);
+public final class HBackupFileSystem {
+  public static final Logger LOG = LoggerFactory.getLogger(HBackupFileSystem.class);
 
   /**
    * This is utility class.
@@ -106,10 +106,8 @@ public class HBackupFileSystem {
   // Move manifest file to other place
   private static Path getManifestPath(Configuration conf, Path backupRootPath, String backupId)
       throws IOException {
-    Path manifestPath = null;
-
     FileSystem fs = backupRootPath.getFileSystem(conf);
-    manifestPath =
+    Path manifestPath =
         new Path(getBackupPath(backupRootPath.toString(), backupId) + Path.SEPARATOR
             + BackupManifest.MANIFEST_FILE_NAME);
     if (!fs.exists(manifestPath)) {

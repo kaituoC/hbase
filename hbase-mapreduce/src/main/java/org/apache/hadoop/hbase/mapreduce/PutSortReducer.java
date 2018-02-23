@@ -48,7 +48,7 @@ import org.apache.hadoop.util.StringUtils;
  * Puts in sorted order.  If lots of columns per row, it will use lots of
  * memory sorting.
  * @see HFileOutputFormat2
- * @see KeyValueSortReducer
+ * @see CellSortReducer
  */
 @InterfaceAudience.Public
 public class PutSortReducer extends
@@ -77,7 +77,7 @@ public class PutSortReducer extends
         "putsortreducer.row.threshold", 1L * (1<<30));
     Iterator<Put> iter = puts.iterator();
     while (iter.hasNext()) {
-      TreeSet<KeyValue> map = new TreeSet<>(CellComparator.COMPARATOR);
+      TreeSet<KeyValue> map = new TreeSet<>(CellComparator.getInstance());
       long curSize = 0;
       // stop at the end or the RAM threshold
       List<Tag> tags = new ArrayList<>();

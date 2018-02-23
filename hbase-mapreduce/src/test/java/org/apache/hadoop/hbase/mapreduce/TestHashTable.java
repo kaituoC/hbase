@@ -21,12 +21,10 @@ import static org.junit.Assert.assertEquals;
 
 import java.util.HashMap;
 import java.util.Map;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Put;
@@ -38,13 +36,16 @@ import org.apache.hadoop.io.MapFile;
 import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.ImmutableMap;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Maps;
 import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.com.google.common.collect.ImmutableMap;
+import org.apache.hbase.thirdparty.com.google.common.collect.Maps;
 
 /**
  * Basic test for the HashTable M/R tool
@@ -52,7 +53,11 @@ import org.junit.rules.TestName;
 @Category(LargeTests.class)
 public class TestHashTable {
 
-  private static final Log LOG = LogFactory.getLog(TestHashTable.class);
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestHashTable.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestHashTable.class);
 
   private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
 

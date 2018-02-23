@@ -25,29 +25,30 @@ import static org.apache.hadoop.hbase.client.MetricsConnection.CLIENT_SIDE_METRI
 import static org.apache.hadoop.hbase.util.CollectionUtils.computeIfAbsent;
 import static org.apache.hadoop.hbase.util.CollectionUtils.computeIfAbsentEx;
 
+import edu.umd.cs.findbugs.annotations.Nullable;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.lang.reflect.UndeclaredThrowableException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import java.util.concurrent.locks.ReentrantLock;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.CallQueueTooBigException;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.MasterNotRunningException;
 import org.apache.hadoop.hbase.MetaTableAccessor;
@@ -57,7 +58,6 @@ import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotEnabledException;
 import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.ZooKeeperConnectionException;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.backoff.ClientBackoffPolicy;
 import org.apache.hadoop.hbase.client.backoff.ClientBackoffPolicyFactory;
 import org.apache.hadoop.hbase.exceptions.ClientExceptionsUtil;
@@ -65,29 +65,44 @@ import org.apache.hadoop.hbase.exceptions.RegionMovedException;
 import org.apache.hadoop.hbase.ipc.RpcClient;
 import org.apache.hadoop.hbase.ipc.RpcClientFactory;
 import org.apache.hadoop.hbase.ipc.RpcControllerFactory;
+import org.apache.hadoop.hbase.log.HBaseMarkers;
 import org.apache.hadoop.hbase.regionserver.RegionServerStoppedException;
 import org.apache.hadoop.hbase.security.User;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.BlockingRpcChannel;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.RpcController;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.ServiceException;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
+import org.apache.hadoop.hbase.util.ExceptionUtil;
+import org.apache.hadoop.hbase.util.Pair;
+import org.apache.hadoop.hbase.util.ReflectionUtils;
+import org.apache.hadoop.hbase.util.Threads;
+import org.apache.hadoop.ipc.RemoteException;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.zookeeper.KeeperException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.base.Throwables;
+import org.apache.hbase.thirdparty.com.google.protobuf.BlockingRpcChannel;
+import org.apache.hbase.thirdparty.com.google.protobuf.RpcController;
+import org.apache.hbase.thirdparty.com.google.protobuf.ServiceException;
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.RequestConverter;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ClientProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ClientProtos.ClientService.BlockingInterface;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.DrainRegionServersRequest;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.DrainRegionServersResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.DecommissionRegionServersRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.DecommissionRegionServersResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.IsBalancerEnabledRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.IsBalancerEnabledResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.IsNormalizerEnabledRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.IsNormalizerEnabledResponse;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListDrainingRegionServersRequest;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListDrainingRegionServersResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListDecommissionedRegionServersRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListDecommissionedRegionServersResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.NormalizeRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.NormalizeResponse;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.RemoveDrainFromRegionServersRequest;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.RemoveDrainFromRegionServersResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.RecommissionRegionServerRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.RecommissionRegionServerResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.SecurityCapabilitiesRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.SecurityCapabilitiesResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.SetNormalizerRunningRequest;
@@ -110,21 +125,6 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.Remov
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.RemoveReplicationPeerResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.UpdateReplicationPeerConfigRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.UpdateReplicationPeerConfigResponse;
-import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
-import org.apache.hadoop.hbase.util.ExceptionUtil;
-import org.apache.hadoop.hbase.util.Pair;
-import org.apache.hadoop.hbase.util.ReflectionUtils;
-import org.apache.hadoop.hbase.util.Threads;
-import org.apache.hadoop.hbase.zookeeper.MasterAddressTracker;
-import org.apache.hadoop.hbase.zookeeper.ZKUtil;
-import org.apache.hadoop.hbase.zookeeper.ZooKeeperWatcher;
-import org.apache.hadoop.ipc.RemoteException;
-import org.apache.zookeeper.KeeperException;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-
-import edu.umd.cs.findbugs.annotations.Nullable;
 
 /**
  * Main implementation of {@link Connection} and {@link ClusterConnection} interfaces.
@@ -136,7 +136,7 @@ import edu.umd.cs.findbugs.annotations.Nullable;
 @InterfaceAudience.Private
 class ConnectionImplementation implements ClusterConnection, Closeable {
   public static final String RETRIES_BY_SERVER_KEY = "hbase.client.retries.by.server";
-  private static final Log LOG = LogFactory.getLog(ConnectionImplementation.class);
+  private static final Logger LOG = LoggerFactory.getLogger(ConnectionImplementation.class);
 
   private static final String RESOLVE_HOSTNAME_ON_FAIL_KEY = "hbase.resolve.hostnames.on.failure";
 
@@ -168,12 +168,7 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
 
   private final Object metaRegionLock = new Object();
 
-  // We have a single lock for master & zk to prevent deadlocks. Having
-  //  one lock for ZK and one lock for master is not possible:
-  //  When creating a connection to master, we need a connection to ZK to get
-  //  its address. But another thread could have taken the ZK lock, and could
-  //  be waiting for the master lock => deadlock.
-  private final Object masterAndZKLock = new Object();
+  private final Object masterLock = new Object();
 
   // thread executor shared by all Table instances created
   // by this connection
@@ -206,7 +201,7 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
   /**
    * Cluster registry of basic info such as clusterid and meta region location.
    */
-  Registry registry;
+  private final AsyncRegistry registry;
 
   private final ClientBackoffPolicy backoffPolicy;
 
@@ -215,6 +210,9 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
    * config. If null, use default.
    */
   private final String alternateBufferedMutatorClassName;
+
+  /** lock guards against multiple threads trying to query the meta region at the same time */
+  private final ReentrantLock userRegionLock = new ReentrantLock();
 
   /**
    * constructor
@@ -263,7 +261,7 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
     this.rpcControllerFactory = RpcControllerFactory.instantiate(conf);
     this.rpcCallerFactory = RpcRetryingCallerFactory.instantiate(conf, interceptor, this.stats);
     this.backoffPolicy = ClientBackoffPolicyFactory.create(conf);
-    this.asyncProcess = new AsyncProcess(this, conf, rpcCallerFactory, false, rpcControllerFactory);
+    this.asyncProcess = new AsyncProcess(this, conf, rpcCallerFactory, rpcControllerFactory);
     if (conf.getBoolean(CLIENT_SIDE_METRICS_ENABLED_KEY, false)) {
       this.metrics = new MetricsConnection(this);
     } else {
@@ -284,7 +282,7 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
         this.conf.get(BufferedMutator.CLASSNAME_KEY);
 
     try {
-      this.registry = setupRegistry();
+      this.registry = AsyncRegistryFactory.getRegistry(conf);
       retrieveClusterId();
 
       this.rpcClient = RpcClientFactory.createClient(this.conf, this.clusterId, this.metrics);
@@ -364,6 +362,14 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
     }
     if (params.getWriteBufferSize() == BufferedMutatorParams.UNSET) {
       params.writeBufferSize(connectionConfig.getWriteBufferSize());
+    }
+    if (params.getWriteBufferPeriodicFlushTimeoutMs() == BufferedMutatorParams.UNSET) {
+      params.setWriteBufferPeriodicFlushTimeoutMs(
+              connectionConfig.getWriteBufferPeriodicFlushTimeoutMs());
+    }
+    if (params.getWriteBufferPeriodicFlushTimerTickMs() == BufferedMutatorParams.UNSET) {
+      params.setWriteBufferPeriodicFlushTimerTickMs(
+              connectionConfig.getWriteBufferPeriodicFlushTimerTickMs());
     }
     if (params.getMaxKeyValueSize() == BufferedMutatorParams.UNSET) {
       params.maxKeyValueSize(connectionConfig.getMaxKeyValueSize());
@@ -495,13 +501,6 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
   }
 
   /**
-   * @return The cluster registry implementation to use.
-   */
-  private Registry setupRegistry() throws IOException {
-    return RegistryFactory.getRegistry(this);
-  }
-
-  /**
    * For tests only.
    */
   @VisibleForTesting
@@ -523,7 +522,11 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
     if (clusterId != null) {
       return;
     }
-    this.clusterId = this.registry.getClusterId();
+    try {
+      this.clusterId = this.registry.getClusterId().get();
+    } catch (InterruptedException | ExecutionException e) {
+      LOG.warn("Retrieve cluster id failed", e);
+    }
     if (clusterId == null) {
       clusterId = HConstants.CLUSTER_ID_DEFAULT;
       LOG.debug("clusterid came back null, using default " + clusterId);
@@ -535,22 +538,9 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
     return this.conf;
   }
 
-  private void checkIfBaseNodeAvailable(ZooKeeperWatcher zkw)
-    throws MasterNotRunningException {
-    String errorMsg;
-    try {
-      if (ZKUtil.checkExists(zkw, zkw.znodePaths.baseZNode) == -1) {
-        errorMsg = "The node " + zkw.znodePaths.baseZNode+" is not in ZooKeeper. "
-          + "It should have been written by the master. "
-          + "Check the value configured in 'zookeeper.znode.parent'. "
-          + "There could be a mismatch with the one configured in the master.";
-        LOG.error(errorMsg);
-        throw new MasterNotRunningException(errorMsg);
-      }
-    } catch (KeeperException e) {
-      errorMsg = "Can't get connection to ZooKeeper: " + e.getMessage();
-      LOG.error(errorMsg);
-      throw new MasterNotRunningException(errorMsg, e);
+  private void checkClosed() throws DoNotRetryIOException {
+    if (this.closed) {
+      throw new DoNotRetryIOException(toString() + " closed");
     }
   }
 
@@ -561,21 +551,24 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
    */
   @Deprecated
   @Override
-  public boolean isMasterRunning()
-  throws MasterNotRunningException, ZooKeeperConnectionException {
+  public boolean isMasterRunning() throws MasterNotRunningException, ZooKeeperConnectionException {
     // When getting the master connection, we check it's running,
     // so if there is no exception, it means we've been able to get a
     // connection on a running master
-    MasterKeepAliveConnection m = getKeepAliveMasterService();
+    MasterKeepAliveConnection m;
+    try {
+      m = getKeepAliveMasterService();
+    } catch (IOException e) {
+      throw new MasterNotRunningException(e);
+    }
     m.close();
     return true;
   }
 
   @Override
-  public HRegionLocation getRegionLocation(final TableName tableName,
-      final byte [] row, boolean reload)
-  throws IOException {
-    return reload? relocateRegion(tableName, row): locateRegion(tableName, row);
+  public HRegionLocation getRegionLocation(final TableName tableName, final byte[] row,
+      boolean reload) throws IOException {
+    return reload ? relocateRegion(tableName, row) : locateRegion(tableName, row);
   }
 
 
@@ -592,21 +585,19 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
   @Override
   public boolean isTableAvailable(final TableName tableName, @Nullable final byte[][] splitKeys)
       throws IOException {
-    if (this.closed) {
-      throw new IOException(toString() + " closed");
-    }
+    checkClosed();
     try {
       if (!isTableEnabled(tableName)) {
         LOG.debug("Table " + tableName + " not enabled");
         return false;
       }
-      List<Pair<HRegionInfo, ServerName>> locations =
+      List<Pair<RegionInfo, ServerName>> locations =
         MetaTableAccessor.getTableRegionsAndLocations(this, tableName, true);
 
       int notDeployed = 0;
       int regionCount = 0;
-      for (Pair<HRegionInfo, ServerName> pair : locations) {
-        HRegionInfo info = pair.getFirst();
+      for (Pair<RegionInfo, ServerName> pair : locations) {
+        RegionInfo info = pair.getFirst();
         if (pair.getSecond() == null) {
           if (LOG.isDebugEnabled()) {
             LOG.debug("Table " + tableName + " has not deployed region " + pair.getFirst()
@@ -652,13 +643,12 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
 
   @Override
   public HRegionLocation locateRegion(final byte[] regionName) throws IOException {
-    RegionLocations locations = locateRegion(HRegionInfo.getTable(regionName),
-      HRegionInfo.getStartKey(regionName), false, true);
+    RegionLocations locations = locateRegion(RegionInfo.getTable(regionName),
+      RegionInfo.getStartKey(regionName), false, true);
     return locations == null ? null : locations.getRegionLocation();
   }
 
-  @Override
-  public boolean isDeadServer(ServerName sn) {
+  private boolean isDeadServer(ServerName sn) {
     if (clusterStatusListener == null) {
       return false;
     } else {
@@ -667,18 +657,21 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
   }
 
   @Override
-  public List<HRegionLocation> locateRegions(final TableName tableName)
-  throws IOException {
+  public List<HRegionLocation> locateRegions(TableName tableName) throws IOException {
     return locateRegions(tableName, false, true);
   }
 
   @Override
-  public List<HRegionLocation> locateRegions(final TableName tableName,
-      final boolean useCache, final boolean offlined) throws IOException {
-    List<HRegionInfo> regions = MetaTableAccessor
-        .getTableRegions(this, tableName, !offlined);
-    final List<HRegionLocation> locations = new ArrayList<>();
-    for (HRegionInfo regionInfo : regions) {
+  public List<HRegionLocation> locateRegions(TableName tableName, boolean useCache,
+      boolean offlined) throws IOException {
+    List<RegionInfo> regions;
+    if (TableName.isMetaTableName(tableName)) {
+      regions = Collections.singletonList(RegionInfoBuilder.FIRST_META_REGIONINFO);
+    } else {
+      regions = MetaTableAccessor.getTableRegions(this, tableName, !offlined);
+    }
+    List<HRegionLocation> locations = new ArrayList<>();
+    for (RegionInfo regionInfo : regions) {
       RegionLocations list = locateRegion(tableName, regionInfo.getStartKey(), useCache, true);
       if (list != null) {
         for (HRegionLocation loc : list.getRegionLocations()) {
@@ -692,19 +685,19 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
   }
 
   @Override
-  public HRegionLocation locateRegion(
-      final TableName tableName, final byte[] row) throws IOException{
+  public HRegionLocation locateRegion(final TableName tableName, final byte[] row)
+      throws IOException {
     RegionLocations locations = locateRegion(tableName, row, true, true);
     return locations == null ? null : locations.getRegionLocation();
   }
 
   @Override
-  public HRegionLocation relocateRegion(final TableName tableName,
-      final byte [] row) throws IOException{
-    RegionLocations locations =  relocateRegion(tableName, row,
-      RegionReplicaUtil.DEFAULT_REPLICA_ID);
-    return locations == null ? null :
-      locations.getRegionLocation(RegionReplicaUtil.DEFAULT_REPLICA_ID);
+  public HRegionLocation relocateRegion(final TableName tableName, final byte[] row)
+      throws IOException {
+    RegionLocations locations =
+      relocateRegion(tableName, row, RegionReplicaUtil.DEFAULT_REPLICA_ID);
+    return locations == null ? null
+      : locations.getRegionLocation(RegionReplicaUtil.DEFAULT_REPLICA_ID);
   }
 
   @Override
@@ -721,22 +714,17 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
   }
 
   @Override
-  public RegionLocations locateRegion(final TableName tableName,
-    final byte [] row, boolean useCache, boolean retry)
-  throws IOException {
+  public RegionLocations locateRegion(final TableName tableName, final byte[] row, boolean useCache,
+      boolean retry) throws IOException {
     return locateRegion(tableName, row, useCache, retry, RegionReplicaUtil.DEFAULT_REPLICA_ID);
   }
 
   @Override
-  public RegionLocations locateRegion(final TableName tableName,
-    final byte [] row, boolean useCache, boolean retry, int replicaId)
-  throws IOException {
-    if (this.closed) {
-      throw new DoNotRetryIOException(toString() + " closed");
-    }
-    if (tableName== null || tableName.getName().length == 0) {
-      throw new IllegalArgumentException(
-          "table name cannot be null or zero length");
+  public RegionLocations locateRegion(final TableName tableName, final byte[] row, boolean useCache,
+      boolean retry, int replicaId) throws IOException {
+    checkClosed();
+    if (tableName == null || tableName.getName().length == 0) {
+      throw new IllegalArgumentException("table name cannot be null or zero length");
     }
     if (tableName.equals(TableName.META_TABLE_NAME)) {
       return locateMeta(tableName, useCache, replicaId);
@@ -772,7 +760,7 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
       }
 
       // Look up from zookeeper
-      locations = this.registry.getMetaRegionLocation();
+      locations = get(this.registry.getMetaRegionLocation());
       if (locations != null) {
         cacheLocation(tableName, locations);
       }
@@ -799,11 +787,14 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
     // build the key of the meta region we should be looking for.
     // the extra 9's on the end are necessary to allow "exact" matches
     // without knowing the precise region names.
-    byte[] metaKey = HRegionInfo.createRegionName(tableName, row, HConstants.NINES, false);
+    byte[] metaStartKey = RegionInfo.createRegionName(tableName, row, HConstants.NINES, false);
+    byte[] metaStopKey =
+      RegionInfo.createRegionName(tableName, HConstants.EMPTY_START_ROW, "", false);
 
     Scan s = new Scan();
     s.setReversed(true);
-    s.withStartRow(metaKey);
+    s.withStartRow(metaStartKey);
+    s.withStopRow(metaStopKey, true);
     s.addFamily(HConstants.CATALOG_FAMILY);
 
     if (this.useMetaReplicas) {
@@ -811,12 +802,10 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
     }
 
     int maxAttempts = (retry ? numTries : 1);
-
     for (int tries = 0; true; tries++) {
       if (tries >= maxAttempts) {
         throw new NoServerForRegionException("Unable to find region for "
-            + Bytes.toStringBinary(row) + " in " + tableName +
-            " after " + tries + " tries.");
+            + Bytes.toStringBinary(row) + " in " + tableName + " after " + tries + " tries.");
       }
       if (useCache) {
         RegionLocations locations = getCachedLocation(tableName, row);
@@ -832,7 +821,14 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
 
       // Query the meta region
       long pauseBase = this.pause;
+      userRegionLock.lock();
       try {
+        if (useCache) {// re-check cache after get lock
+          RegionLocations locations = getCachedLocation(tableName, row);
+          if (locations != null && locations.getRegionLocation(replicaId) != null) {
+            return locations;
+          }
+        }
         Result regionInfoRow = null;
         s.resetMvccReadPoint();
         s.setOneRowLimit();
@@ -848,12 +844,11 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
         // convert the row result into the HRegionLocation we need!
         RegionLocations locations = MetaTableAccessor.getRegionLocations(regionInfoRow);
         if (locations == null || locations.getRegionLocation(replicaId) == null) {
-          throw new IOException("HRegionInfo was null in " +
-            tableName + ", row=" + regionInfoRow);
+          throw new IOException("RegionInfo null in " + tableName + ", row=" + regionInfoRow);
         }
-        HRegionInfo regionInfo = locations.getRegionLocation(replicaId).getRegionInfo();
+        RegionInfo regionInfo = locations.getRegionLocation(replicaId).getRegion();
         if (regionInfo == null) {
-          throw new IOException("HRegionInfo was null or empty in " +
+          throw new IOException("RegionInfo null or empty in " +
             TableName.META_TABLE_NAME + ", row=" + regionInfoRow);
         }
 
@@ -865,23 +860,19 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
             "hbase:meta might be damaged.");
         }
         if (regionInfo.isSplit()) {
-          throw new RegionOfflineException("the only available region for" +
-            " the required row is a split parent," +
-            " the daughters should be online soon: " +
-            regionInfo.getRegionNameAsString());
+          throw new RegionOfflineException ("Region for row is a split parent, daughters not online: " +
+              regionInfo.getRegionNameAsString());
         }
         if (regionInfo.isOffline()) {
-          throw new RegionOfflineException("the region is offline, could" +
-            " be caused by a disable table call: " +
-            regionInfo.getRegionNameAsString());
+          throw new RegionOfflineException("Region offline; disable table call? " +
+              regionInfo.getRegionNameAsString());
         }
 
         ServerName serverName = locations.getRegionLocation(replicaId).getServerName();
         if (serverName == null) {
-          throw new NoServerForRegionException("No server address listed " +
-            "in " + TableName.META_TABLE_NAME + " for region " +
-            regionInfo.getRegionNameAsString() + " containing row " +
-            Bytes.toStringBinary(row));
+          throw new NoServerForRegionException("No server address listed in "
+              + TableName.META_TABLE_NAME + " for region " + regionInfo.getRegionNameAsString()
+              + " containing row " + Bytes.toStringBinary(row));
         }
 
         if (isDeadServer(serverName)){
@@ -908,11 +899,10 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
         }
         if (tries < maxAttempts - 1) {
           if (LOG.isDebugEnabled()) {
-            LOG.debug("locateRegionInMeta parentTable=" +
-                TableName.META_TABLE_NAME + ", metaLocation=" +
-              ", attempt=" + tries + " of " +
-              maxAttempts + " failed; retrying after sleep of " +
-              ConnectionUtils.getPauseTime(pauseBase, tries) + " because: " + e.getMessage());
+            LOG.debug("locateRegionInMeta parentTable=" + TableName.META_TABLE_NAME
+                + ", metaLocation=" + ", attempt=" + tries + " of " + maxAttempts
+                + " failed; retrying after sleep of "
+                + ConnectionUtils.getPauseTime(pauseBase, tries) + " because: " + e.getMessage());
           }
         } else {
           throw e;
@@ -920,8 +910,10 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
         // Only relocate the parent region if necessary
         if(!(e instanceof RegionOfflineException ||
             e instanceof NoServerForRegionException)) {
-          relocateRegion(TableName.META_TABLE_NAME, metaKey, replicaId);
+          relocateRegion(TableName.META_TABLE_NAME, metaStartKey, replicaId);
         }
+      } finally {
+        userRegionLock.unlock();
       }
       try{
         Thread.sleep(ConnectionUtils.getPauseTime(pauseBase, tries));
@@ -1124,37 +1116,25 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
      */
     private MasterProtos.MasterService.BlockingInterface makeStubNoRetries()
         throws IOException, KeeperException {
-      ZooKeeperKeepAliveConnection zkw;
-      try {
-        zkw = getKeepAliveZooKeeperWatcher();
-      } catch (IOException e) {
-        ExceptionUtil.rethrowIfInterrupt(e);
-        throw new ZooKeeperConnectionException("Can't connect to ZooKeeper", e);
+      ServerName sn = get(registry.getMasterAddress());
+      if (sn == null) {
+        String msg = "ZooKeeper available but no active master location found";
+        LOG.info(msg);
+        throw new MasterNotRunningException(msg);
       }
-      try {
-        checkIfBaseNodeAvailable(zkw);
-        ServerName sn = MasterAddressTracker.getMasterAddress(zkw);
-        if (sn == null) {
-          String msg = "ZooKeeper available but no active master location found";
-          LOG.info(msg);
-          throw new MasterNotRunningException(msg);
-        }
-        if (isDeadServer(sn)) {
-          throw new MasterNotRunningException(sn + " is dead.");
-        }
-        // Use the security info interface name as our stub key
-        String key = getStubKey(MasterProtos.MasterService.getDescriptor().getName(), sn,
-          hostnamesCanChange);
-        MasterProtos.MasterService.BlockingInterface stub =
-            (MasterProtos.MasterService.BlockingInterface) computeIfAbsentEx(stubs, key, () -> {
-              BlockingRpcChannel channel = rpcClient.createBlockingRpcChannel(sn, user, rpcTimeout);
-              return MasterProtos.MasterService.newBlockingStub(channel);
-            });
-        isMasterRunning(stub);
-        return stub;
-      } finally {
-        zkw.close();
+      if (isDeadServer(sn)) {
+        throw new MasterNotRunningException(sn + " is dead.");
       }
+      // Use the security info interface name as our stub key
+      String key =
+          getStubKey(MasterProtos.MasterService.getDescriptor().getName(), sn, hostnamesCanChange);
+      MasterProtos.MasterService.BlockingInterface stub =
+          (MasterProtos.MasterService.BlockingInterface) computeIfAbsentEx(stubs, key, () -> {
+            BlockingRpcChannel channel = rpcClient.createBlockingRpcChannel(sn, user, rpcTimeout);
+            return MasterProtos.MasterService.newBlockingStub(channel);
+          });
+      isMasterRunning(stub);
+      return stub;
     }
 
     /**
@@ -1165,7 +1145,7 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
     MasterProtos.MasterService.BlockingInterface makeStub() throws IOException {
       // The lock must be at the beginning to prevent multiple master creations
       // (and leaks) in a multithread context
-      synchronized (masterAndZKLock) {
+      synchronized (masterLock) {
         Exception exceptionCaught = null;
         if (!closed) {
           try {
@@ -1184,8 +1164,14 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
   }
 
   @Override
+  public AdminProtos.AdminService.BlockingInterface getAdminForMaster() throws IOException {
+    return getAdmin(get(registry.getMasterAddress()));
+  }
+
+  @Override
   public AdminProtos.AdminService.BlockingInterface getAdmin(ServerName serverName)
       throws IOException {
+    checkClosed();
     if (isDeadServer(serverName)) {
       throw new RegionServerStoppedException(serverName + " is dead.");
     }
@@ -1200,6 +1186,7 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
 
   @Override
   public BlockingInterface getClient(ServerName serverName) throws IOException {
+    checkClosed();
     if (isDeadServer(serverName)) {
       throw new RegionServerStoppedException(serverName + " is dead.");
     }
@@ -1212,52 +1199,10 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
     });
   }
 
-  private ZooKeeperKeepAliveConnection keepAliveZookeeper;
-  private AtomicInteger keepAliveZookeeperUserCount = new AtomicInteger(0);
-
-  /**
-   * Retrieve a shared ZooKeeperWatcher. You must close it it once you've have finished with it.
-   * @return The shared instance. Never returns null.
-   */
-  ZooKeeperKeepAliveConnection getKeepAliveZooKeeperWatcher()
-    throws IOException {
-    synchronized (masterAndZKLock) {
-      if (keepAliveZookeeper == null) {
-        if (this.closed) {
-          throw new IOException(toString() + " closed");
-        }
-        // We don't check that our link to ZooKeeper is still valid
-        // But there is a retry mechanism in the ZooKeeperWatcher itself
-        keepAliveZookeeper = new ZooKeeperKeepAliveConnection(conf, this.toString(), this);
-      }
-      keepAliveZookeeperUserCount.addAndGet(1);
-      return keepAliveZookeeper;
-    }
-  }
-
-  void releaseZooKeeperWatcher(final ZooKeeperWatcher zkw) {
-    if (zkw == null){
-      return;
-    }
-  }
-
-  private void closeZooKeeperWatcher() {
-    synchronized (masterAndZKLock) {
-      if (keepAliveZookeeper != null) {
-        LOG.info("Closing zookeeper sessionid=0x" +
-          Long.toHexString(
-            keepAliveZookeeper.getRecoverableZooKeeper().getSessionId()));
-        keepAliveZookeeper.internalClose();
-        keepAliveZookeeper = null;
-      }
-      keepAliveZookeeperUserCount.set(0);
-    }
-  }
-
   final MasterServiceState masterServiceState = new MasterServiceState(this);
 
   @Override
-  public MasterProtos.MasterService.BlockingInterface getMaster() throws MasterNotRunningException {
+  public MasterKeepAliveConnection getMaster() throws IOException {
     return getKeepAliveMasterService();
   }
 
@@ -1265,20 +1210,11 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
     mss.userCount++;
   }
 
-  @Override
-  public MasterKeepAliveConnection getKeepAliveMasterService()
-  throws MasterNotRunningException {
-    synchronized (masterAndZKLock) {
+  private MasterKeepAliveConnection getKeepAliveMasterService() throws IOException {
+    synchronized (masterLock) {
       if (!isKeepAliveMasterConnectedAndRunning(this.masterServiceState)) {
         MasterServiceStubMaker stubMaker = new MasterServiceStubMaker();
-        try {
-          this.masterServiceState.stub = stubMaker.makeStub();
-        } catch (MasterNotRunningException ex) {
-          throw ex;
-        } catch (IOException e) {
-          // rethrow as MasterNotRunningException so that we can keep the method sig
-          throw new MasterNotRunningException(e);
-        }
+        this.masterServiceState.stub = stubMaker.makeStub();
       }
       resetMasterServiceState(this.masterServiceState);
     }
@@ -1727,22 +1663,22 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
       }
 
       @Override
-      public ListDrainingRegionServersResponse listDrainingRegionServers(RpcController controller,
-          ListDrainingRegionServersRequest request) throws ServiceException {
-        return stub.listDrainingRegionServers(controller, request);
+      public ListDecommissionedRegionServersResponse listDecommissionedRegionServers(RpcController controller,
+          ListDecommissionedRegionServersRequest request) throws ServiceException {
+        return stub.listDecommissionedRegionServers(controller, request);
       }
 
       @Override
-      public DrainRegionServersResponse drainRegionServers(RpcController controller,
-          DrainRegionServersRequest request) throws ServiceException {
-        return stub.drainRegionServers(controller, request);
+      public DecommissionRegionServersResponse decommissionRegionServers(RpcController controller,
+          DecommissionRegionServersRequest request) throws ServiceException {
+        return stub.decommissionRegionServers(controller, request);
       }
 
       @Override
-      public RemoveDrainFromRegionServersResponse removeDrainFromRegionServers(
-          RpcController controller, RemoveDrainFromRegionServersRequest request)
+      public RecommissionRegionServerResponse recommissionRegionServer(
+          RpcController controller, RecommissionRegionServerRequest request)
           throws ServiceException {
-        return stub.removeDrainFromRegionServers(controller, request);
+        return stub.recommissionRegionServer(controller, request);
       }
 
       @Override
@@ -1775,12 +1711,6 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
       public GetQuotaStatesResponse getQuotaStates(
           RpcController controller, GetQuotaStatesRequest request) throws ServiceException {
         return stub.getQuotaStates(controller, request);
-      }
-
-      @Override
-      public MasterProtos.ListDeadServersResponse listDeadServers(RpcController controller,
-          MasterProtos.ListDeadServersRequest request) throws ServiceException {
-        return stub.listDeadServers(controller, request);
       }
 
       @Override
@@ -1818,7 +1748,7 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
     if (mss.getStub() == null) {
       return;
     }
-    synchronized (masterAndZKLock) {
+    synchronized (masterLock) {
       --mss.userCount;
     }
   }
@@ -1836,13 +1766,12 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
    * connection itself.
    */
   private void closeMaster() {
-    synchronized (masterAndZKLock) {
+    synchronized (masterLock) {
       closeMasterService(masterServiceState);
     }
   }
 
-  void updateCachedLocation(HRegionInfo hri, ServerName source,
-                            ServerName serverName, long seqNum) {
+  void updateCachedLocation(RegionInfo hri, ServerName source, ServerName serverName, long seqNum) {
     HRegionLocation newHrl = new HRegionLocation(hri, serverName, seqNum);
     cacheLocation(hri.getTable(), source, newHrl);
   }
@@ -1895,7 +1824,7 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
       return;
     }
 
-    HRegionInfo regionInfo = oldLocation.getRegionInfo();
+    RegionInfo regionInfo = oldLocation.getRegion();
     Throwable cause = ClientExceptionsUtil.findException(exception);
     if (cause != null) {
       if (!ClientExceptionsUtil.isMetaClearingException(cause)) {
@@ -1908,7 +1837,7 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
         if (LOG.isTraceEnabled()) {
           LOG.trace("Region " + regionInfo.getRegionNameAsString() + " moved to " +
               rme.getHostname() + ":" + rme.getPort() +
-              " according to " + source.getHostAndPort());
+              " according to " + source.getAddress());
         }
         // We know that the region is not anymore on this region server, but we know
         //  the new location.
@@ -1953,26 +1882,14 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
 
   @Override
   public void abort(final String msg, Throwable t) {
-    if (t instanceof KeeperException.SessionExpiredException
-      && keepAliveZookeeper != null) {
-      synchronized (masterAndZKLock) {
-        if (keepAliveZookeeper != null) {
-          LOG.warn("This client just lost it's session with ZooKeeper," +
-            " closing it." +
-            " It will be recreated next time someone needs it", t);
-          closeZooKeeperWatcher();
-        }
-      }
+    if (t != null) {
+      LOG.error(HBaseMarkers.FATAL, msg, t);
     } else {
-      if (t != null) {
-        LOG.fatal(msg, t);
-      } else {
-        LOG.fatal(msg);
-      }
-      this.aborted = true;
-      close();
-      this.closed = true;
+      LOG.error(HBaseMarkers.FATAL, msg);
     }
+    this.aborted = true;
+    close();
+    this.closed = true;
   }
 
   @Override
@@ -1987,7 +1904,7 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
 
   @Override
   public int getCurrentNrHRS() throws IOException {
-    return this.registry.getCurrentNrHRS();
+    return get(this.registry.getCurrentNrHRS());
   }
 
   @Override
@@ -2001,7 +1918,7 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
       this.metrics.shutdown();
     }
     this.closed = true;
-    closeZooKeeperWatcher();
+    registry.close();
     this.stubs.clear();
     if (clusterStatusListener != null) {
       clusterStatusListener.close();
@@ -2032,9 +1949,7 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
 
   @Override
   public TableState getTableState(TableName tableName) throws IOException {
-    if (this.closed) {
-      throw new IOException(toString() + " closed");
-    }
+    checkClosed();
     TableState tableState = MetaTableAccessor.getTableState(this, tableName);
     if (tableState == null) {
       throw new TableNotFoundException(tableName);
@@ -2066,5 +1981,18 @@ class ConnectionImplementation implements ClusterConnection, Closeable {
   @Override
   public RpcControllerFactory getRpcControllerFactory() {
     return this.rpcControllerFactory;
+  }
+
+  private static <T> T get(CompletableFuture<T> future) throws IOException {
+    try {
+      return future.get();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw (IOException) new InterruptedIOException().initCause(e);
+    } catch (ExecutionException e) {
+      Throwable cause = e.getCause();
+      Throwables.propagateIfPossible(cause, IOException.class);
+      throw new IOException(cause);
+    }
   }
 }

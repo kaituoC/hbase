@@ -32,15 +32,15 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.monitoring.ThreadMonitoring;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Maps;
-import org.apache.hadoop.hbase.shaded.com.google.common.util.concurrent.ThreadFactoryBuilder;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
+import org.apache.hbase.thirdparty.com.google.common.collect.Maps;
+import org.apache.hbase.thirdparty.com.google.common.util.concurrent.ThreadFactoryBuilder;
 
 /**
  * This is a generic executor service. This component abstracts a
@@ -56,7 +56,7 @@ import org.apache.hadoop.hbase.shaded.com.google.common.util.concurrent.ThreadFa
  */
 @InterfaceAudience.Private
 public class ExecutorService {
-  private static final Log LOG = LogFactory.getLog(ExecutorService.class);
+  private static final Logger LOG = LoggerFactory.getLogger(ExecutorService.class);
 
   // hold the all the executors created in a map addressable by their names
   private final ConcurrentHashMap<String, Executor> executorMap = new ConcurrentHashMap<>();
@@ -178,6 +178,7 @@ public class ExecutorService {
       // name the threads for this threadpool
       ThreadFactoryBuilder tfb = new ThreadFactoryBuilder();
       tfb.setNameFormat(this.name + "-%d");
+      tfb.setDaemon(true);
       this.threadPoolExecutor.setThreadFactory(tfb.build());
     }
 

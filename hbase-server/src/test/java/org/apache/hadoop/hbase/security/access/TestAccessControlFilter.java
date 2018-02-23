@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.security.access;
 
 import static org.junit.Assert.assertEquals;
@@ -26,8 +25,8 @@ import java.security.PrivilegedExceptionAction;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
-
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.TableName;
@@ -45,6 +44,7 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
@@ -52,6 +52,11 @@ import org.junit.rules.TestName;
 
 @Category({SecurityTests.class, LargeTests.class})
 public class TestAccessControlFilter extends SecureTestUtil {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestAccessControlFilter.class);
+
   @Rule public TestName name = new TestName();
   private static HBaseTestingUtility TEST_UTIL;
 
@@ -64,11 +69,11 @@ public class TestAccessControlFilter extends SecureTestUtil {
   private static byte[] PRIVATE_COL = Bytes.toBytes("private");
   private static byte[] PUBLIC_COL = Bytes.toBytes("public");
 
-  @Before 
+  @Before
   public void setup () {
     TABLE = TableName.valueOf(name.getMethodName());
   }
-  
+
   @BeforeClass
   public static void setupBeforeClass() throws Exception {
     TEST_UTIL = new HBaseTestingUtility();
@@ -94,7 +99,7 @@ public class TestAccessControlFilter extends SecureTestUtil {
     TEST_UTIL.shutdownMiniCluster();
   }
 
-  @Test (timeout=180000)
+  @Test
   public void testQualifierAccess() throws Exception {
     final Table table = createTable(TEST_UTIL, TABLE, new byte[][] { FAMILY });
     try {
@@ -123,6 +128,7 @@ public class TestAccessControlFilter extends SecureTestUtil {
 
     // test read
     READER.runAs(new PrivilegedExceptionAction<Object>() {
+      @Override
       public Object run() throws Exception {
         Configuration conf = new Configuration(TEST_UTIL.getConfiguration());
         // force a new RS connection
@@ -151,6 +157,7 @@ public class TestAccessControlFilter extends SecureTestUtil {
 
     // test read with qualifier filter
     LIMITED.runAs(new PrivilegedExceptionAction<Object>() {
+      @Override
       public Object run() throws Exception {
         Configuration conf = new Configuration(TEST_UTIL.getConfiguration());
         // force a new RS connection
@@ -178,6 +185,7 @@ public class TestAccessControlFilter extends SecureTestUtil {
 
     // test as user with no permission
     DENIED.runAs(new PrivilegedExceptionAction<Object>(){
+      @Override
       public Object run() throws Exception {
         Configuration conf = new Configuration(TEST_UTIL.getConfiguration());
         // force a new RS connection

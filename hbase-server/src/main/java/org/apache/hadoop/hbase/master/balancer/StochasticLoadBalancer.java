@@ -17,7 +17,6 @@
  */
 package org.apache.hadoop.hbase.master.balancer;
 
-import com.google.common.annotations.VisibleForTesting;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -28,21 +27,16 @@ import java.util.HashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
 import java.util.Random;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.ClusterStatus;
+import org.apache.hadoop.hbase.ClusterMetrics;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
-import org.apache.hadoop.hbase.RegionLoad;
-import org.apache.hadoop.hbase.ServerLoad;
+import org.apache.hadoop.hbase.RegionMetrics;
+import org.apache.hadoop.hbase.ServerMetrics;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.master.MasterServices;
 import org.apache.hadoop.hbase.master.RegionPlan;
 import org.apache.hadoop.hbase.master.balancer.BaseLoadBalancer.Cluster.Action;
@@ -53,9 +47,14 @@ import org.apache.hadoop.hbase.master.balancer.BaseLoadBalancer.Cluster.MoveRegi
 import org.apache.hadoop.hbase.master.balancer.BaseLoadBalancer.Cluster.SwapRegionsAction;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.base.Optional;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.base.Optional;
+import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
+
 
 /**
  * <p>This is a best effort load balancer. Given a Cost function F(C) =&gt; x It will
@@ -120,7 +119,7 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
       "hbase.master.balancer.stochastic.minCostNeedBalance";
 
   protected static final Random RANDOM = new Random(System.currentTimeMillis());
-  private static final Log LOG = LogFactory.getLog(StochasticLoadBalancer.class);
+  private static final Logger LOG = LoggerFactory.getLogger(StochasticLoadBalancer.class);
 
   Map<String, Deque<BalancerRegionLoad>> loads = new HashMap<>();
 
@@ -191,7 +190,7 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
     regionLoadFunctions = new CostFromRegionLoadFunction[] {
       new ReadRequestCostFunction(conf),
       new WriteRequestCostFunction(conf),
-      new MemstoreSizeCostFunction(conf),
+      new MemStoreSizeCostFunction(conf),
       new StoreFileCostFunction(conf)
     };
     regionReplicaHostCostFunction = new RegionReplicaHostCostFunction(conf);
@@ -226,11 +225,11 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
   }
 
   @Override
-  public synchronized void setClusterStatus(ClusterStatus st) {
-    super.setClusterStatus(st);
+  public synchronized void setClusterMetrics(ClusterMetrics st) {
+    super.setClusterMetrics(st);
     updateRegionLoad();
     for(CostFromRegionLoadFunction cost : regionLoadFunctions) {
-      cost.setClusterStatus(st);
+      cost.setClusterMetrics(st);
     }
 
     // update metrics size
@@ -314,7 +313,7 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
 
   @Override
   public synchronized List<RegionPlan> balanceCluster(TableName tableName, Map<ServerName,
-    List<HRegionInfo>> clusterState) {
+    List<RegionInfo>> clusterState) {
     this.tableName = tableName;
     return balanceCluster(clusterState);
   }
@@ -331,7 +330,7 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
    */
   @Override
   public synchronized List<RegionPlan> balanceCluster(Map<ServerName,
-    List<HRegionInfo>> clusterState) {
+    List<RegionInfo>> clusterState) {
     List<RegionPlan> plans = balanceMasterRegions(clusterState);
     if (plans != null || clusterState == null || clusterState.size() <= 1) {
       return plans;
@@ -350,8 +349,8 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
     // Allow turning this feature off if the locality cost is not going to
     // be used in any computations.
     RegionLocationFinder finder = null;
-    if (this.localityCost != null && this.localityCost.getMultiplier() > 0
-        || this.rackLocalityCost != null && this.rackLocalityCost.getMultiplier() > 0) {
+    if ((this.localityCost != null && this.localityCost.getMultiplier() > 0)
+        || (this.rackLocalityCost != null && this.rackLocalityCost.getMultiplier() > 0)) {
       finder = this.regionFinder;
     }
 
@@ -503,7 +502,7 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
       int newServerIndex = cluster.regionIndexToServerIndex[regionIndex];
 
       if (initialServerIndex != newServerIndex) {
-        HRegionInfo region = cluster.regions[regionIndex];
+        RegionInfo region = cluster.regions[regionIndex];
         ServerName initialServer = cluster.servers[initialServerIndex];
         ServerName newServer = cluster.servers[newServerIndex];
 
@@ -527,23 +526,19 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
     Map<String, Deque<BalancerRegionLoad>> oldLoads = loads;
     loads = new HashMap<>();
 
-    for (ServerName sn : clusterStatus.getServers()) {
-      ServerLoad sl = clusterStatus.getLoad(sn);
-      if (sl == null) {
-        continue;
-      }
-      for (Entry<byte[], RegionLoad> entry : sl.getRegionsLoad().entrySet()) {
-        Deque<BalancerRegionLoad> rLoads = oldLoads.get(Bytes.toString(entry.getKey()));
+    clusterStatus.getLiveServerMetrics().forEach((ServerName sn, ServerMetrics sm) -> {
+      sm.getRegionMetrics().forEach((byte[] regionName, RegionMetrics rm) -> {
+        Deque<BalancerRegionLoad> rLoads = oldLoads.get(Bytes.toString(regionName));
         if (rLoads == null) {
           // There was nothing there
           rLoads = new ArrayDeque<>();
         } else if (rLoads.size() >= numRegionLoadsToRemember) {
           rLoads.remove();
         }
-        rLoads.add(new BalancerRegionLoad(entry.getValue()));
-        loads.put(Bytes.toString(entry.getKey()), rLoads);
-      }
-    }
+        rLoads.add(new BalancerRegionLoad(rm));
+        loads.put(Bytes.toString(regionName), rLoads);
+      });
+    });
 
     for(CostFromRegionLoadFunction cost : regionLoadFunctions) {
       cost.setLoads(loads);
@@ -623,7 +618,7 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
      * @param server         index of the server
      * @param chanceOfNoSwap Chance that this will decide to try a move rather
      *                       than a swap.
-     * @return a random {@link HRegionInfo} or null if an asymmetrical move is
+     * @return a random {@link RegionInfo} or null if an asymmetrical move is
      *         suggested.
      */
     protected int pickRandomRegion(Cluster cluster, int server, double chanceOfNoSwap) {
@@ -1241,7 +1236,7 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
 
   /**
    * Compute a cost of a potential cluster configuration based upon where
-   * {@link org.apache.hadoop.hbase.regionserver.StoreFile}s are located.
+   * {@link org.apache.hadoop.hbase.regionserver.HStoreFile}s are located.
    */
   static abstract class LocalityBasedCostFunction extends CostFunction {
 
@@ -1371,14 +1366,14 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
    */
   abstract static class CostFromRegionLoadFunction extends CostFunction {
 
-    private ClusterStatus clusterStatus = null;
+    private ClusterMetrics clusterStatus = null;
     private Map<String, Deque<BalancerRegionLoad>> loads = null;
     private double[] stats = null;
     CostFromRegionLoadFunction(Configuration conf) {
       super(conf);
     }
 
-    void setClusterStatus(ClusterStatus status) {
+    void setClusterMetrics(ClusterMetrics status) {
       this.clusterStatus = status;
     }
 
@@ -1406,7 +1401,7 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
 
           // Now if we found a region load get the type of cost that was requested.
           if (regionLoadList != null) {
-            cost += getRegionLoadCost(regionLoadList);
+            cost = (long) (cost + getRegionLoadCost(regionLoadList));
           }
         }
 
@@ -1667,13 +1662,13 @@ public class StochasticLoadBalancer extends BaseLoadBalancer {
    * Compute the cost of total memstore size.  The more unbalanced the higher the
    * computed cost will be.  This uses a rolling average of regionload.
    */
-  static class MemstoreSizeCostFunction extends CostFromRegionLoadAsRateFunction {
+  static class MemStoreSizeCostFunction extends CostFromRegionLoadAsRateFunction {
 
     private static final String MEMSTORE_SIZE_COST_KEY =
         "hbase.master.balancer.stochastic.memstoreSizeCost";
     private static final float DEFAULT_MEMSTORE_SIZE_COST = 5;
 
-    MemstoreSizeCostFunction(Configuration conf) {
+    MemStoreSizeCostFunction(Configuration conf) {
       super(conf);
       this.setMultiplier(conf.getFloat(MEMSTORE_SIZE_COST_KEY, DEFAULT_MEMSTORE_SIZE_COST));
     }

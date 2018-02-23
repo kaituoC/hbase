@@ -18,14 +18,16 @@
 
 package org.apache.hadoop.hbase;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.util.ReflectionUtils;
-import org.codehaus.jackson.JsonNode;
-import org.codehaus.jackson.map.ObjectMapper;
 import org.glassfish.jersey.client.authentication.HttpAuthenticationFeature;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.ws.rs.client.Client;
 import javax.ws.rs.client.ClientBuilder;
 import javax.ws.rs.client.Entity;
@@ -98,7 +100,7 @@ public class RESTApiClusterManager extends Configured implements ClusterManager 
   // because cluster managers don't tend to implement these operations.
   private ClusterManager hBaseClusterManager;
 
-  private static final Log LOG = LogFactory.getLog(RESTApiClusterManager.class);
+  private static final Logger LOG = LoggerFactory.getLogger(RESTApiClusterManager.class);
 
   RESTApiClusterManager() {
     hBaseClusterManager = ReflectionUtils.newInstance(HBaseClusterManager.class,
@@ -222,8 +224,8 @@ public class RESTApiClusterManager extends Configured implements ClusterManager 
     if (hosts != null) {
       // Iterate through the list of hosts, stopping once you've reached the requested hostname.
       for (JsonNode host : hosts) {
-        if (host.get("hostname").getTextValue().equals(hostname)) {
-          hostId = host.get("hostId").getTextValue();
+        if (host.get("hostname").textValue().equals(hostname)) {
+          hostId = host.get("hostId").textValue();
           break;
         }
       }
@@ -272,12 +274,12 @@ public class RESTApiClusterManager extends Configured implements ClusterManager 
     if (roles != null) {
       // Iterate through the list of roles, stopping once the requested one is found.
       for (JsonNode role : roles) {
-        if (role.get("hostRef").get("hostId").getTextValue().equals(hostId) &&
+        if (role.get("hostRef").get("hostId").textValue().equals(hostId) &&
             role.get("type")
-                .getTextValue()
+                .textValue()
                 .toLowerCase(Locale.ROOT)
                 .equals(roleType.toLowerCase(Locale.ROOT))) {
-          roleValue = role.get(property).getTextValue();
+          roleValue = role.get(property).textValue();
           break;
         }
       }
@@ -306,8 +308,8 @@ public class RESTApiClusterManager extends Configured implements ClusterManager 
     if (services != null) {
       // Iterate through the list of services, stopping once the requested one is found.
       for (JsonNode serviceEntry : services) {
-        if (serviceEntry.get("type").getTextValue().equals(service.toString())) {
-          serviceName = serviceEntry.get("name").getTextValue();
+        if (serviceEntry.get("type").textValue().equals(service.toString())) {
+          serviceName = serviceEntry.get("name").textValue();
           break;
         }
       }

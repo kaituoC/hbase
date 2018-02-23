@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -29,12 +28,16 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
-
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileStatus;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.MiniHBaseCluster;
 import org.apache.hadoop.hbase.TableName;
@@ -48,6 +51,7 @@ import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
@@ -56,6 +60,10 @@ import org.junit.experimental.categories.Category;
  */
 @Category(MediumTests.class)
 public class TestBackupSystemTable {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestBackupSystemTable.class);
 
   private static final HBaseTestingUtility UTIL = new HBaseTestingUtility();
   protected static Configuration conf = UTIL.getConfiguration();
@@ -148,9 +156,7 @@ public class TestBackupSystemTable {
 
   @Test
   public void testBackupDelete() throws IOException {
-
     try (BackupSystemTable table = new BackupSystemTable(conn)) {
-
       int n = 10;
       List<BackupInfo> list = createBackupInfoList(n);
 
@@ -255,7 +261,7 @@ public class TestBackupSystemTable {
     tables.add(TableName.valueOf("t2"));
     tables.add(TableName.valueOf("t3"));
 
-    HashMap<String, Long> rsTimestampMap = new HashMap<String, Long>();
+    HashMap<String, Long> rsTimestampMap = new HashMap<>();
 
     rsTimestampMap.put("rs1:100", 100L);
     rsTimestampMap.put("rs2:100", 101L);
@@ -281,7 +287,7 @@ public class TestBackupSystemTable {
     tables1.add(TableName.valueOf("t4"));
     tables1.add(TableName.valueOf("t5"));
 
-    HashMap<String, Long> rsTimestampMap1 = new HashMap<String, Long>();
+    HashMap<String, Long> rsTimestampMap1 = new HashMap<>();
 
     rsTimestampMap1.put("rs1:100", 200L);
     rsTimestampMap1.put("rs2:100", 201L);
@@ -334,6 +340,25 @@ public class TestBackupSystemTable {
     assertTrue(table.isWALFileDeletable(files.get(2)));
     assertFalse(table.isWALFileDeletable(newFile));
 
+    // test for isWALFilesDeletable
+    List<FileStatus> fileStatues = new ArrayList<>();
+    for (String file : files) {
+      FileStatus fileStatus = new FileStatus();
+      fileStatus.setPath(new Path(file));
+      fileStatues.add(fileStatus);
+    }
+
+    FileStatus newFileStatus = new FileStatus();
+    newFileStatus.setPath(new Path(newFile));
+    fileStatues.add(newFileStatus);
+
+    Map<FileStatus, Boolean> walFilesDeletableMap = table.areWALFilesDeletable(fileStatues);
+
+    assertTrue(walFilesDeletableMap.get(fileStatues.get(0)));
+    assertTrue(walFilesDeletableMap.get(fileStatues.get(1)));
+    assertTrue(walFilesDeletableMap.get(fileStatues.get(2)));
+    assertFalse(walFilesDeletableMap.get(newFileStatus));
+
     cleanBackupTable();
   }
 
@@ -369,11 +394,14 @@ public class TestBackupSystemTable {
       String[] addTables = new String[] { "table4", "table5", "table6" };
       table.addToBackupSet(setName, addTables);
 
+      Set<String> expectedTables = new HashSet<>(Arrays.asList("table1", "table2", "table3",
+        "table4", "table5", "table6"));
+
       List<TableName> tnames = table.describeBackupSet(setName);
       assertTrue(tnames != null);
-      assertTrue(tnames.size() == tables.length + addTables.length);
-      for (int i = 0; i < tnames.size(); i++) {
-        assertTrue(tnames.get(i).getNameAsString().equals("table" + (i + 1)));
+      assertTrue(tnames.size() == expectedTables.size());
+      for (TableName tableName : tnames) {
+        assertTrue(expectedTables.remove(tableName.getNameAsString()));
       }
       cleanBackupTable();
     }
@@ -389,11 +417,14 @@ public class TestBackupSystemTable {
       String[] addTables = new String[] { "table3", "table4", "table5", "table6" };
       table.addToBackupSet(setName, addTables);
 
+      Set<String> expectedTables = new HashSet<>(Arrays.asList("table1", "table2", "table3",
+        "table4", "table5", "table6"));
+
       List<TableName> tnames = table.describeBackupSet(setName);
       assertTrue(tnames != null);
-      assertTrue(tnames.size() == tables.length + addTables.length - 1);
-      for (int i = 0; i < tnames.size(); i++) {
-        assertTrue(tnames.get(i).getNameAsString().equals("table" + (i + 1)));
+      assertTrue(tnames.size() == expectedTables.size());
+      for (TableName tableName : tnames) {
+        assertTrue(expectedTables.remove(tableName.getNameAsString()));
       }
       cleanBackupTable();
     }
@@ -409,11 +440,13 @@ public class TestBackupSystemTable {
       String[] removeTables = new String[] { "table4", "table5", "table6" };
       table.removeFromBackupSet(setName, removeTables);
 
+      Set<String> expectedTables = new HashSet<>(Arrays.asList("table1", "table2", "table3"));
+
       List<TableName> tnames = table.describeBackupSet(setName);
       assertTrue(tnames != null);
-      assertTrue(tnames.size() == tables.length - 1);
-      for (int i = 0; i < tnames.size(); i++) {
-        assertTrue(tnames.get(i).getNameAsString().equals("table" + (i + 1)));
+      assertTrue(tnames.size() == expectedTables.size());
+      for (TableName tableName : tnames) {
+        assertTrue(expectedTables.remove(tableName.getNameAsString()));
       }
       cleanBackupTable();
     }
@@ -429,11 +462,13 @@ public class TestBackupSystemTable {
       String[] removeTables = new String[] { "table4", "table3" };
       table.removeFromBackupSet(setName, removeTables);
 
+      Set<String> expectedTables = new HashSet<>(Arrays.asList("table1", "table2"));
+
       List<TableName> tnames = table.describeBackupSet(setName);
       assertTrue(tnames != null);
-      assertTrue(tnames.size() == tables.length - 2);
-      for (int i = 0; i < tnames.size(); i++) {
-        assertTrue(tnames.get(i).getNameAsString().equals("table" + (i + 1)));
+      assertTrue(tnames.size() == expectedTables.size());
+      for (TableName tableName : tnames) {
+        assertTrue(expectedTables.remove(tableName.getNameAsString()));
       }
       cleanBackupTable();
     }
@@ -481,7 +516,6 @@ public class TestBackupSystemTable {
   }
 
   private BackupInfo createBackupInfo() {
-
     BackupInfo ctxt =
         new BackupInfo("backup_" + System.nanoTime(), BackupType.FULL, new TableName[] {
             TableName.valueOf("t1"), TableName.valueOf("t2"), TableName.valueOf("t3") },
@@ -492,7 +526,7 @@ public class TestBackupSystemTable {
   }
 
   private List<BackupInfo> createBackupInfoList(int size) {
-    List<BackupInfo> list = new ArrayList<BackupInfo>();
+    List<BackupInfo> list = new ArrayList<>();
     for (int i = 0; i < size; i++) {
       list.add(createBackupInfo());
       try {
@@ -506,6 +540,8 @@ public class TestBackupSystemTable {
 
   @AfterClass
   public static void tearDown() throws IOException {
-    if (cluster != null) cluster.shutdown();
+    if (cluster != null) {
+      cluster.shutdown();
+    }
   }
 }

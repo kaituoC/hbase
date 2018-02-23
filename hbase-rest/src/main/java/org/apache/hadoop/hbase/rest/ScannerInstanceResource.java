@@ -31,13 +31,12 @@ import javax.ws.rs.core.Response;
 import javax.ws.rs.core.Response.ResponseBuilder;
 import javax.ws.rs.core.UriInfo;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
-import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.rest.model.CellModel;
 import org.apache.hadoop.hbase.rest.model.CellSetModel;
 import org.apache.hadoop.hbase.rest.model.RowModel;
@@ -46,8 +45,8 @@ import org.apache.hadoop.hbase.util.Bytes;
 
 @InterfaceAudience.Private
 public class ScannerInstanceResource extends ResourceBase {
-  private static final Log LOG =
-    LogFactory.getLog(ScannerInstanceResource.class);
+  private static final Logger LOG =
+    LoggerFactory.getLogger(ScannerInstanceResource.class);
 
   static CacheControl cacheControl;
   static {
@@ -175,7 +174,7 @@ public class ScannerInstanceResource extends ResourceBase {
       response.header("X-Row", Base64.encodeBytes(CellUtil.cloneRow(value)));
       response.header("X-Column",
         Base64.encodeBytes(
-          KeyValue.makeColumn(CellUtil.cloneFamily(value), CellUtil.cloneQualifier(value))));
+          CellUtil.makeColumn(CellUtil.cloneFamily(value), CellUtil.cloneQualifier(value))));
       response.header("X-Timestamp", value.getTimestamp());
       servlet.getMetrics().incrementSucessfulGetRequests(1);
       return response.build();

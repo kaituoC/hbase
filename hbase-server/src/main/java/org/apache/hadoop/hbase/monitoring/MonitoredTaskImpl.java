@@ -18,8 +18,8 @@
  */
 package org.apache.hadoop.hbase.monitoring;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.yetus.audience.InterfaceAudience;
-import org.codehaus.jackson.map.ObjectMapper;
 
 import java.io.IOException;
 import java.util.HashMap;
@@ -154,6 +154,7 @@ class MonitoredTaskImpl implements MonitoredTask {
    * Force the completion timestamp backwards so that
    * it expires now.
    */
+  @Override
   public void expireNow() {
     stateTime -= 180 * 1000;
   }

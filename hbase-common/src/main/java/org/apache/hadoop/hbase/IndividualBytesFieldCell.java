@@ -18,23 +18,16 @@
 
 package org.apache.hadoop.hbase;
 
-import org.apache.yetus.audience.InterfaceAudience;
-
-import java.io.IOException;
-import java.io.OutputStream;
-import java.nio.ByteBuffer;
-
-import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.hadoop.hbase.util.ArrayUtils;
-import org.apache.hadoop.hbase.util.ByteBufferUtils;
+import org.apache.commons.lang3.ArrayUtils;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ClassSize;
+import org.apache.yetus.audience.InterfaceAudience;
 
 @InterfaceAudience.Private
 public class IndividualBytesFieldCell implements ExtendedCell {
 
   private static final long FIXED_OVERHEAD = ClassSize.align(  // do alignment(padding gap)
-        ClassSize.OBJECT              // object header
+        (long)ClassSize.OBJECT              // object header
       + KeyValue.TIMESTAMP_TYPE_SIZE  // timestamp and type
       + Bytes.SIZEOF_LONG             // sequence id
       + 5 * ClassSize.REFERENCE);     // references to all byte arrays: row, family, qualifier, value, tags
@@ -68,12 +61,12 @@ public class IndividualBytesFieldCell implements ExtendedCell {
 
   public IndividualBytesFieldCell(byte[] row, byte[] family, byte[] qualifier,
                                   long timestamp, KeyValue.Type type, long seqId, byte[] value, byte[] tags) {
-    this(row, 0, ArrayUtils.length(row),
-            family, 0, ArrayUtils.length(family),
-            qualifier, 0, ArrayUtils.length(qualifier),
+    this(row, 0, ArrayUtils.getLength(row),
+            family, 0, ArrayUtils.getLength(family),
+            qualifier, 0, ArrayUtils.getLength(qualifier),
             timestamp, type, seqId,
-            value, 0, ArrayUtils.length(value),
-            tags, 0, ArrayUtils.length(tags));
+            value, 0, ArrayUtils.getLength(value),
+            tags, 0, ArrayUtils.getLength(tags));
   }
 
   public IndividualBytesFieldCell(byte[] row, int rOffset, int rLength,
@@ -95,7 +88,7 @@ public class IndividualBytesFieldCell implements ExtendedCell {
     }
 
     // Check tags
-    TagUtil.checkForTagsLength(tagsLength);
+    RawCell.checkForTagsLength(tagsLength);
     checkArrayBounds(row, rOffset, rLength);
     checkArrayBounds(family, fOffset, fLength);
     checkArrayBounds(qualifier, qOffset, qLength);
@@ -137,42 +130,6 @@ public class IndividualBytesFieldCell implements ExtendedCell {
     }
   }
 
-  @Override
-  public int write(OutputStream out, boolean withTags) throws IOException {
-    // Key length and then value length
-    ByteBufferUtils.putInt(out, KeyValueUtil.keyLength(this));
-    ByteBufferUtils.putInt(out, getValueLength());
-
-    // Key
-    CellUtil.writeFlatKey(this, out);
-
-    // Value
-    out.write(getValueArray());
-
-    // Tags length and tags byte array
-    if (withTags && getTagsLength() > 0) {
-      // Tags length
-      out.write((byte)(0xff & (getTagsLength() >> 8)));
-      out.write((byte)(0xff & getTagsLength()));
-
-      // Tags byte array
-      out.write(tags);
-    }
-
-    return getSerializedSize(withTags);
-  }
-
-  @Override
-  public void write(ByteBuffer buf, int offset) {
-    KeyValueUtil.appendTo(this, buf, offset, true);
-  }
-
-  @Override
-  public int getSerializedSize(boolean withTags) {
-    return KeyValueUtil.length(getRowLength(), getFamilyLength(), getQualifierLength(),
-                               getValueLength(), getTagsLength(), withTags);
-  }
-
   private long heapOverhead() {
     return   FIXED_OVERHEAD
            + ClassSize.ARRAY                               // row      , can not be null
@@ -180,12 +137,6 @@ public class IndividualBytesFieldCell implements ExtendedCell {
            + ((qualifier == null) ? 0 : ClassSize.ARRAY)   // qualifier, can be null
            + ((value     == null) ? 0 : ClassSize.ARRAY)   // value    , can be null
            + ((tags      == null) ? 0 : ClassSize.ARRAY);  // tags     , can be null
-  }
-
-  @Override
-  public ExtendedCell deepClone() {
-    // When being added to the memstore, deepClone() is called and KeyValue has less heap overhead.
-    return new KeyValue(this);
   }
 
   /**
@@ -321,9 +272,6 @@ public class IndividualBytesFieldCell implements ExtendedCell {
     return super.clone();  // only a shadow copy
   }
 
-  /**
-   * Implement SettableSequenceId interface
-   */
   @Override
   public void setSequenceId(long seqId) {
     if (seqId < 0) {
@@ -332,9 +280,6 @@ public class IndividualBytesFieldCell implements ExtendedCell {
     this.seqId = seqId;
   }
 
-  /**
-   * Implement SettableTimestamp interface
-   */
   @Override
   public void setTimestamp(long ts) {
     if (ts < 0) {
@@ -344,8 +289,8 @@ public class IndividualBytesFieldCell implements ExtendedCell {
   }
 
   @Override
-  public void setTimestamp(byte[] ts, int tsOffset) {
-    setTimestamp(Bytes.toLong(ts, tsOffset));
+  public void setTimestamp(byte[] ts) {
+    setTimestamp(Bytes.toLong(ts, 0));
   }
 
   @Override

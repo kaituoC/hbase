@@ -15,15 +15,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.master.procedure;
 
 import static org.junit.Assert.assertTrue;
 
 import java.util.List;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.TableExistsException;
@@ -33,19 +30,28 @@ import org.apache.hadoop.hbase.client.SnapshotDescription;
 import org.apache.hadoop.hbase.procedure2.Procedure;
 import org.apache.hadoop.hbase.procedure2.ProcedureExecutor;
 import org.apache.hadoop.hbase.procedure2.ProcedureTestingUtility;
-import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos;
 import org.apache.hadoop.hbase.snapshot.SnapshotTestingUtils;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.After;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos;
 
 @Category({MasterTests.class, MediumTests.class})
 public class TestCloneSnapshotProcedure extends TestTableDDLProcedureBase {
-  private static final Log LOG = LogFactory.getLog(TestCloneSnapshotProcedure.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestCloneSnapshotProcedure.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestCloneSnapshotProcedure.class);
 
   protected final byte[] CF = Bytes.toBytes("cf1");
 
@@ -94,7 +100,7 @@ public class TestCloneSnapshotProcedure extends TestTableDDLProcedureBase {
     return htd;
   }
 
-  @Test(timeout=60000)
+  @Test
   public void testCloneSnapshot() throws Exception {
     final ProcedureExecutor<MasterProcedureEnv> procExec = getMasterProcedureExecutor();
     final TableName clonedTableName = TableName.valueOf("testCloneSnapshot2");
@@ -111,7 +117,7 @@ public class TestCloneSnapshotProcedure extends TestTableDDLProcedureBase {
       clonedTableName);
   }
 
-  @Test(timeout=60000)
+  @Test
   public void testCloneSnapshotToSameTable() throws Exception {
     // take the snapshot
     SnapshotProtos.SnapshotDescription snapshotDesc = getSnapshot();
@@ -129,7 +135,7 @@ public class TestCloneSnapshotProcedure extends TestTableDDLProcedureBase {
       ProcedureTestingUtility.getExceptionCause(result) instanceof TableExistsException);
   }
 
-  @Test(timeout=60000)
+  @Test
   public void testRecoveryAndDoubleExecution() throws Exception {
     final ProcedureExecutor<MasterProcedureEnv> procExec = getMasterProcedureExecutor();
     final TableName clonedTableName = TableName.valueOf("testRecoveryAndDoubleExecution");
@@ -152,7 +158,7 @@ public class TestCloneSnapshotProcedure extends TestTableDDLProcedureBase {
       clonedTableName);
   }
 
-  @Test(timeout = 60000)
+  @Test
   public void testRollbackAndDoubleExecution() throws Exception {
     final ProcedureExecutor<MasterProcedureEnv> procExec = getMasterProcedureExecutor();
     final TableName clonedTableName = TableName.valueOf("testRollbackAndDoubleExecution");

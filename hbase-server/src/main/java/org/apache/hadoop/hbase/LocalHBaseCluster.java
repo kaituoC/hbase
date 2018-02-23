@@ -24,9 +24,9 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Connection;
@@ -58,7 +58,7 @@ import org.apache.hadoop.hbase.util.JVMClusterUtil;
  */
 @InterfaceAudience.Public
 public class LocalHBaseCluster {
-  private static final Log LOG = LogFactory.getLog(LocalHBaseCluster.class);
+  private static final Logger LOG = LoggerFactory.getLogger(LocalHBaseCluster.class);
   private final List<JVMClusterUtil.MasterThread> masterThreads = new CopyOnWriteArrayList<>();
   private final List<JVMClusterUtil.RegionServerThread> regionThreads = new CopyOnWriteArrayList<>();
   private final static int DEFAULT_NO = 1;
@@ -66,6 +66,8 @@ public class LocalHBaseCluster {
   public static final String LOCAL = "local";
   /** 'local:' */
   public static final String LOCAL_COLON = LOCAL + ":";
+  public static final String ASSIGN_RANDOM_PORTS = "hbase.localcluster.assign.random.ports";
+
   private final Configuration conf;
   private final Class<? extends HMaster> masterClass;
   private final Class<? extends HRegionServer> regionServerClass;
@@ -139,10 +141,15 @@ public class LocalHBaseCluster {
 
     // Always have masters and regionservers come up on port '0' so we don't
     // clash over default ports.
-    conf.set(HConstants.MASTER_PORT, "0");
-    conf.set(HConstants.REGIONSERVER_PORT, "0");
-    if (conf.getInt(HConstants.REGIONSERVER_INFO_PORT, 0) != -1) {
-      conf.set(HConstants.REGIONSERVER_INFO_PORT, "0");
+    if (conf.getBoolean(ASSIGN_RANDOM_PORTS, true)) {
+      conf.set(HConstants.MASTER_PORT, "0");
+      conf.set(HConstants.REGIONSERVER_PORT, "0");
+      if (conf.getInt(HConstants.REGIONSERVER_INFO_PORT, 0) != -1) {
+        conf.set(HConstants.REGIONSERVER_INFO_PORT, "0");
+      }
+      if (conf.getInt(HConstants.MASTER_INFO_PORT, 0) != -1) {
+        conf.set(HConstants.MASTER_INFO_PORT, "0");
+      }
     }
 
     this.masterClass = (Class<? extends HMaster>)
@@ -173,14 +180,8 @@ public class LocalHBaseCluster {
     // Create each regionserver with its own Configuration instance so each has
     // its Connection instance rather than share (see HBASE_INSTANCES down in
     // the guts of ConnectionManager).
-
-    // Also, create separate CoordinatedStateManager instance per Server.
-    // This is special case when we have to have more than 1 CoordinatedStateManager
-    // within 1 process.
-    CoordinatedStateManager cp = CoordinatedStateManagerFactory.getCoordinatedStateManager(conf);
-
     JVMClusterUtil.RegionServerThread rst =
-        JVMClusterUtil.createRegionServerThread(config, cp, (Class<? extends HRegionServer>) conf
+        JVMClusterUtil.createRegionServerThread(config, (Class<? extends HRegionServer>) conf
             .getClass(HConstants.REGION_SERVER_IMPL, this.regionServerClass), index);
 
     this.regionThreads.add(rst);
@@ -208,13 +209,7 @@ public class LocalHBaseCluster {
     // Create each master with its own Configuration instance so each has
     // its Connection instance rather than share (see HBASE_INSTANCES down in
     // the guts of ConnectionManager.
-
-    // Also, create separate CoordinatedStateManager instance per Server.
-    // This is special case when we have to have more than 1 CoordinatedStateManager
-    // within 1 process.
-    CoordinatedStateManager cp = CoordinatedStateManagerFactory.getCoordinatedStateManager(conf);
-
-    JVMClusterUtil.MasterThread mt = JVMClusterUtil.createMasterThread(c, cp,
+    JVMClusterUtil.MasterThread mt = JVMClusterUtil.createMasterThread(c,
         (Class<? extends HMaster>) conf.getClass(HConstants.MASTER_IMPL, this.masterClass), index);
     this.masterThreads.add(mt);
     return mt;

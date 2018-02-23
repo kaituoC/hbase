@@ -27,14 +27,14 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.fs.HFileSystem;
 import org.apache.hadoop.hbase.io.ByteArrayOutputStream;
 import org.apache.hadoop.hbase.io.ByteBuffInputStream;
@@ -53,8 +53,8 @@ import org.apache.hadoop.hbase.util.ChecksumType;
 import org.apache.hadoop.hbase.util.ClassSize;
 import org.apache.hadoop.io.IOUtils;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-import org.apache.hadoop.hbase.shaded.com.google.common.base.Preconditions;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.base.Preconditions;
 
 /**
  * Cacheable Blocks of an {@link HFile} version 2 file.
@@ -110,7 +110,7 @@ import org.apache.hadoop.hbase.shaded.com.google.common.base.Preconditions;
  */
 @InterfaceAudience.Private
 public class HFileBlock implements Cacheable {
-  private static final Log LOG = LogFactory.getLog(HFileBlock.class);
+  private static final Logger LOG = LoggerFactory.getLogger(HFileBlock.class);
 
   // Block Header fields.
 
@@ -255,42 +255,43 @@ public class HFileBlock implements Cacheable {
    */
   static final CacheableDeserializer<Cacheable> BLOCK_DESERIALIZER =
       new CacheableDeserializer<Cacheable>() {
-        public HFileBlock deserialize(ByteBuff buf, boolean reuse, MemoryType memType)
+    @Override
+    public HFileBlock deserialize(ByteBuff buf, boolean reuse, MemoryType memType)
         throws IOException {
-          // The buf has the file block followed by block metadata.
-          // Set limit to just before the BLOCK_METADATA_SPACE then rewind.
-          buf.limit(buf.limit() - BLOCK_METADATA_SPACE).rewind();
-          // Get a new buffer to pass the HFileBlock for it to 'own'.
-          ByteBuff newByteBuff;
-          if (reuse) {
-            newByteBuff = buf.slice();
-          } else {
-            int len = buf.limit();
-            newByteBuff = new SingleByteBuff(ByteBuffer.allocate(len));
-            newByteBuff.put(0, buf, buf.position(), len);
-          }
-          // Read out the BLOCK_METADATA_SPACE content and shove into our HFileBlock.
-          buf.position(buf.limit());
-          buf.limit(buf.limit() + HFileBlock.BLOCK_METADATA_SPACE);
-          boolean usesChecksum = buf.get() == (byte)1;
-          long offset = buf.getLong();
-          int nextBlockOnDiskSize = buf.getInt();
-          HFileBlock hFileBlock =
-              new HFileBlock(newByteBuff, usesChecksum, memType, offset, nextBlockOnDiskSize, null);
-          return hFileBlock;
-        }
+      // The buf has the file block followed by block metadata.
+      // Set limit to just before the BLOCK_METADATA_SPACE then rewind.
+      buf.limit(buf.limit() - BLOCK_METADATA_SPACE).rewind();
+      // Get a new buffer to pass the HFileBlock for it to 'own'.
+      ByteBuff newByteBuff;
+      if (reuse) {
+        newByteBuff = buf.slice();
+      } else {
+        int len = buf.limit();
+        newByteBuff = new SingleByteBuff(ByteBuffer.allocate(len));
+        newByteBuff.put(0, buf, buf.position(), len);
+      }
+      // Read out the BLOCK_METADATA_SPACE content and shove into our HFileBlock.
+      buf.position(buf.limit());
+      buf.limit(buf.limit() + HFileBlock.BLOCK_METADATA_SPACE);
+      boolean usesChecksum = buf.get() == (byte) 1;
+      long offset = buf.getLong();
+      int nextBlockOnDiskSize = buf.getInt();
+      HFileBlock hFileBlock =
+          new HFileBlock(newByteBuff, usesChecksum, memType, offset, nextBlockOnDiskSize, null);
+      return hFileBlock;
+    }
 
-        @Override
-        public int getDeserialiserIdentifier() {
-          return DESERIALIZER_IDENTIFIER;
-        }
+    @Override
+    public int getDeserialiserIdentifier() {
+      return DESERIALIZER_IDENTIFIER;
+    }
 
-        @Override
-        public HFileBlock deserialize(ByteBuff b) throws IOException {
-          // Used only in tests
-          return deserialize(b, false, MemoryType.EXCLUSIVE);
-        }
-      };
+    @Override
+    public HFileBlock deserialize(ByteBuff b) throws IOException {
+      // Used only in tests
+      return deserialize(b, false, MemoryType.EXCLUSIVE);
+    }
+  };
 
   private static final int DESERIALIZER_IDENTIFIER;
   static {
@@ -834,7 +835,7 @@ public class HFileBlock implements Cacheable {
       INIT,
       WRITING,
       BLOCK_READY
-    };
+    }
 
     /** Writer state. Used to ensure the correct usage protocol. */
     private State state = State.INIT;
@@ -1388,7 +1389,7 @@ public class HFileBlock implements Cacheable {
     /** Get the default decoder for blocks from this file. */
     HFileBlockDecodingContext getDefaultBlockDecodingContext();
 
-    void setIncludesMemstoreTS(boolean includesMemstoreTS);
+    void setIncludesMemStoreTS(boolean includesMemstoreTS);
     void setDataBlockEncoder(HFileDataBlockEncoder encoder);
 
     /**
@@ -1480,6 +1481,7 @@ public class HFileBlock implements Cacheable {
       this(new FSDataInputStreamWrapper(istream), fileSize, null, null, fileContext);
     }
 
+    @Override
     public BlockIterator blockRange(final long startOffset, final long endOffset) {
       final FSReader owner = this; // handle for inner class
       return new BlockIterator() {
@@ -1810,7 +1812,7 @@ public class HFileBlock implements Cacheable {
     }
 
     @Override
-    public void setIncludesMemstoreTS(boolean includesMemstoreTS) {
+    public void setIncludesMemStoreTS(boolean includesMemstoreTS) {
       this.fileContext.setIncludesMvcc(includesMemstoreTS);
     }
 

@@ -20,38 +20,36 @@ package org.apache.hadoop.hbase.rest;
 
 import java.lang.management.ManagementFactory;
 import java.util.ArrayList;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.EnumSet;
 import java.util.concurrent.ArrayBlockingQueue;
 
+import com.fasterxml.jackson.jaxrs.json.JacksonJaxbJsonProvider;
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 import org.apache.commons.cli.PosixParser;
 import org.apache.commons.lang3.ArrayUtils;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.http.InfoServer;
+import org.apache.hadoop.hbase.log.HBaseMarkers;
 import org.apache.hadoop.hbase.rest.filter.AuthFilter;
 import org.apache.hadoop.hbase.rest.filter.GzipFilter;
 import org.apache.hadoop.hbase.rest.filter.RestCsrfPreventionFilter;
 import org.apache.hadoop.hbase.security.UserProvider;
 import org.apache.hadoop.hbase.util.DNS;
-import org.apache.hadoop.hbase.util.HttpServerUtil;
+import org.apache.hadoop.hbase.http.HttpServerUtil;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.util.Strings;
 import org.apache.hadoop.hbase.util.VersionInfo;
 import org.apache.hadoop.util.StringUtils;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.base.Preconditions;
+import org.apache.hbase.thirdparty.com.google.common.base.Preconditions;
 
 import org.eclipse.jetty.http.HttpVersion;
 import org.eclipse.jetty.server.Server;
@@ -67,9 +65,10 @@ import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import org.eclipse.jetty.jmx.MBeanContainer;
 import org.eclipse.jetty.servlet.FilterHolder;
 
-import org.glassfish.jersey.jackson1.Jackson1Feature;
 import org.glassfish.jersey.server.ResourceConfig;
 import org.glassfish.jersey.servlet.ServletContainer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.servlet.DispatcherType;
 
@@ -84,7 +83,7 @@ import javax.servlet.DispatcherType;
  */
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.TOOLS)
 public class RESTServer implements Constants {
-  static Log LOG = LogFactory.getLog("RESTServer");
+  static Logger LOG = LoggerFactory.getLogger("RESTServer");
 
   static String REST_CSRF_ENABLED_KEY = "hbase.rest.csrf.enabled";
   static boolean REST_CSRF_ENABLED_DEFAULT = false;
@@ -238,7 +237,7 @@ public class RESTServer implements Constants {
 
     // set up the Jersey servlet container for Jetty
     ResourceConfig application = new ResourceConfig().
-        packages("org.apache.hadoop.hbase.rest").register(Jackson1Feature.class);
+        packages("org.apache.hadoop.hbase.rest").register(JacksonJaxbJsonProvider.class);
     ServletHolder sh = new ServletHolder(new ServletContainer(application));
 
     // Set the default max thread number to 100 to limit
@@ -353,9 +352,14 @@ public class RESTServer implements Constants {
       infoServer.setAttribute("hbase.conf", conf);
       infoServer.start();
     }
-    // start server
-    server.start();
-    server.join();
+    try {
+      // start server
+      server.start();
+      server.join();
+    } catch (Exception e) {
+      LOG.error(HBaseMarkers.FATAL, "Failed to start server", e);
+      System.exit(1);
+    }
     LOG.info("***** STOPPING service '" + RESTServer.class.getSimpleName() + "' *****");
   }
 }

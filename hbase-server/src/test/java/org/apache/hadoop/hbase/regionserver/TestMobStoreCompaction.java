@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,6 +19,8 @@ package org.apache.hadoop.hbase.regionserver;
 
 import static org.apache.hadoop.hbase.HBaseTestingUtility.START_KEY;
 import static org.apache.hadoop.hbase.HBaseTestingUtility.fam1;
+import static org.apache.hadoop.hbase.regionserver.HStoreFile.BULKLOAD_TIME_KEY;
+import static org.apache.hadoop.hbase.regionserver.HStoreFile.MOB_CELLS_COUNT;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
@@ -30,16 +31,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.CellComparator;
+import org.apache.hadoop.hbase.CellComparatorImpl;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HConstants;
@@ -67,19 +66,27 @@ import org.apache.hadoop.hbase.util.Pair;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Test mob store compaction
  */
 @Category(MediumTests.class)
 public class TestMobStoreCompaction {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestMobStoreCompaction.class);
+
   @Rule
   public TestName name = new TestName();
-  static final Log LOG = LogFactory.getLog(TestMobStoreCompaction.class.getName());
+  static final Logger LOG = LoggerFactory.getLogger(TestMobStoreCompaction.class.getName());
   private final static HBaseTestingUtility UTIL = new HBaseTestingUtility();
   private Configuration conf = null;
 
@@ -296,7 +303,7 @@ public class TestMobStoreCompaction {
   }
 
   private int countStoreFiles() throws IOException {
-    Store store = region.getStore(COLUMN_FAMILY);
+    HStore store = region.getStore(COLUMN_FAMILY);
     return store.getStorefilesCount();
   }
 
@@ -318,10 +325,10 @@ public class TestMobStoreCompaction {
     if (fs.exists(mobDirPath)) {
       FileStatus[] files = UTIL.getTestFileSystem().listStatus(mobDirPath);
       for (FileStatus file : files) {
-        StoreFile sf = new HStoreFile(fs, file.getPath(), conf, cacheConfig, BloomType.NONE, true);
+        HStoreFile sf = new HStoreFile(fs, file.getPath(), conf, cacheConfig, BloomType.NONE, true);
         sf.initReader();
         Map<byte[], byte[]> fileInfo = sf.getReader().loadFileInfo();
-        byte[] count = fileInfo.get(StoreFile.MOB_CELLS_COUNT);
+        byte[] count = fileInfo.get(MOB_CELLS_COUNT);
         assertTrue(count != null);
         mobCellsCount += Bytes.toLong(count);
       }
@@ -349,7 +356,7 @@ public class TestMobStoreCompaction {
           Bytes.toBytes("colX"), now, dummyData);
       writer.append(kv);
     } finally {
-      writer.appendFileInfo(StoreFile.BULKLOAD_TIME_KEY, Bytes.toBytes(System.currentTimeMillis()));
+      writer.appendFileInfo(BULKLOAD_TIME_KEY, Bytes.toBytes(System.currentTimeMillis()));
       writer.close();
     }
   }
@@ -428,24 +435,24 @@ public class TestMobStoreCompaction {
     copyOfConf.setFloat(HConstants.HFILE_BLOCK_CACHE_SIZE_KEY, 0f);
     CacheConfig cacheConfig = new CacheConfig(copyOfConf);
     Path mobDirPath = MobUtils.getMobFamilyPath(conf, htd.getTableName(), hcd.getNameAsString());
-    List<StoreFile> sfs = new ArrayList<>();
+    List<HStoreFile> sfs = new ArrayList<>();
     int numDelfiles = 0;
     int size = 0;
     if (fs.exists(mobDirPath)) {
       for (FileStatus f : fs.listStatus(mobDirPath)) {
-        StoreFile sf = new HStoreFile(fs, f.getPath(), conf, cacheConfig, BloomType.NONE, true);
+        HStoreFile sf = new HStoreFile(fs, f.getPath(), conf, cacheConfig, BloomType.NONE, true);
         sfs.add(sf);
         if (StoreFileInfo.isDelFile(sf.getPath())) {
           numDelfiles++;
         }
       }
 
-      List<StoreFileScanner> scanners = StoreFileScanner.getScannersForStoreFiles(sfs, false, true, false, false,
-          HConstants.LATEST_TIMESTAMP);
+      List<StoreFileScanner> scanners = StoreFileScanner.getScannersForStoreFiles(sfs, false, true,
+        false, false, HConstants.LATEST_TIMESTAMP);
       long timeToPurgeDeletes = Math.max(conf.getLong("hbase.hstore.time.to.purge.deletes", 0), 0);
       long ttl = HStore.determineTTLFromFamily(hcd);
       ScanInfo scanInfo = new ScanInfo(copyOfConf, hcd, ttl, timeToPurgeDeletes,
-        CellComparator.COMPARATOR);
+        CellComparatorImpl.COMPARATOR);
       StoreScanner scanner = new StoreScanner(scanInfo, ScanType.COMPACT_DROP_DELETES, scanners);
       try {
         size += UTIL.countRows(scanner);

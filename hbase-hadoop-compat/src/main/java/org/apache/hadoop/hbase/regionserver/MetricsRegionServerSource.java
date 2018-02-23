@@ -55,7 +55,7 @@ public interface MetricsRegionServerSource extends BaseSource, JvmPauseMonitorSo
 
   /**
    * Update the PutBatch time histogram if a batch contains a Put op
-   * @param t
+   * @param t time it took
    */
   void updatePutBatch(long t);
 
@@ -175,7 +175,7 @@ public interface MetricsRegionServerSource extends BaseSource, JvmPauseMonitorSo
    * Update the flush memstore size histogram
    * @param bytes the number of bytes in the memstore
    */
-  void updateFlushMemstoreSize(long bytes);
+  void updateFlushMemStoreSize(long bytes);
 
   /**
    * Update the flush output file size histogram

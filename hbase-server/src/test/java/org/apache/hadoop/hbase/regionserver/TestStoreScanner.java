@@ -1,5 +1,4 @@
-/*
- *
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.regionserver;
 
 import static org.apache.hadoop.hbase.CellUtil.createCell;
@@ -36,18 +34,16 @@ import java.util.NavigableSet;
 import java.util.OptionalInt;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.CategoryBasedTimeout;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeepDeletedCells;
 import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.filter.ColumnCountGetFilter;
@@ -56,24 +52,30 @@ import org.apache.hadoop.hbase.testclassification.RegionServerTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.EnvironmentEdge;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManagerTestHelper;
+import org.junit.ClassRule;
+import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
-import org.junit.rules.TestRule;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 // Can't be small as it plays with EnvironmentEdgeManager
 @Category({RegionServerTests.class, MediumTests.class})
 public class TestStoreScanner {
-  private static final Log LOG = LogFactory.getLog(TestStoreScanner.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestStoreScanner.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestStoreScanner.class);
   @Rule public TestName name = new TestName();
-  @Rule public final TestRule timeout = CategoryBasedTimeout.builder().withTimeout(this.getClass()).
-      withLookingForStuckThread(true).build();
   private static final String CF_STR = "cf";
   private static final byte[] CF = Bytes.toBytes(CF_STR);
   static Configuration CONF = HBaseConfiguration.create();
   private ScanInfo scanInfo = new ScanInfo(CONF, CF, 0, Integer.MAX_VALUE, Long.MAX_VALUE,
-      KeepDeletedCells.FALSE, HConstants.DEFAULT_BLOCKSIZE, 0, CellComparator.COMPARATOR, false);
+      KeepDeletedCells.FALSE, HConstants.DEFAULT_BLOCKSIZE, 0, CellComparator.getInstance(), false);
 
   /**
    * From here on down, we have a bunch of defines and specific CELL_GRID of Cells. The
@@ -159,9 +161,10 @@ public class TestStoreScanner {
 
     CellGridStoreScanner(final Scan scan, ScanInfo scanInfo) throws IOException {
       super(scan, scanInfo, scan.getFamilyMap().get(CF), Arrays.<KeyValueScanner> asList(
-        new KeyValueScanner[] { new KeyValueScanFixture(CellComparator.COMPARATOR, CELL_GRID) }));
+        new KeyValueScanner[] { new KeyValueScanFixture(CellComparator.getInstance(), CELL_GRID) }));
     }
 
+    @Override
     protected void resetKVHeap(List<? extends KeyValueScanner> scanners,
         CellComparator comparator) throws IOException {
       if (count == null) {
@@ -170,6 +173,7 @@ public class TestStoreScanner {
       heap = new KeyValueHeapWithCount(scanners, comparator, count);
     }
 
+    @Override
     protected boolean trySkipToNextRow(Cell cell) throws IOException {
       boolean optimized = super.trySkipToNextRow(cell);
       LOG.info("Cell=" + cell + ", nextIndex=" + CellUtil.toString(getNextIndexedKey(), false)
@@ -180,6 +184,7 @@ public class TestStoreScanner {
       return optimized;
     }
 
+    @Override
     protected boolean trySkipToNextColumn(Cell cell) throws IOException {
       boolean optimized = super.trySkipToNextColumn(cell);
       LOG.info("Cell=" + cell + ", nextIndex=" + CellUtil.toString(getNextIndexedKey(), false)
@@ -194,14 +199,14 @@ public class TestStoreScanner {
     public Cell getNextIndexedKey() {
       // Fake block boundaries by having index of next block change as we go through scan.
       return count.get() > CELL_GRID_BLOCK4_BOUNDARY?
-          CellUtil.createFirstOnRow(CELL_GRID[CELL_GRID_BLOCK5_BOUNDARY]):
+          PrivateCellUtil.createFirstOnRow(CELL_GRID[CELL_GRID_BLOCK5_BOUNDARY]):
             count.get() > CELL_GRID_BLOCK3_BOUNDARY?
-                CellUtil.createFirstOnRow(CELL_GRID[CELL_GRID_BLOCK4_BOUNDARY]):
+                PrivateCellUtil.createFirstOnRow(CELL_GRID[CELL_GRID_BLOCK4_BOUNDARY]):
                   count.get() > CELL_GRID_BLOCK2_BOUNDARY?
-                      CellUtil.createFirstOnRow(CELL_GRID[CELL_GRID_BLOCK3_BOUNDARY]):
-                        CellUtil.createFirstOnRow(CELL_GRID[CELL_GRID_BLOCK2_BOUNDARY]);
+                      PrivateCellUtil.createFirstOnRow(CELL_GRID[CELL_GRID_BLOCK3_BOUNDARY]):
+                        PrivateCellUtil.createFirstOnRow(CELL_GRID[CELL_GRID_BLOCK2_BOUNDARY]);
     }
-  };
+  }
 
   private static final int CELL_WITH_VERSIONS_BLOCK2_BOUNDARY = 4;
 
@@ -222,9 +227,10 @@ public class TestStoreScanner {
     CellWithVersionsStoreScanner(final Scan scan, ScanInfo scanInfo) throws IOException {
       super(scan, scanInfo, scan.getFamilyMap().get(CF),
           Arrays.<KeyValueScanner> asList(new KeyValueScanner[] {
-              new KeyValueScanFixture(CellComparator.COMPARATOR, CELL_WITH_VERSIONS) }));
+              new KeyValueScanFixture(CellComparator.getInstance(), CELL_WITH_VERSIONS) }));
     }
 
+    @Override
     protected boolean trySkipToNextColumn(Cell cell) throws IOException {
       boolean optimized = super.trySkipToNextColumn(cell);
       LOG.info("Cell=" + cell + ", nextIndex=" + CellUtil.toString(getNextIndexedKey(), false)
@@ -238,9 +244,10 @@ public class TestStoreScanner {
     @Override
     public Cell getNextIndexedKey() {
       // Fake block boundaries by having index of next block change as we go through scan.
-      return CellUtil.createFirstOnRow(CELL_WITH_VERSIONS[CELL_WITH_VERSIONS_BLOCK2_BOUNDARY]);
+      return PrivateCellUtil
+          .createFirstOnRow(CELL_WITH_VERSIONS[CELL_WITH_VERSIONS_BLOCK2_BOUNDARY]);
     }
-  };
+  }
 
   private static class CellWithVersionsNoOptimizeStoreScanner extends StoreScanner {
     // Count of how often optimize is called and of how often it does an optimize.
@@ -249,9 +256,10 @@ public class TestStoreScanner {
     CellWithVersionsNoOptimizeStoreScanner(Scan scan, ScanInfo scanInfo) throws IOException {
       super(scan, scanInfo, scan.getFamilyMap().get(CF),
           Arrays.<KeyValueScanner> asList(new KeyValueScanner[] {
-              new KeyValueScanFixture(CellComparator.COMPARATOR, CELL_WITH_VERSIONS) }));
+              new KeyValueScanFixture(CellComparator.getInstance(), CELL_WITH_VERSIONS) }));
     }
 
+    @Override
     protected boolean trySkipToNextColumn(Cell cell) throws IOException {
       boolean optimized = super.trySkipToNextColumn(cell);
       LOG.info("Cell=" + cell + ", nextIndex=" + CellUtil.toString(getNextIndexedKey(), false)
@@ -266,7 +274,7 @@ public class TestStoreScanner {
     public Cell getNextIndexedKey() {
       return null;
     }
-  };
+  }
 
   @Test
   public void testWithColumnCountGetFilter() throws Exception {
@@ -453,7 +461,7 @@ public class TestStoreScanner {
     };
     List<KeyValueScanner> scanners = Arrays.<KeyValueScanner>asList(
         new KeyValueScanner[] {
-            new KeyValueScanFixture(CellComparator.COMPARATOR, kvs)
+            new KeyValueScanFixture(CellComparator.getInstance(), kvs)
     });
     Scan scanSpec = new Scan().withStartRow(Bytes.toBytes(r1));
     scanSpec.setTimeRange(0, 6);
@@ -504,7 +512,7 @@ public class TestStoreScanner {
     };
     List<KeyValueScanner> scanners = Arrays.asList(
         new KeyValueScanner[] {
-            new KeyValueScanFixture(CellComparator.COMPARATOR, kvs)
+            new KeyValueScanFixture(CellComparator.getInstance(), kvs)
         });
 
     Scan scanSpec = new Scan().withStartRow(Bytes.toBytes("R1"));
@@ -596,6 +604,7 @@ public class TestStoreScanner {
     }
   }
 
+  @Test
   public void testDeleteVersionMaskingMultiplePuts() throws IOException {
     long now = System.currentTimeMillis();
     KeyValue [] kvs1 = new KeyValue[] {
@@ -620,6 +629,8 @@ public class TestStoreScanner {
       assertEquals(kvs2[1], results.get(0));
     }
   }
+
+  @Test
   public void testDeleteVersionsMixedAndMultipleVersionReturn() throws IOException {
     long now = System.currentTimeMillis();
     KeyValue [] kvs1 = new KeyValue[] {
@@ -797,7 +808,7 @@ public class TestStoreScanner {
     Scan scan = new Scan();
     scan.readVersions(1);
     ScanInfo scanInfo = new ScanInfo(CONF, CF, 0, 1, 500, KeepDeletedCells.FALSE,
-        HConstants.DEFAULT_BLOCKSIZE, 0, CellComparator.COMPARATOR, false);
+        HConstants.DEFAULT_BLOCKSIZE, 0, CellComparator.getInstance(), false);
     try (StoreScanner scanner = new StoreScanner(scan, scanInfo, null, scanners)) {
       List<Cell> results = new ArrayList<>();
       assertEquals(true, scanner.next(results));
@@ -831,10 +842,8 @@ public class TestStoreScanner {
   }
 
 
-  /**
-   * TODO this fails, since we don't handle deletions, etc, in peek
-   */
-  public void SKIP_testPeek() throws Exception {
+  @Test @Ignore("this fails, since we don't handle deletions, etc, in peek")
+  public void testPeek() throws Exception {
     KeyValue[] kvs = new KeyValue [] {
         create("R1", "cf", "a", 1, KeyValue.Type.Put, "dont-care"),
         create("R1", "cf", "a", 1, KeyValue.Type.Delete, "dont-care"),
@@ -863,7 +872,7 @@ public class TestStoreScanner {
     scan.readVersions(1);
     // scanner with ttl equal to 500
     ScanInfo scanInfo = new ScanInfo(CONF, CF, 0, 1, 500, KeepDeletedCells.FALSE,
-        HConstants.DEFAULT_BLOCKSIZE, 0, CellComparator.COMPARATOR, false);
+        HConstants.DEFAULT_BLOCKSIZE, 0, CellComparator.getInstance(), false);
     try (StoreScanner scanner = new StoreScanner(scan, scanInfo, null, scanners)) {
       List<Cell> results = new ArrayList<>();
       assertEquals(true, scanner.next(results));
@@ -880,6 +889,7 @@ public class TestStoreScanner {
     try {
       final long now = System.currentTimeMillis();
       EnvironmentEdgeManagerTestHelper.injectEdge(new EnvironmentEdge() {
+        @Override
         public long currentTime() {
           return now;
         }
@@ -925,7 +935,7 @@ public class TestStoreScanner {
         KeepDeletedCells.FALSE /* keepDeletedCells */,
         HConstants.DEFAULT_BLOCKSIZE /* block size */,
         200, /* timeToPurgeDeletes */
-        CellComparator.COMPARATOR, false);
+        CellComparator.getInstance(), false);
       try (StoreScanner scanner =
           new StoreScanner(scanInfo, OptionalInt.of(2), ScanType.COMPACT_DROP_DELETES, scanners)) {
         List<Cell> results = new ArrayList<>();
@@ -954,7 +964,7 @@ public class TestStoreScanner {
         create("R1", "cf", "a", now - 10, KeyValue.Type.Put, "dont-care"), };
     List<KeyValueScanner> scanners = scanFixture(kvs);
     ScanInfo scanInfo = new ScanInfo(CONF, CF, 0, 1, 500, KeepDeletedCells.FALSE,
-        HConstants.DEFAULT_BLOCKSIZE, 0, CellComparator.COMPARATOR, false);
+        HConstants.DEFAULT_BLOCKSIZE, 0, CellComparator.getInstance(), false);
     try (StoreScanner storeScanner = new StoreScanner(scanInfo, OptionalInt.empty(),
         ScanType.COMPACT_RETAIN_DELETES, scanners)) {
       assertFalse(storeScanner.isScanUsePread());

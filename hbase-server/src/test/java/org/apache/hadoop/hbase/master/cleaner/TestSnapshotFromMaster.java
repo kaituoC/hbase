@@ -25,31 +25,26 @@ import java.io.IOException;
 import java.util.Collection;
 import java.util.List;
 import java.util.Set;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Admin;
+import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
+import org.apache.hadoop.hbase.client.TableDescriptor;
+import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.master.HMaster;
 import org.apache.hadoop.hbase.master.snapshot.DisabledTableSnapshotHandler;
 import org.apache.hadoop.hbase.master.snapshot.SnapshotHFileCleaner;
 import org.apache.hadoop.hbase.master.snapshot.SnapshotManager;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.DeleteSnapshotRequest;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.GetCompletedSnapshotsRequest;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.GetCompletedSnapshotsResponse;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.IsSnapshotDoneRequest;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.IsSnapshotDoneResponse;
 import org.apache.hadoop.hbase.regionserver.CompactedHFilesDischarger;
 import org.apache.hadoop.hbase.regionserver.ConstantSizeRegionSplitPolicy;
 import org.apache.hadoop.hbase.regionserver.HRegion;
 import org.apache.hadoop.hbase.regionserver.HRegionServer;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotDescription;
 import org.apache.hadoop.hbase.snapshot.SnapshotDescriptionUtils;
 import org.apache.hadoop.hbase.snapshot.SnapshotReferenceUtil;
 import org.apache.hadoop.hbase.snapshot.SnapshotTestingUtils;
@@ -64,14 +59,21 @@ import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.mockito.Mockito;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
-import org.apache.hadoop.hbase.client.TableDescriptor;
-import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
+import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
+
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.DeleteSnapshotRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.GetCompletedSnapshotsRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.GetCompletedSnapshotsResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.IsSnapshotDoneRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.IsSnapshotDoneResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotDescription;
 
 /**
  * Test the master-related aspects of a snapshot
@@ -79,7 +81,11 @@ import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
 @Category({MasterTests.class, MediumTests.class})
 public class TestSnapshotFromMaster {
 
-  private static final Log LOG = LogFactory.getLog(TestSnapshotFromMaster.class);
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestSnapshotFromMaster.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestSnapshotFromMaster.class);
   private static final HBaseTestingUtility UTIL = new HBaseTestingUtility();
   private static final int NUM_RS = 2;
   private static Path rootDir;
@@ -162,7 +168,7 @@ public class TestSnapshotFromMaster {
    * <li>If asking about a snapshot has hasn't occurred, you should get an error.</li>
    * </ol>
    */
-  @Test(timeout = 300000)
+  @Test
   public void testIsDoneContract() throws Exception {
 
     IsSnapshotDoneRequest.Builder builder = IsSnapshotDoneRequest.newBuilder();
@@ -184,7 +190,7 @@ public class TestSnapshotFromMaster {
     DisabledTableSnapshotHandler mockHandler = Mockito.mock(DisabledTableSnapshotHandler.class);
     Mockito.when(mockHandler.getException()).thenReturn(null);
     Mockito.when(mockHandler.getSnapshot()).thenReturn(desc);
-    Mockito.when(mockHandler.isFinished()).thenReturn(new Boolean(true));
+    Mockito.when(mockHandler.isFinished()).thenReturn(Boolean.TRUE);
     Mockito.when(mockHandler.getCompletionTimestamp())
       .thenReturn(EnvironmentEdgeManager.currentTime());
 
@@ -216,7 +222,7 @@ public class TestSnapshotFromMaster {
     assertTrue("Completed, on-disk snapshot not found", response.getDone());
   }
 
-  @Test(timeout = 300000)
+  @Test
   public void testGetCompletedSnapshots() throws Exception {
     // first check when there are no snapshots
     GetCompletedSnapshotsRequest request = GetCompletedSnapshotsRequest.newBuilder().build();
@@ -247,7 +253,7 @@ public class TestSnapshotFromMaster {
     assertEquals("Returned snapshots don't match created snapshots", expected, snapshots);
   }
 
-  @Test(timeout = 300000)
+  @Test
   public void testDeleteSnapshot() throws Exception {
 
     String snapshotName = "completed";
@@ -258,7 +264,7 @@ public class TestSnapshotFromMaster {
     try {
       master.getMasterRpcServices().deleteSnapshot(null, request);
       fail("Master didn't throw exception when attempting to delete snapshot that doesn't exist");
-    } catch (org.apache.hadoop.hbase.shaded.com.google.protobuf.ServiceException e) {
+    } catch (org.apache.hbase.thirdparty.com.google.protobuf.ServiceException e) {
       // Expected
     }
 
@@ -274,7 +280,7 @@ public class TestSnapshotFromMaster {
    * should be retained, while those that are not in a snapshot should be deleted.
    * @throws Exception on failure
    */
-  @Test(timeout = 300000)
+  @Test
   public void testSnapshotHFileArchiving() throws Exception {
     Admin admin = UTIL.getAdmin();
     // make sure we don't fail on listing snapshots
@@ -328,7 +334,7 @@ public class TestSnapshotFromMaster {
         .getRegionServerThreads();
     HRegionServer hrs = null;
     for (RegionServerThread rs : regionServerThreads) {
-      if (!rs.getRegionServer().getOnlineRegions(TABLE_NAME).isEmpty()) {
+      if (!rs.getRegionServer().getRegions(TABLE_NAME).isEmpty()) {
         hrs = rs.getRegionServer();
         break;
       }

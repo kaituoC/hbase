@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,27 +17,31 @@
  */
 package org.apache.hadoop.hbase.client;
 
-import org.apache.hadoop.hbase.CompareOperator;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
+import java.io.IOException;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.filter.CompareFilter;
 import org.apache.hadoop.hbase.regionserver.NoSuchColumnFamilyException;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
 
-import java.io.IOException;
-
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
-
 @Category(MediumTests.class)
 public class TestCheckAndMutate {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestCheckAndMutate.class);
+
   private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   private static final byte[] ROWKEY = Bytes.toBytes("12345");
   private static final byte[] FAMILY = Bytes.toBytes("cf");
@@ -46,17 +49,11 @@ public class TestCheckAndMutate {
   @Rule
   public TestName name = new TestName();
 
-  /**
-   * @throws java.lang.Exception
-   */
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
     TEST_UTIL.startMiniCluster();
   }
 
-  /**
-   * @throws java.lang.Exception
-   */
   @AfterClass
   public static void tearDownAfterClass() throws Exception {
     TEST_UTIL.shutdownMiniCluster();
@@ -131,8 +128,8 @@ public class TestCheckAndMutate {
 
       // put the same row again with C column deleted
       RowMutations rm = makeRowMutationsWithColumnCDeleted();
-      boolean res = table.checkAndMutate(ROWKEY, FAMILY, Bytes.toBytes("A"),
-        CompareOperator.EQUAL, Bytes.toBytes("a"), rm);
+      boolean res = table.checkAndMutate(ROWKEY, FAMILY).qualifier(Bytes.toBytes("A"))
+          .ifEquals(Bytes.toBytes("a")).thenMutate(rm);
       assertTrue(res);
 
       // get row back and assert the values
@@ -141,8 +138,8 @@ public class TestCheckAndMutate {
       //Test that we get a region level exception
       try {
         rm = getBogusRowMutations();
-        table.checkAndMutate(ROWKEY, FAMILY, Bytes.toBytes("A"), CompareOperator.EQUAL,
-            Bytes.toBytes("a"), rm);
+        table.checkAndMutate(ROWKEY, FAMILY).qualifier(Bytes.toBytes("A"))
+            .ifEquals(Bytes.toBytes("a")).thenMutate(rm);
         fail("Expected NoSuchColumnFamilyException");
       } catch (RetriesExhaustedWithDetailsException e) {
         try {
@@ -155,7 +152,7 @@ public class TestCheckAndMutate {
   }
 
   @Test
-  public void testCheckAndMutateUsingNewComparisonOperatorInstead() throws Throwable {
+  public void testCheckAndMutateWithBuilder() throws Throwable {
     try (Table table = createTable()) {
       // put one row
       putOneRow(table);
@@ -164,8 +161,8 @@ public class TestCheckAndMutate {
 
       // put the same row again with C column deleted
       RowMutations rm = makeRowMutationsWithColumnCDeleted();
-      boolean res = table.checkAndMutate(ROWKEY, FAMILY, Bytes.toBytes("A"),
-        CompareOperator.EQUAL, Bytes.toBytes("a"), rm);
+      boolean res = table.checkAndMutate(ROWKEY, FAMILY).qualifier(Bytes.toBytes("A"))
+          .ifEquals(Bytes.toBytes("a")).thenMutate(rm);
       assertTrue(res);
 
       // get row back and assert the values
@@ -174,8 +171,8 @@ public class TestCheckAndMutate {
       //Test that we get a region level exception
       try {
         rm = getBogusRowMutations();
-        table.checkAndMutate(ROWKEY, FAMILY, Bytes.toBytes("A"), CompareOperator.EQUAL,
-          Bytes.toBytes("a"), rm);
+        table.checkAndMutate(ROWKEY, FAMILY).qualifier(Bytes.toBytes("A"))
+            .ifEquals(Bytes.toBytes("a")).thenMutate(rm);
         fail("Expected NoSuchColumnFamilyException");
       } catch (RetriesExhaustedWithDetailsException e) {
         try {
@@ -186,4 +183,5 @@ public class TestCheckAndMutate {
       }
     }
   }
+
 }

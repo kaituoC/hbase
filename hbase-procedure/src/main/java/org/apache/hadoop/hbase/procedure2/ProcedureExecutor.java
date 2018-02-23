@@ -18,9 +18,6 @@
 
 package org.apache.hadoop.hbase.procedure2;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-import org.apache.hadoop.hbase.shaded.com.google.common.base.Preconditions;
-
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -30,34 +27,35 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.DelayQueue;
-import java.util.concurrent.TimeUnit;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.yetus.audience.InterfaceStability;
 import org.apache.hadoop.hbase.exceptions.IllegalArgumentIOException;
+import org.apache.hadoop.hbase.log.HBaseMarkers;
 import org.apache.hadoop.hbase.procedure2.Procedure.LockState;
 import org.apache.hadoop.hbase.procedure2.store.ProcedureStore;
 import org.apache.hadoop.hbase.procedure2.store.ProcedureStore.ProcedureIterator;
-import org.apache.hadoop.hbase.procedure2.util.DelayedUtil;
-import org.apache.hadoop.hbase.procedure2.util.DelayedUtil.DelayedWithTimeout;
 import org.apache.hadoop.hbase.procedure2.util.StringUtils;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos.ProcedureState;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.NonceKey;
 import org.apache.hadoop.hbase.util.Threads;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.yetus.audience.InterfaceStability;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.base.Preconditions;
+
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos.ProcedureState;
 
 /**
  * Thread Pool that executes the submitted procedures.
@@ -75,14 +73,14 @@ import org.apache.hadoop.hbase.util.Threads;
 @InterfaceAudience.Private
 @InterfaceStability.Evolving
 public class ProcedureExecutor<TEnvironment> {
-  private static final Log LOG = LogFactory.getLog(ProcedureExecutor.class);
+  private static final Logger LOG = LoggerFactory.getLogger(ProcedureExecutor.class);
 
   public static final String CHECK_OWNER_SET_CONF_KEY = "hbase.procedure.check.owner.set";
   private static final boolean DEFAULT_CHECK_OWNER_SET = false;
 
   public static final String WORKER_KEEP_ALIVE_TIME_CONF_KEY =
       "hbase.procedure.worker.keep.alive.time.msec";
-  private static final long DEFAULT_WORKER_KEEP_ALIVE_TIME = Long.MAX_VALUE;
+  private static final long DEFAULT_WORKER_KEEP_ALIVE_TIME = TimeUnit.MINUTES.toMillis(1);
 
   Testing testing = null;
   public static class Testing {
@@ -160,7 +158,7 @@ public class ProcedureExecutor<TEnvironment> {
    */
   private static class CompletedProcedureCleaner<TEnvironment>
       extends ProcedureInMemoryChore<TEnvironment> {
-    private static final Log LOG = LogFactory.getLog(CompletedProcedureCleaner.class);
+    private static final Logger LOG = LoggerFactory.getLogger(CompletedProcedureCleaner.class);
 
     private static final String CLEANER_INTERVAL_CONF_KEY = "hbase.procedure.cleaner.interval";
     private static final int DEFAULT_CLEANER_INTERVAL = 30 * 1000; // 30sec
@@ -216,20 +214,20 @@ public class ProcedureExecutor<TEnvironment> {
 
         // TODO: Select TTL based on Procedure type
         if (retainer.isExpired(now, evictTtl, evictAckTtl)) {
-          if (debugEnabled) {
-            LOG.debug("Evict completed " + proc);
+          // Failed procedures aren't persisted in WAL.
+          if (!(proc instanceof FailedProcedure)) {
+            batchIds[batchCount++] = entry.getKey();
+            if (batchCount == batchIds.length) {
+              store.delete(batchIds, 0, batchCount);
+              batchCount = 0;
+            }
           }
-          batchIds[batchCount++] = entry.getKey();
-          if (batchCount == batchIds.length) {
-            store.delete(batchIds, 0, batchCount);
-            batchCount = 0;
-          }
-          it.remove();
-
           final NonceKey nonceKey = proc.getNonceKey();
           if (nonceKey != null) {
             nonceKeysToProcIdsMap.remove(nonceKey);
           }
+          it.remove();
+          LOG.trace("Evict completed {}", proc);
         }
       }
       if (batchCount > 0) {
@@ -271,8 +269,9 @@ public class ProcedureExecutor<TEnvironment> {
   private CopyOnWriteArrayList<WorkerThread> workerThreads;
   private TimeoutExecutorThread timeoutExecutor;
   private int corePoolSize;
+  private int maxPoolSize;
 
-  private volatile long keepAliveTime = Long.MAX_VALUE;
+  private volatile long keepAliveTime;
 
   /**
    * Scheduler/Queue that contains runnable procedures.
@@ -313,7 +312,6 @@ public class ProcedureExecutor<TEnvironment> {
       @Override
       public void setMaxProcId(long maxProcId) {
         assert lastProcId.get() < 0 : "expected only one call to setMaxProcId()";
-        LOG.debug("Load max pid=" + maxProcId);
         lastProcId.set(maxProcId);
       }
 
@@ -501,7 +499,7 @@ public class ProcedureExecutor<TEnvironment> {
    *          a corrupted procedure is found on replay. otherwise false.
    */
   public void start(int numThreads, boolean abortOnCorruption) throws IOException {
-    if (running.getAndSet(true)) {
+    if (!running.compareAndSet(false, true)) {
       LOG.warn("Already running");
       return;
     }
@@ -509,13 +507,15 @@ public class ProcedureExecutor<TEnvironment> {
     // We have numThreads executor + one timer thread used for timing out
     // procedures and triggering periodic procedures.
     this.corePoolSize = numThreads;
-    LOG.info("Starting ProcedureExecutor Worker threads (ProcExecWrkr)=" + corePoolSize);
+    this.maxPoolSize = 10 * numThreads;
+    LOG.info("Starting {} core workers (bigger of cpus/4 or 16) with max (burst) worker count={}",
+        corePoolSize, maxPoolSize);
 
     // Create the Thread Group for the executors
-    threadGroup = new ThreadGroup("ProcExecThrdGrp");
+    threadGroup = new ThreadGroup("PEWorkerGroup");
 
     // Create the timeout executor
-    timeoutExecutor = new TimeoutExecutorThread(threadGroup);
+    timeoutExecutor = new TimeoutExecutorThread(this, threadGroup);
 
     // Create the workers
     workerId.set(0);
@@ -530,8 +530,8 @@ public class ProcedureExecutor<TEnvironment> {
     st = EnvironmentEdgeManager.currentTime();
     store.recoverLease();
     et = EnvironmentEdgeManager.currentTime();
-    LOG.info(String.format("Recover store (%s) lease: %s",
-      store.getClass().getSimpleName(), StringUtils.humanTimeDiff(et - st)));
+    LOG.info("Recovered {} lease in {}", store.getClass().getSimpleName(),
+      StringUtils.humanTimeDiff(et - st));
 
     // start the procedure scheduler
     scheduler.start();
@@ -544,13 +544,11 @@ public class ProcedureExecutor<TEnvironment> {
     st = EnvironmentEdgeManager.currentTime();
     load(abortOnCorruption);
     et = EnvironmentEdgeManager.currentTime();
-    LOG.info(String.format("Load store (%s): %s",
-      store.getClass().getSimpleName(), StringUtils.humanTimeDiff(et - st)));
+    LOG.info("Loaded {} in {}", store.getClass().getSimpleName(),
+      StringUtils.humanTimeDiff(et - st));
 
     // Start the executors. Here we must have the lastProcId set.
-    if (LOG.isTraceEnabled()) {
-      LOG.trace("Start workers " + workerThreads.size());
-    }
+    LOG.trace("Start workers {}", workerThreads.size());
     timeoutExecutor.start();
     for (WorkerThread worker: workerThreads) {
       worker.start();
@@ -591,7 +589,7 @@ public class ProcedureExecutor<TEnvironment> {
     try {
       threadGroup.destroy();
     } catch (IllegalThreadStateException e) {
-      LOG.error("Thread group " + threadGroup + " contains running threads");
+      LOG.error("ThreadGroup " + threadGroup + " contains running threads; " + e.getMessage());
       threadGroup.list();
     } finally {
       threadGroup = null;
@@ -645,7 +643,7 @@ public class ProcedureExecutor<TEnvironment> {
     return this.store;
   }
 
-  protected ProcedureScheduler getScheduler() {
+  ProcedureScheduler getScheduler() {
     return scheduler;
   }
 
@@ -880,6 +878,9 @@ public class ProcedureExecutor<TEnvironment> {
   public void submitProcedures(final Procedure[] procs) {
     Preconditions.checkArgument(lastProcId.get() >= 0);
     Preconditions.checkArgument(isRunning(), "executor not running");
+    if (procs == null || procs.length <= 0) {
+      return;
+    }
 
     // Prepare procedure
     for (int i = 0; i < procs.length; ++i) {
@@ -930,18 +931,18 @@ public class ProcedureExecutor<TEnvironment> {
    * Send an abort notification the specified procedure.
    * Depending on the procedure implementation the abort can be considered or ignored.
    * @param procId the procedure to abort
-   * @return true if the procedure exist and has received the abort, otherwise false.
+   * @return true if the procedure exists and has received the abort, otherwise false.
    */
   public boolean abort(final long procId) {
     return abort(procId, true);
   }
 
   /**
-   * Send an abort notification the specified procedure.
-   * Depending on the procedure implementation the abort can be considered or ignored.
+   * Send an abort notification to the specified procedure.
+   * Depending on the procedure implementation, the abort can be considered or ignored.
    * @param procId the procedure to abort
    * @param mayInterruptIfRunning if the proc completed at least one step, should it be aborted?
-   * @return true if the procedure exist and has received the abort, otherwise false.
+   * @return true if the procedure exists and has received the abort, otherwise false.
    */
   public boolean abort(final long procId, final boolean mayInterruptIfRunning) {
     final Procedure proc = procedures.get(procId);
@@ -1149,7 +1150,7 @@ public class ProcedureExecutor<TEnvironment> {
     return procedures.keySet();
   }
 
-  private Long getRootProcedureId(Procedure proc) {
+  Long getRootProcedureId(Procedure proc) {
     return Procedure.getRootProcedureId(procedures, proc);
   }
 
@@ -1361,7 +1362,7 @@ public class ProcedureExecutor<TEnvironment> {
       return LockState.LOCK_YIELD_WAIT;
     } catch (Throwable e) {
       // Catch NullPointerExceptions or similar errors...
-      LOG.fatal("CODE-BUG: Uncaught runtime exception for " + proc, e);
+      LOG.error(HBaseMarkers.FATAL, "CODE-BUG: Uncaught runtime exception for " + proc, e);
     }
 
     // allows to kill the executor before something is stored to the wal.
@@ -1606,7 +1607,6 @@ public class ProcedureExecutor<TEnvironment> {
     }
 
     // If this procedure is the last child awake the parent procedure
-    LOG.info("Finish suprocedure " + procedure);
     if (parent.tryRunnable()) {
       // If we succeeded in making the parent runnable -- i.e. all of its
       // children have completed, move parent to front of the queue.
@@ -1697,15 +1697,24 @@ public class ProcedureExecutor<TEnvironment> {
     sendProcedureFinishedNotification(proc.getProcId());
   }
 
+  RootProcedureState getProcStack(long rootProcId) {
+    return rollbackStack.get(rootProcId);
+  }
+
   // ==========================================================================
   //  Worker Thread
   // ==========================================================================
-  private final class WorkerThread extends StoppableThread {
+  private class WorkerThread extends StoppableThread {
     private final AtomicLong executionStartTime = new AtomicLong(Long.MAX_VALUE);
-    private Procedure activeProcedure;
+    private volatile Procedure<?> activeProcedure;
 
-    public WorkerThread(final ThreadGroup group) {
-      super(group, "ProcExecWrkr-" + workerId.incrementAndGet());
+    public WorkerThread(ThreadGroup group) {
+      this(group, "PEWorker-");
+    }
+
+    protected WorkerThread(ThreadGroup group, String prefix) {
+      super(group, prefix + workerId.incrementAndGet());
+      setDaemon(true);
     }
 
     @Override
@@ -1718,36 +1727,35 @@ public class ProcedureExecutor<TEnvironment> {
       long lastUpdate = EnvironmentEdgeManager.currentTime();
       try {
         while (isRunning() && keepAlive(lastUpdate)) {
-          this.activeProcedure = scheduler.poll(keepAliveTime, TimeUnit.MILLISECONDS);
-          if (this.activeProcedure == null) continue;
+          Procedure<?> proc = scheduler.poll(keepAliveTime, TimeUnit.MILLISECONDS);
+          if (proc == null) {
+            continue;
+          }
+          this.activeProcedure = proc;
           int activeCount = activeExecutorCount.incrementAndGet();
           int runningCount = store.setRunningProcedureCount(activeCount);
-          if (LOG.isTraceEnabled()) {
-            LOG.trace("Execute pid=" + this.activeProcedure.getProcId() +
-                " runningCount=" + runningCount + ", activeCount=" + activeCount);
-          }
+          LOG.trace("Execute pid={} runningCount={}, activeCount={}", proc.getProcId(),
+            runningCount, activeCount);
           executionStartTime.set(EnvironmentEdgeManager.currentTime());
           try {
-            executeProcedure(this.activeProcedure);
+            executeProcedure(proc);
           } catch (AssertionError e) {
-            LOG.info("ASSERT pid=" + this.activeProcedure.getProcId(), e);
+            LOG.info("ASSERT pid=" + proc.getProcId(), e);
             throw e;
           } finally {
             activeCount = activeExecutorCount.decrementAndGet();
             runningCount = store.setRunningProcedureCount(activeCount);
-            if (LOG.isTraceEnabled()) {
-              LOG.trace("Halt pid=" + this.activeProcedure.getProcId() +
-                  " runningCount=" + runningCount + ", activeCount=" + activeCount);
-            }
+            LOG.trace("Halt pid={} runningCount={}, activeCount={}", proc.getProcId(),
+              runningCount, activeCount);
             this.activeProcedure = null;
             lastUpdate = EnvironmentEdgeManager.currentTime();
             executionStartTime.set(Long.MAX_VALUE);
           }
         }
       } catch (Throwable t) {
-        LOG.warn("Worker terminating UNNATURALLY " + this.activeProcedure, t);
+        LOG.warn("Worker terminating UNNATURALLY {}", this.activeProcedure, t);
       } finally {
-        LOG.debug("Worker terminated.");
+        LOG.trace("Worker terminated.");
       }
       workerThreads.remove(this);
     }
@@ -1765,165 +1773,23 @@ public class ProcedureExecutor<TEnvironment> {
       return EnvironmentEdgeManager.currentTime() - executionStartTime.get();
     }
 
-    private boolean keepAlive(final long lastUpdate) {
-      if (workerThreads.size() <= corePoolSize) return true;
-      return (EnvironmentEdgeManager.currentTime() - lastUpdate) < keepAliveTime;
+    // core worker never timeout
+    protected boolean keepAlive(long lastUpdate) {
+      return true;
     }
   }
 
-  /**
-   * Runs task on a period such as check for stuck workers.
-   * @see InlineChore
-   */
-  private final class TimeoutExecutorThread extends StoppableThread {
-    private final DelayQueue<DelayedWithTimeout> queue = new DelayQueue<>();
+  // A worker thread which can be added when core workers are stuck. Will timeout after
+  // keepAliveTime if there is no procedure to run.
+  private final class KeepAliveWorkerThread extends WorkerThread {
 
-    public TimeoutExecutorThread(final ThreadGroup group) {
-      super(group, "ProcExecTimeout");
+    public KeepAliveWorkerThread(ThreadGroup group) {
+      super(group, "KeepAlivePEWorker-");
     }
 
     @Override
-    public void sendStopSignal() {
-      queue.add(DelayedUtil.DELAYED_POISON);
-    }
-
-    @Override
-    public void run() {
-      final boolean traceEnabled = LOG.isTraceEnabled();
-      while (isRunning()) {
-        final DelayedWithTimeout task = DelayedUtil.takeWithoutInterrupt(queue);
-        if (task == null || task == DelayedUtil.DELAYED_POISON) {
-          // the executor may be shutting down,
-          // and the task is just the shutdown request
-          continue;
-        }
-
-        if (traceEnabled) {
-          LOG.trace("Executing " + task);
-        }
-
-        // execute the task
-        if (task instanceof InlineChore) {
-          execInlineChore((InlineChore)task);
-        } else if (task instanceof DelayedProcedure) {
-          execDelayedProcedure((DelayedProcedure)task);
-        } else {
-          LOG.error("CODE-BUG unknown timeout task type " + task);
-        }
-      }
-    }
-
-    public void add(final InlineChore chore) {
-      chore.refreshTimeout();
-      queue.add(chore);
-    }
-
-    public void add(final Procedure procedure) {
-      assert procedure.getState() == ProcedureState.WAITING_TIMEOUT;
-      LOG.info("ADDED " + procedure + "; timeout=" + procedure.getTimeout() +
-          ", timestamp=" + procedure.getTimeoutTimestamp());
-      queue.add(new DelayedProcedure(procedure));
-    }
-
-    public boolean remove(final Procedure procedure) {
-      return queue.remove(new DelayedProcedure(procedure));
-    }
-
-    private void execInlineChore(final InlineChore chore) {
-      chore.run();
-      add(chore);
-    }
-
-    private void execDelayedProcedure(final DelayedProcedure delayed) {
-      // TODO: treat this as a normal procedure, add it to the scheduler and
-      // let one of the workers handle it.
-      // Today we consider ProcedureInMemoryChore as InlineChores
-      final Procedure procedure = delayed.getObject();
-      if (procedure instanceof ProcedureInMemoryChore) {
-        executeInMemoryChore((ProcedureInMemoryChore)procedure);
-        // if the procedure is in a waiting state again, put it back in the queue
-        procedure.updateTimestamp();
-        if (procedure.isWaiting()) {
-          delayed.setTimeout(procedure.getTimeoutTimestamp());
-          queue.add(delayed);
-        }
-      } else {
-        executeTimedoutProcedure(procedure);
-      }
-    }
-
-    private void executeInMemoryChore(final ProcedureInMemoryChore chore) {
-      if (!chore.isWaiting()) return;
-
-      // The ProcedureInMemoryChore is a special case, and it acts as a chore.
-      // instead of bringing the Chore class in, we reuse this timeout thread for
-      // this special case.
-      try {
-        chore.periodicExecute(getEnvironment());
-      } catch (Throwable e) {
-        LOG.error("Ignoring " + chore + " exception: " + e.getMessage(), e);
-      }
-    }
-
-    private void executeTimedoutProcedure(final Procedure proc) {
-      // The procedure received a timeout. if the procedure itself does not handle it,
-      // call abort() and add the procedure back in the queue for rollback.
-      if (proc.setTimeoutFailure(getEnvironment())) {
-        long rootProcId = Procedure.getRootProcedureId(procedures, proc);
-        RootProcedureState procStack = rollbackStack.get(rootProcId);
-        procStack.abort();
-        store.update(proc);
-        scheduler.addFront(proc);
-      }
-    }
-  }
-
-  private static final class DelayedProcedure
-      extends DelayedUtil.DelayedContainerWithTimestamp<Procedure> {
-    public DelayedProcedure(final Procedure procedure) {
-      super(procedure, procedure.getTimeoutTimestamp());
-    }
-  }
-
-  private static abstract class StoppableThread extends Thread {
-    public StoppableThread(final ThreadGroup group, final String name) {
-      super(group, name);
-    }
-
-    public abstract void sendStopSignal();
-
-    public void awaitTermination() {
-      try {
-        final long startTime = EnvironmentEdgeManager.currentTime();
-        for (int i = 0; isAlive(); ++i) {
-          sendStopSignal();
-          join(250);
-          if (i > 0 && (i % 8) == 0) {
-            LOG.warn("Waiting termination of thread " + getName() + ", " +
-              StringUtils.humanTimeDiff(EnvironmentEdgeManager.currentTime() - startTime));
-          }
-        }
-      } catch (InterruptedException e) {
-        LOG.warn(getName() + " join wait got interrupted", e);
-      }
-    }
-  }
-
-  // ==========================================================================
-  //  Inline Chores (executors internal chores)
-  // ==========================================================================
-  private static abstract class InlineChore extends DelayedUtil.DelayedObject implements Runnable {
-    private long timeout;
-
-    public abstract int getTimeoutInterval();
-
-    protected void refreshTimeout() {
-      this.timeout = EnvironmentEdgeManager.currentTime() + getTimeoutInterval();
-    }
-
-    @Override
-    public long getTimeout() {
-      return timeout;
+    protected boolean keepAlive(long lastUpdate) {
+      return EnvironmentEdgeManager.currentTime() - lastUpdate < keepAliveTime;
     }
   }
 
@@ -1968,32 +1834,35 @@ public class ProcedureExecutor<TEnvironment> {
     private int checkForStuckWorkers() {
       // check if any of the worker is stuck
       int stuckCount = 0;
-      for (WorkerThread worker: workerThreads) {
+      for (WorkerThread worker : workerThreads) {
         if (worker.getCurrentRunTime() < stuckThreshold) {
           continue;
         }
 
         // WARN the worker is stuck
         stuckCount++;
-        LOG.warn("Worker stuck " + worker +
-            " run time " + StringUtils.humanTimeDiff(worker.getCurrentRunTime()));
+        LOG.warn("Worker stuck {} run time {}", worker,
+          StringUtils.humanTimeDiff(worker.getCurrentRunTime()));
       }
       return stuckCount;
     }
 
     private void checkThreadCount(final int stuckCount) {
       // nothing to do if there are no runnable tasks
-      if (stuckCount < 1 || !scheduler.hasRunnables()) return;
+      if (stuckCount < 1 || !scheduler.hasRunnables()) {
+        return;
+      }
 
       // add a new thread if the worker stuck percentage exceed the threshold limit
       // and every handler is active.
-      final float stuckPerc = ((float)stuckCount) / workerThreads.size();
-      if (stuckPerc >= addWorkerStuckPercentage &&
-          activeExecutorCount.get() == workerThreads.size()) {
-        final WorkerThread worker = new WorkerThread(threadGroup);
+      final float stuckPerc = ((float) stuckCount) / workerThreads.size();
+      // let's add new worker thread more aggressively, as they will timeout finally if there is no
+      // work to do.
+      if (stuckPerc >= addWorkerStuckPercentage && workerThreads.size() < maxPoolSize) {
+        final KeepAliveWorkerThread worker = new KeepAliveWorkerThread(threadGroup);
         workerThreads.add(worker);
         worker.start();
-        LOG.debug("Added new worker thread " + worker);
+        LOG.debug("Added new worker thread {}", worker);
       }
     }
 

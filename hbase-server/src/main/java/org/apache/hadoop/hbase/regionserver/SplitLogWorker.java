@@ -23,30 +23,28 @@ import java.io.InterruptedIOException;
 import java.net.ConnectException;
 import java.net.SocketTimeoutException;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.NotServingRegionException;
 import org.apache.hadoop.hbase.Server;
 import org.apache.hadoop.hbase.client.RetriesExhaustedException;
-import org.apache.hadoop.hbase.coordination.BaseCoordinatedStateManager;
 import org.apache.hadoop.hbase.coordination.SplitLogWorkerCoordination;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.ZooKeeperProtos.SplitLogTask.RecoveryMode;
 import org.apache.hadoop.hbase.wal.WALFactory;
 import org.apache.hadoop.hbase.wal.WALSplitter;
 import org.apache.hadoop.hbase.util.CancelableProgressable;
 import org.apache.hadoop.hbase.util.ExceptionUtil;
 import org.apache.hadoop.hbase.util.FSUtils;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 /**
  * This worker is spawned in every regionserver, including master. The Worker waits for log
- * splitting tasks to be put up by the {@link org.apache.hadoop.hbase.master.SplitLogManager} 
- * running in the master and races with other workers in other serves to acquire those tasks. 
+ * splitting tasks to be put up by the {@link org.apache.hadoop.hbase.master.SplitLogManager}
+ * running in the master and races with other workers in other serves to acquire those tasks.
  * The coordination is done via coordination engine.
  * <p>
  * If a worker has successfully moved the task from state UNASSIGNED to OWNED then it owns the task.
@@ -63,7 +61,7 @@ import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTe
 @InterfaceAudience.Private
 public class SplitLogWorker implements Runnable {
 
-  private static final Log LOG = LogFactory.getLog(SplitLogWorker.class);
+  private static final Logger LOG = LoggerFactory.getLogger(SplitLogWorker.class);
 
   Thread worker;
   // thread pool which executes recovery work
@@ -75,19 +73,16 @@ public class SplitLogWorker implements Runnable {
       TaskExecutor splitTaskExecutor) {
     this.server = server;
     this.conf = conf;
-    this.coordination =
-        ((BaseCoordinatedStateManager) hserver.getCoordinatedStateManager())
-            .getSplitLogWorkerCoordination();
-    this.server = server;
+    this.coordination = hserver.getCoordinatedStateManager().getSplitLogWorkerCoordination();
     coordination.init(server, conf, splitTaskExecutor, this);
   }
 
   public SplitLogWorker(final Server hserver, final Configuration conf,
       final RegionServerServices server, final LastSequenceId sequenceIdChecker,
       final WALFactory factory) {
-    this(server, conf, server, new TaskExecutor() {
+    this(hserver, conf, server, new TaskExecutor() {
       @Override
-      public Status exec(String filename, RecoveryMode mode, CancelableProgressable p) {
+      public Status exec(String filename, CancelableProgressable p) {
         Path walDir;
         FileSystem fs;
         try {
@@ -102,7 +97,8 @@ public class SplitLogWorker implements Runnable {
         // encountered a bad non-retry-able persistent error.
         try {
           if (!WALSplitter.splitLogFile(walDir, fs.getFileStatus(new Path(walDir, filename)),
-            fs, conf, p, sequenceIdChecker, server.getCoordinatedStateManager(), mode, factory)) {
+            fs, conf, p, sequenceIdChecker,
+              server.getCoordinatedStateManager().getSplitLogWorkerCoordination(), factory)) {
             return Status.PREEMPTED;
           }
         } catch (InterruptedIOException iioe) {
@@ -186,7 +182,7 @@ public class SplitLogWorker implements Runnable {
    * acquired by a {@link SplitLogWorker}. Since there isn't a water-tight
    * guarantee that two workers will not be executing the same task therefore it
    * is better to have workers prepare the task and then have the
-   * {@link org.apache.hadoop.hbase.master.SplitLogManager} commit the work in 
+   * {@link org.apache.hadoop.hbase.master.SplitLogManager} commit the work in
    * SplitLogManager.TaskFinisher
    */
   public interface TaskExecutor {
@@ -196,7 +192,7 @@ public class SplitLogWorker implements Runnable {
       RESIGNED(),
       PREEMPTED()
     }
-    Status exec(String name, RecoveryMode mode, CancelableProgressable p);
+    Status exec(String name, CancelableProgressable p);
   }
 
   /**

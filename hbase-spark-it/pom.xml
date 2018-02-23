@@ -159,26 +159,32 @@
           </execution>
         </executions>
       </plugin>
-          <plugin>
-            <artifactId>maven-dependency-plugin</artifactId>
-            <executions>
-              <execution>
-                <id>create-mrapp-generated-classpath</id>
-                <phase>generate-test-resources</phase>
-                <goals>
-                  <goal>build-classpath</goal>
-                </goals>
-                <configuration>
-                  <!-- needed to run the unit test for DS to generate
-                  the required classpath that is required in the env
-                  of the launch container in the mini cluster
-                  -->
-                  <outputFile>${project.build.directory}/test-classes/spark-generated-classpath</outputFile>
-                </configuration>
-              </execution>
-            </executions>
-          </plugin>
-
+      <plugin>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>create-mrapp-generated-classpath</id>
+            <phase>generate-test-resources</phase>
+            <goals>
+              <goal>build-classpath</goal>
+            </goals>
+            <configuration>
+              <!-- needed to run the unit test for DS to generate
+              the required classpath that is required in the env
+              of the launch container in the mini cluster
+              -->
+              <outputFile>${project.build.directory}/test-classes/spark-generated-classpath</outputFile>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+        <configuration>
+          <failOnViolation>true</failOnViolation>
+        </configuration>
+      </plugin>
     </plugins>
   </build>
 
@@ -224,8 +230,8 @@
       <artifactId>hbase-testing-util</artifactId>
     </dependency>
     <dependency>
-      <groupId>commons-logging</groupId>
-      <artifactId>commons-logging</artifactId>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
     </dependency>
     <dependency>
       <groupId>commons-cli</groupId>

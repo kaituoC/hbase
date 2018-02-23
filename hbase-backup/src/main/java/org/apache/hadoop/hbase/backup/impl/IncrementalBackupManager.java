@@ -26,8 +26,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Set;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -38,11 +36,13 @@ import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.backup.impl.BackupSystemTable.WALItem;
 import org.apache.hadoop.hbase.backup.master.LogRollMasterProcedureManager;
 import org.apache.hadoop.hbase.backup.util.BackupUtils;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.wal.AbstractFSWALProvider;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * After a full backup was created, the incremental backup will only store the changes made after
@@ -51,7 +51,7 @@ import org.apache.hadoop.hbase.wal.AbstractFSWALProvider;
  */
 @InterfaceAudience.Private
 public class IncrementalBackupManager extends BackupManager {
-  public static final Log LOG = LogFactory.getLog(IncrementalBackupManager.class);
+  public static final Logger LOG = LoggerFactory.getLogger(IncrementalBackupManager.class);
 
   public IncrementalBackupManager(Connection conn, Configuration conf) throws IOException {
     super(conn, conf);
@@ -63,8 +63,7 @@ public class IncrementalBackupManager extends BackupManager {
    * @return The new HashMap of RS log time stamps after the log roll for this incremental backup.
    * @throws IOException exception
    */
-  public HashMap<String, Long> getIncrBackupLogFileMap()
-      throws IOException {
+  public HashMap<String, Long> getIncrBackupLogFileMap() throws IOException {
     List<String> logList;
     HashMap<String, Long> newTimestamps;
     HashMap<String, Long> previousTimestampMins;
@@ -89,14 +88,12 @@ public class IncrementalBackupManager extends BackupManager {
     }
 
     LOG.info("Execute roll log procedure for incremental backup ...");
-    HashMap<String, String> props = new HashMap<String, String>();
+    HashMap<String, String> props = new HashMap<>();
     props.put("backupRoot", backupInfo.getBackupRootDir());
 
-    try (Admin admin = conn.getAdmin();) {
-
+    try (Admin admin = conn.getAdmin()) {
       admin.execProcedure(LogRollMasterProcedureManager.ROLLLOG_PROCEDURE_SIGNATURE,
         LogRollMasterProcedureManager.ROLLLOG_PROCEDURE_NAME, props);
-
     }
     newTimestamps = readRegionServerLastLogRollResult();
 
@@ -111,12 +108,12 @@ public class IncrementalBackupManager extends BackupManager {
   }
 
   /**
-   * Get list of WAL files eligible for incremental backup
+   * Get list of WAL files eligible for incremental backup.
+   *
    * @return list of WAL files
-   * @throws IOException
+   * @throws IOException if getting the list of WAL files fails
    */
-  public List<String> getIncrBackupLogFileList()
-      throws IOException {
+  public List<String> getIncrBackupLogFileList() throws IOException {
     List<String> logList;
     HashMap<String, Long> newTimestamps;
     HashMap<String, Long> previousTimestampMins;
@@ -156,14 +153,17 @@ public class IncrementalBackupManager extends BackupManager {
 
   private List<String> excludeAlreadyBackedUpWALs(List<String> logList,
       List<WALItem> logFromSystemTable) {
-
     Set<String> walFileNameSet = convertToSet(logFromSystemTable);
 
-    List<String> list = new ArrayList<String>();
+    List<String> list = new ArrayList<>();
     for (int i=0; i < logList.size(); i++) {
       Path p = new Path(logList.get(i));
       String name  = p.getName();
-      if (walFileNameSet.contains(name)) continue;
+
+      if (walFileNameSet.contains(name)) {
+        continue;
+      }
+
       list.add(logList.get(i));
     }
     return list;
@@ -171,12 +171,11 @@ public class IncrementalBackupManager extends BackupManager {
 
   /**
    * Create Set of WAL file names (not full path names)
-   * @param logFromSystemTable
+   * @param logFromSystemTable the logs from the system table to convert
    * @return set of WAL file names
    */
   private Set<String> convertToSet(List<WALItem> logFromSystemTable) {
-
-    Set<String> set = new HashSet<String>();
+    Set<String> set = new HashSet<>();
     for (int i=0; i < logFromSystemTable.size(); i++) {
       WALItem item = logFromSystemTable.get(i);
       set.add(item.walFile);
@@ -190,11 +189,11 @@ public class IncrementalBackupManager extends BackupManager {
    * @param olderTimestamps timestamp map for each region server of the last backup.
    * @param newestTimestamps timestamp map for each region server that the backup should lead to.
    * @return list of log files which needs to be added to this backup
-   * @throws IOException
+   * @throws IOException if getting the WAL files from the backup system fails
    */
   private List<WALItem> getLogFilesFromBackupSystem(HashMap<String, Long> olderTimestamps,
       HashMap<String, Long> newestTimestamps, String backupRoot) throws IOException {
-    List<WALItem> logFiles = new ArrayList<WALItem>();
+    List<WALItem> logFiles = new ArrayList<>();
     Iterator<WALItem> it = getWALFilesFromBackupSystem();
     while (it.hasNext()) {
       WALItem item = it.next();
@@ -250,8 +249,8 @@ public class IncrementalBackupManager extends BackupManager {
     FileSystem fs = rootdir.getFileSystem(conf);
     NewestLogFilter pathFilter = new NewestLogFilter();
 
-    List<String> resultLogFiles = new ArrayList<String>();
-    List<String> newestLogs = new ArrayList<String>();
+    List<String> resultLogFiles = new ArrayList<>();
+    List<String> newestLogs = new ArrayList<>();
 
     /*
      * The old region servers and timestamps info we kept in backup system table may be out of sync
@@ -261,7 +260,6 @@ public class IncrementalBackupManager extends BackupManager {
      * with. We'll just use all the logs in that directory. We always write up-to-date region server
      * and timestamp info to backup system table at the end of successful backup.
      */
-
     FileStatus[] rss;
     Path p;
     String host;
@@ -383,5 +381,4 @@ public class IncrementalBackupManager extends BackupManager {
       }
     }
   }
-
 }

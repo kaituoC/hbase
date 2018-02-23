@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -29,15 +29,13 @@ import java.io.IOException;
 import java.security.SecureRandom;
 import java.util.List;
 import java.util.UUID;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
@@ -52,12 +50,20 @@ import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.RedundantKVGenerator;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category({IOTests.class, SmallTests.class})
 public class TestHFileEncryption {
-  private static final Log LOG = LogFactory.getLog(TestHFileEncryption.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestHFileEncryption.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestHFileEncryption.class);
   private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   private static final SecureRandom RNG = new SecureRandom();
 
@@ -122,7 +128,7 @@ public class TestHFileEncryption {
     return b.getOnDiskSizeWithHeader();
   }
 
-  @Test(timeout=20000)
+  @Test
   public void testDataBlockEncryption() throws IOException {
     final int blocks = 10;
     final int[] blockSizes = new int[blocks];
@@ -158,7 +164,7 @@ public class TestHFileEncryption {
     }
   }
 
-  @Test(timeout=20000)
+  @Test
   public void testHFileEncryptionMetadata() throws Exception {
     Configuration conf = TEST_UTIL.getConfiguration();
     CacheConfig cacheConf = new CacheConfig(conf);
@@ -196,7 +202,7 @@ public class TestHFileEncryption {
     }
   }
 
-  @Test(timeout=6000000)
+  @Test
   public void testHFileEncryption() throws Exception {
     // Create 1000 random test KVs
     RedundantKVGenerator generator = new RedundantKVGenerator();
@@ -262,7 +268,7 @@ public class TestHFileEncryption {
           assertTrue("Initial seekTo failed", scanner.seekTo());
           for (i = 0; i < 100; i++) {
             KeyValue kv = testKvs.get(RNG.nextInt(testKvs.size()));
-            assertEquals("Unable to find KV as expected: " + kv, scanner.seekTo(kv), 0);
+            assertEquals("Unable to find KV as expected: " + kv, 0, scanner.seekTo(kv));
           }
         } finally {
           scanner.close();

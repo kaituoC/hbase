@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -29,6 +28,8 @@ import java.util.Arrays;
 import java.util.Calendar;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
@@ -36,17 +37,14 @@ import java.util.concurrent.RejectedExecutionHandler;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-
 import javax.crypto.spec.SecretKeySpec;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HConstants;
@@ -69,6 +67,7 @@ import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.coprocessor.ObserverContext;
+import org.apache.hadoop.hbase.coprocessor.RegionCoprocessor;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.coprocessor.RegionObserver;
 import org.apache.hadoop.hbase.io.HFileLink;
@@ -97,14 +96,22 @@ import org.apache.hadoop.hbase.util.Threads;
 import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category(LargeTests.class)
 public class TestMobCompactor {
-  private static final Log LOG = LogFactory.getLog(TestMobCompactor.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestMobCompactor.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestMobCompactor.class);
   private final static HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   private static Configuration conf = null;
   private TableName tableName;
@@ -271,7 +278,7 @@ public class TestMobCompactor {
     LOG.info("alter status finished");
   }
 
-  @Test(timeout = 300000)
+  @Test
   public void testMinorCompaction() throws Exception {
     resetConf();
     int mergeSize = 5000;
@@ -421,7 +428,7 @@ public class TestMobCompactor {
         new String[] { "20150907", "20151128", "20151205", "20160103" }, false);
   }
 
-  @Test(timeout = 300000)
+  @Test
   public void testCompactionWithHFileLink() throws IOException, InterruptedException {
     resetConf();
     String tableNameAsString = "testCompactionWithHFileLink";
@@ -510,7 +517,7 @@ public class TestMobCompactor {
     assertRefFileNameEqual(family1);
   }
 
-  @Test(timeout = 300000)
+  @Test
   public void testMajorCompactionFromAdmin() throws Exception {
     resetConf();
     int mergeSize = 5000;
@@ -585,7 +592,7 @@ public class TestMobCompactor {
     table.close();
   }
 
-  @Test(timeout = 300000)
+  @Test
   public void testScannerOnBulkLoadRefHFiles() throws Exception {
     resetConf();
     setUp("testScannerOnBulkLoadRefHFiles");
@@ -645,7 +652,7 @@ public class TestMobCompactor {
    * is compacted with some other normal hfiles. This is to make sure the mvcc is included
    * after compaction for mob enabled store files.
    */
-  @Test(timeout = 300000)
+  @Test
   public void testGetAfterCompaction() throws Exception {
     resetConf();
     conf.setLong(TimeToLiveHFileCleaner.TTL_CONF_KEY, 0);
@@ -712,6 +719,9 @@ public class TestMobCompactor {
     while (fileList.length != num) {
       Thread.sleep(50);
       fileList = fs.listStatus(path);
+      for (FileStatus fileStatus: fileList) {
+        LOG.info(Objects.toString(fileStatus));
+      }
     }
   }
 
@@ -719,12 +729,17 @@ public class TestMobCompactor {
    * This copro overwrites the default compaction policy. It always chooses two latest hfiles and
    * compacts them into a new one.
    */
-  public static class CompactTwoLatestHfilesCopro implements RegionObserver {
+  public static class CompactTwoLatestHfilesCopro implements RegionCoprocessor, RegionObserver {
+
+    @Override
+    public Optional<RegionObserver> getRegionObserver() {
+      return Optional.of(this);
+    }
 
     @Override
     public void preCompactSelection(ObserverContext<RegionCoprocessorEnvironment> c, Store store,
-        List<StoreFile> candidates, CompactionLifeCycleTracker tracker) throws IOException {
-
+        List<? extends StoreFile> candidates, CompactionLifeCycleTracker tracker)
+        throws IOException {
       int count = candidates.size();
       if (count >= 2) {
         for (int i = 0; i < count - 2; i++) {
@@ -815,7 +830,7 @@ public class TestMobCompactor {
       Assert.assertTrue(hasFiles);
       Path path = files[0].getPath();
       CacheConfig cacheConf = new CacheConfig(conf);
-      StoreFile sf = new HStoreFile(TEST_UTIL.getTestFileSystem(), path, conf, cacheConf,
+      HStoreFile sf = new HStoreFile(TEST_UTIL.getTestFileSystem(), path, conf, cacheConf,
         BloomType.NONE, true);
       sf.initReader();
       HFile.Reader reader = sf.getReader().getHFileReader();
@@ -1030,7 +1045,7 @@ public class TestMobCompactor {
             }
           }
         });
-    ((ThreadPoolExecutor) pool).allowCoreThreadTimeOut(true);
+    pool.allowCoreThreadTimeOut(true);
     return pool;
   }
 

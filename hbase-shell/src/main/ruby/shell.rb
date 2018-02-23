@@ -71,14 +71,19 @@ module Shell
   class Shell
     attr_accessor :hbase
     attr_accessor :interactive
+    attr_accessor :return_values
     alias interactive? interactive
+    alias return_values? return_values
 
     @debug = false
     attr_accessor :debug
 
-    def initialize(hbase, interactive = true)
+    def initialize(hbase, interactive = true, return_values = !interactive)
       self.hbase = hbase
       self.interactive = interactive
+      self.return_values = return_values
+      # If we're in non-interactive mode, force return_values
+      self.return_values = true unless self.interactive
     end
 
     # Returns Admin class from admin.rb
@@ -135,16 +140,11 @@ module Shell
     end
 
     # call the method 'command' on the specified command
-    # If interactive is enabled, then we suppress the return value. The command should have
-    # printed relevant output.
-    # Return value is only useful in non-interactive mode, for e.g. tests.
+    # If return_values is false, then we suppress the return value. The command
+    # should have printed relevant output.
     def command(command, *args)
       ret = internal_command(command, :command, *args)
-      if interactive
-        return nil
-      else
-        return ret
-      end
+      ret if return_values
     end
 
     # call a specific internal method in the command instance
@@ -336,6 +336,7 @@ Shell.load_command_group(
     normalize
     normalizer_switch
     normalizer_enabled
+    is_in_maintenance_mode
     close_region
     compact
     flush
@@ -360,6 +361,7 @@ Shell.load_command_group(
     clear_compaction_queues
     list_deadservers
     clear_deadservers
+    clear_block_cache
   ],
   # TODO: remove older hlog_roll command
   aliases: {
@@ -376,11 +378,14 @@ Shell.load_command_group(
     list_peers
     enable_peer
     disable_peer
+    set_peer_replicate_all
     set_peer_namespaces
     append_peer_namespaces
     remove_peer_namespaces
+    set_peer_exclude_namespaces
     show_peer_tableCFs
     set_peer_tableCFs
+    set_peer_exclude_tableCFs
     set_peer_bandwidth
     list_replicated_tables
     append_peer_tableCFs
@@ -478,8 +483,11 @@ Shell.load_command_group(
     balance_rsgroup
     move_servers_rsgroup
     move_tables_rsgroup
+    move_namespaces_rsgroup
     move_servers_tables_rsgroup
+    move_servers_namespaces_rsgroup
     get_server_rsgroup
     get_table_rsgroup
+    remove_servers_rsgroup
   ]
 )

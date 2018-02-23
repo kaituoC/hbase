@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,12 +17,14 @@
  */
 package org.apache.hadoop.hbase.client;
 
+import com.google.protobuf.Descriptors;
+import com.google.protobuf.Message;
+import com.google.protobuf.RpcController;
 import java.io.Closeable;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collection;
 import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -31,7 +32,6 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeMap;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -39,18 +39,19 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Abortable;
-import org.apache.hadoop.hbase.ClusterStatus;
-import org.apache.hadoop.hbase.ClusterStatus.Option;
-import org.apache.hadoop.hbase.CompoundConfiguration;
+import org.apache.hadoop.hbase.CacheEvictionStats;
+import org.apache.hadoop.hbase.CacheEvictionStatsBuilder;
+import org.apache.hadoop.hbase.ClusterMetrics;
+import org.apache.hadoop.hbase.ClusterMetrics.Option;
+import org.apache.hadoop.hbase.ClusterMetricsBuilder;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HBaseConfiguration;
-import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HRegionLocation;
@@ -60,8 +61,9 @@ import org.apache.hadoop.hbase.MetaTableAccessor;
 import org.apache.hadoop.hbase.NamespaceDescriptor;
 import org.apache.hadoop.hbase.NamespaceNotFoundException;
 import org.apache.hadoop.hbase.NotServingRegionException;
-import org.apache.hadoop.hbase.RegionLoad;
 import org.apache.hadoop.hbase.RegionLocations;
+import org.apache.hadoop.hbase.RegionMetrics;
+import org.apache.hadoop.hbase.RegionMetricsBuilder;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableExistsException;
 import org.apache.hadoop.hbase.TableName;
@@ -69,9 +71,7 @@ import org.apache.hadoop.hbase.TableNotDisabledException;
 import org.apache.hadoop.hbase.TableNotFoundException;
 import org.apache.hadoop.hbase.UnknownRegionException;
 import org.apache.hadoop.hbase.ZooKeeperConnectionException;
-import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.yetus.audience.InterfaceStability;
-import org.apache.hadoop.hbase.client.replication.ReplicationSerDeHelper;
+import org.apache.hadoop.hbase.client.replication.ReplicationPeerConfigUtil;
 import org.apache.hadoop.hbase.client.replication.TableCFs;
 import org.apache.hadoop.hbase.client.security.SecurityCapability;
 import org.apache.hadoop.hbase.exceptions.TimeoutIOException;
@@ -86,12 +86,32 @@ import org.apache.hadoop.hbase.regionserver.wal.FailedLogCloseException;
 import org.apache.hadoop.hbase.replication.ReplicationException;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
 import org.apache.hadoop.hbase.replication.ReplicationPeerDescription;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.ServiceException;
+import org.apache.hadoop.hbase.snapshot.ClientSnapshotDescriptionUtils;
+import org.apache.hadoop.hbase.snapshot.HBaseSnapshotException;
+import org.apache.hadoop.hbase.snapshot.RestoreSnapshotException;
+import org.apache.hadoop.hbase.snapshot.SnapshotCreationException;
+import org.apache.hadoop.hbase.snapshot.UnknownSnapshotException;
+import org.apache.hadoop.hbase.util.Addressing;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
+import org.apache.hadoop.hbase.util.ForeignExceptionUtil;
+import org.apache.hadoop.hbase.util.Pair;
+import org.apache.hadoop.ipc.RemoteException;
+import org.apache.hadoop.util.StringUtils;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.yetus.audience.InterfaceStability;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.protobuf.ServiceException;
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.RequestConverter;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.AdminService;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.ClearCompactionQueuesRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.ClearRegionBlockCacheRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.ClearRegionBlockCacheResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.CompactRegionRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.FlushRegionRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.GetRegionInfoRequest;
@@ -151,8 +171,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.IsProcedur
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.IsProcedureDoneResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.IsSnapshotDoneRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.IsSnapshotDoneResponse;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListDeadServersRequest;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListDrainingRegionServersRequest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListDecommissionedRegionServersRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListNamespaceDescriptorsRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListTableDescriptorsByNamespaceRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.ListTableNamesByNamespaceRequest;
@@ -182,30 +201,13 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.TruncateTa
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.TruncateTableResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.UnassignRegionRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.AddReplicationPeerResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.DisableReplicationPeerResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.EnableReplicationPeerResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.GetReplicationPeerConfigResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.RemoveReplicationPeerResponse;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ReplicationProtos.UpdateReplicationPeerConfigResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos;
-import org.apache.hadoop.hbase.snapshot.ClientSnapshotDescriptionUtils;
-import org.apache.hadoop.hbase.snapshot.HBaseSnapshotException;
-import org.apache.hadoop.hbase.snapshot.RestoreSnapshotException;
-import org.apache.hadoop.hbase.snapshot.SnapshotCreationException;
-import org.apache.hadoop.hbase.snapshot.UnknownSnapshotException;
-import org.apache.hadoop.hbase.util.Addressing;
-import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
-import org.apache.hadoop.hbase.util.ForeignExceptionUtil;
-import org.apache.hadoop.hbase.util.Pair;
-import org.apache.hadoop.hbase.zookeeper.MasterAddressTracker;
-import org.apache.hadoop.hbase.zookeeper.MetaTableLocator;
-import org.apache.hadoop.hbase.zookeeper.ZooKeeperWatcher;
-import org.apache.hadoop.ipc.RemoteException;
-import org.apache.hadoop.util.StringUtils;
-import org.apache.zookeeper.KeeperException;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-import com.google.protobuf.Descriptors;
-import com.google.protobuf.Message;
-import com.google.protobuf.RpcController;
-import java.util.stream.Collectors;
 
 /**
  * HBaseAdmin is no longer a client API. It is marked InterfaceAudience.Private indicating that
@@ -226,13 +228,11 @@ import java.util.stream.Collectors;
 @InterfaceAudience.Private
 @InterfaceStability.Evolving
 public class HBaseAdmin implements Admin {
-  private static final Log LOG = LogFactory.getLog(HBaseAdmin.class);
-
-  private static final String ZK_IDENTIFIER_PREFIX =  "hbase-admin-on-";
+  private static final Logger LOG = LoggerFactory.getLogger(HBaseAdmin.class);
 
   private ClusterConnection connection;
 
-  private volatile Configuration conf;
+  private final Configuration conf;
   private final long pause;
   private final int numRetries;
   private final int syncWaitTimeout;
@@ -318,12 +318,8 @@ public class HBaseAdmin implements Admin {
   }
 
   @Override
-  public List<TableDescriptor> listTableDescriptors(String regex) throws IOException {
-    return listTableDescriptors(Pattern.compile(regex), false);
-  }
-
-  @Override
-  public List<TableDescriptor> listTableDescriptors(Pattern pattern, boolean includeSysTables) throws IOException {
+  public List<TableDescriptor> listTableDescriptors(Pattern pattern, boolean includeSysTables)
+      throws IOException {
     return executeCallable(new MasterCallable<List<TableDescriptor>>(getConnection(),
         getRpcControllerFactory()) {
       @Override
@@ -337,12 +333,8 @@ public class HBaseAdmin implements Admin {
   }
 
   @Override
-  public List<TableDescriptor> listTableDescriptors(String regex, boolean includeSysTables) throws IOException {
-    return listTableDescriptors(Pattern.compile(regex), includeSysTables);
-  }
-
-  @Override
-  public TableDescriptor getDescriptor(TableName tableName) throws TableNotFoundException, IOException {
+  public TableDescriptor getDescriptor(TableName tableName)
+      throws TableNotFoundException, IOException {
     return getTableDescriptor(tableName, getConnection(), rpcCallerFactory, rpcControllerFactory,
        operationTimeout, rpcTimeout);
   }
@@ -392,19 +384,27 @@ public class HBaseAdmin implements Admin {
       protected List<TableDescriptor> rpcCall() throws Exception {
         GetTableDescriptorsRequest req =
             RequestConverter.buildGetTableDescriptorsRequest(tableNames);
-          return ProtobufUtil.toTableDescriptorList(master.getTableDescriptors(getRpcController(), req));
+          return ProtobufUtil.toTableDescriptorList(master.getTableDescriptors(getRpcController(),
+              req));
       }
     });
   }
 
   @Override
   public List<RegionInfo> getRegions(final ServerName sn) throws IOException {
-    return getOnlineRegions(sn).stream().collect(Collectors.toList());
+    AdminService.BlockingInterface admin = this.connection.getAdmin(sn);
+    // TODO: There is no timeout on this controller. Set one!
+    HBaseRpcController controller = rpcControllerFactory.newController();
+    return ProtobufUtil.getOnlineRegions(controller, admin);
   }
 
   @Override
-  public List<RegionInfo> getRegions(final TableName tableName) throws IOException {
-    return getTableRegions(tableName).stream().collect(Collectors.toList());
+  public List<RegionInfo> getRegions(TableName tableName) throws IOException {
+    if (TableName.isMetaTableName(tableName)) {
+      return Arrays.asList(RegionInfoBuilder.FIRST_META_REGIONINFO);
+    } else {
+      return MetaTableAccessor.getTableRegions(connection, tableName, true);
+    }
   }
 
   private static class AbortProcedureFuture extends ProcedureFuture<Boolean> {
@@ -555,20 +555,23 @@ public class HBaseAdmin implements Admin {
   static HTableDescriptor getHTableDescriptor(final TableName tableName, Connection connection,
       RpcRetryingCallerFactory rpcCallerFactory, final RpcControllerFactory rpcControllerFactory,
       int operationTimeout, int rpcTimeout) throws IOException {
-    if (tableName == null) return null;
+    if (tableName == null) {
+      return null;
+    }
     HTableDescriptor htd =
         executeCallable(new MasterCallable<HTableDescriptor>(connection, rpcControllerFactory) {
-      @Override
-      protected HTableDescriptor rpcCall() throws Exception {
-        GetTableDescriptorsRequest req =
-            RequestConverter.buildGetTableDescriptorsRequest(tableName);
-        GetTableDescriptorsResponse htds = master.getTableDescriptors(getRpcController(), req);
-        if (!htds.getTableSchemaList().isEmpty()) {
-          return new ImmutableHTableDescriptor(ProtobufUtil.toTableDescriptor(htds.getTableSchemaList().get(0)));
-        }
-        return null;
-      }
-    }, rpcCallerFactory, operationTimeout, rpcTimeout);
+          @Override
+          protected HTableDescriptor rpcCall() throws Exception {
+            GetTableDescriptorsRequest req =
+                RequestConverter.buildGetTableDescriptorsRequest(tableName);
+            GetTableDescriptorsResponse htds = master.getTableDescriptors(getRpcController(), req);
+            if (!htds.getTableSchemaList().isEmpty()) {
+              return new ImmutableHTableDescriptor(
+                  ProtobufUtil.toTableDescriptor(htds.getTableSchemaList().get(0)));
+            }
+            return null;
+          }
+        }, rpcCallerFactory, operationTimeout, rpcTimeout);
     if (htd != null) {
       return new ImmutableHTableDescriptor(htd);
     }
@@ -1154,7 +1157,6 @@ public class HBaseAdmin implements Admin {
   }
 
   /**
-   *
    * @param sn
    * @return List of {@link HRegionInfo}.
    * @throws IOException
@@ -1164,13 +1166,7 @@ public class HBaseAdmin implements Admin {
   @Deprecated
   @Override
   public List<HRegionInfo> getOnlineRegions(final ServerName sn) throws IOException {
-    AdminService.BlockingInterface admin = this.connection.getAdmin(sn);
-    // TODO: There is no timeout on this controller. Set one!
-    HBaseRpcController controller = rpcControllerFactory.newController();
-    List<HRegionInfo> onlineRegions = ProtobufUtil.getOnlineRegions(controller, admin);
-    return onlineRegions == null ? null : onlineRegions.stream()
-            .map(hri -> new ImmutableHRegionInfo(hri))
-            .collect(Collectors.toList());
+    return getRegions(sn).stream().map(ImmutableHRegionInfo::new).collect(Collectors.toList());
   }
 
   @Override
@@ -1185,28 +1181,35 @@ public class HBaseAdmin implements Admin {
 
   @Override
   public void flushRegion(final byte[] regionName) throws IOException {
-    Pair<HRegionInfo, ServerName> regionServerPair = getRegion(regionName);
+    Pair<RegionInfo, ServerName> regionServerPair = getRegion(regionName);
     if (regionServerPair == null) {
       throw new IllegalArgumentException("Unknown regionname: " + Bytes.toStringBinary(regionName));
     }
     if (regionServerPair.getSecond() == null) {
       throw new NoServerForRegionException(Bytes.toStringBinary(regionName));
     }
-    final HRegionInfo hRegionInfo = regionServerPair.getFirst();
+    final RegionInfo regionInfo = regionServerPair.getFirst();
     ServerName serverName = regionServerPair.getSecond();
-    final AdminService.BlockingInterface admin = this.connection.getAdmin(serverName);
-    Callable<Void> callable = new Callable<Void>() {
-      @Override
-      public Void call() throws Exception {
-        // TODO: There is no timeout on this controller. Set one!
-        HBaseRpcController controller = rpcControllerFactory.newController();
-        FlushRegionRequest request =
-            RequestConverter.buildFlushRegionRequest(hRegionInfo.getRegionName());
-        admin.flushRegion(controller, request);
-        return null;
-      }
-    };
-    ProtobufUtil.call(callable);
+    flush(this.connection.getAdmin(serverName), regionInfo);
+  }
+
+  private void flush(AdminService.BlockingInterface admin, final RegionInfo info)
+    throws IOException {
+    ProtobufUtil.call(() -> {
+      // TODO: There is no timeout on this controller. Set one!
+      HBaseRpcController controller = rpcControllerFactory.newController();
+      FlushRegionRequest request =
+        RequestConverter.buildFlushRegionRequest(info.getRegionName());
+      admin.flushRegion(controller, request);
+      return null;
+    });
+  }
+
+  @Override
+  public void flushRegionServer(ServerName serverName) throws IOException {
+    for (RegionInfo region : getRegions(serverName)) {
+      flush(this.connection.getAdmin(serverName), region);
+    }
   }
 
   /**
@@ -1242,14 +1245,17 @@ public class HBaseAdmin implements Admin {
     compactRegion(regionName, columnFamily, false);
   }
 
-  /**
-   * {@inheritDoc}
-   */
   @Override
-  public void compactRegionServer(final ServerName sn, boolean major)
-  throws IOException, InterruptedException {
-    for (HRegionInfo region : getOnlineRegions(sn)) {
-      compact(sn, region, major, null);
+  public void compactRegionServer(final ServerName serverName) throws IOException {
+    for (RegionInfo region : getRegions(serverName)) {
+      compact(this.connection.getAdmin(serverName), region, false, null);
+    }
+  }
+
+  @Override
+  public void majorCompactRegionServer(final ServerName serverName) throws IOException {
+    for (RegionInfo region : getRegions(serverName)) {
+      compact(this.connection.getAdmin(serverName), region, true, null);
     }
   }
 
@@ -1294,41 +1300,28 @@ public class HBaseAdmin implements Admin {
                        CompactType compactType) throws IOException {
     switch (compactType) {
       case MOB:
-        ServerName master = getMasterAddress();
-        compact(master, getMobRegionInfo(tableName), major, columnFamily);
+        compact(this.connection.getAdminForMaster(), RegionInfo.createMobRegionInfo(tableName),
+            major, columnFamily);
         break;
       case NORMAL:
-      default:
-        ZooKeeperWatcher zookeeper = null;
-        try {
-          checkTableExists(tableName);
-          zookeeper = new ZooKeeperWatcher(conf, ZK_IDENTIFIER_PREFIX + connection.toString(),
-                  new ThrowableAbortable());
-          List<Pair<HRegionInfo, ServerName>> pairs;
-          if (TableName.META_TABLE_NAME.equals(tableName)) {
-            pairs = new MetaTableLocator().getMetaRegionsAndLocations(zookeeper);
-          } else {
-            pairs = MetaTableAccessor.getTableRegionsAndLocations(connection, tableName);
+        checkTableExists(tableName);
+        for (HRegionLocation loc :connection.locateRegions(tableName, false, false)) {
+          ServerName sn = loc.getServerName();
+          if (sn == null) {
+            continue;
           }
-          for (Pair<HRegionInfo, ServerName> pair: pairs) {
-            if (pair.getFirst().isOffline()) continue;
-            if (pair.getSecond() == null) continue;
-            try {
-              compact(pair.getSecond(), pair.getFirst(), major, columnFamily);
-            } catch (NotServingRegionException e) {
-              if (LOG.isDebugEnabled()) {
-                LOG.debug("Trying to" + (major ? " major" : "") + " compact " +
-                        pair.getFirst() + ": " +
-                        StringUtils.stringifyException(e));
-              }
+          try {
+            compact(this.connection.getAdmin(sn), loc.getRegion(), major, columnFamily);
+          } catch (NotServingRegionException e) {
+            if (LOG.isDebugEnabled()) {
+              LOG.debug("Trying to" + (major ? " major" : "") + " compact " + loc.getRegion() +
+                  ": " + StringUtils.stringifyException(e));
             }
-          }
-        } finally {
-          if (zookeeper != null) {
-            zookeeper.close();
           }
         }
         break;
+      default:
+        throw new IllegalArgumentException("Unknown compactType: " + compactType);
     }
   }
 
@@ -1342,22 +1335,21 @@ public class HBaseAdmin implements Admin {
    * @throws IOException if a remote or network exception occurs
    * @throws InterruptedException
    */
-  private void compactRegion(final byte[] regionName, final byte[] columnFamily,final boolean major)
-  throws IOException {
-    Pair<HRegionInfo, ServerName> regionServerPair = getRegion(regionName);
+  private void compactRegion(final byte[] regionName, final byte[] columnFamily,
+      final boolean major) throws IOException {
+    Pair<RegionInfo, ServerName> regionServerPair = getRegion(regionName);
     if (regionServerPair == null) {
       throw new IllegalArgumentException("Invalid region: " + Bytes.toStringBinary(regionName));
     }
     if (regionServerPair.getSecond() == null) {
       throw new NoServerForRegionException(Bytes.toStringBinary(regionName));
     }
-    compact(regionServerPair.getSecond(), regionServerPair.getFirst(), major, columnFamily);
+    compact(this.connection.getAdmin(regionServerPair.getSecond()), regionServerPair.getFirst(),
+      major, columnFamily);
   }
 
-  private void compact(final ServerName sn, final HRegionInfo hri,
-      final boolean major, final byte [] family)
-  throws IOException {
-    final AdminService.BlockingInterface admin = this.connection.getAdmin(sn);
+  private void compact(AdminService.BlockingInterface admin, RegionInfo hri, boolean major,
+      byte[] family) throws IOException {
     Callable<Void> callable = new Callable<Void>() {
       @Override
       public Void call() throws Exception {
@@ -1373,14 +1365,14 @@ public class HBaseAdmin implements Admin {
   }
 
   @Override
-  public void move(final byte [] encodedRegionName, final byte [] destServerName)
-  throws IOException {
+  public void move(final byte[] encodedRegionName, final byte[] destServerName) throws IOException {
     executeCallable(new MasterCallable<Void>(getConnection(), getRpcControllerFactory()) {
       @Override
       protected Void rpcCall() throws Exception {
         setPriority(encodedRegionName);
         MoveRegionRequest request =
-            RequestConverter.buildMoveRegionRequest(encodedRegionName, destServerName);
+            RequestConverter.buildMoveRegionRequest(encodedRegionName,
+              destServerName != null ? ServerName.valueOf(Bytes.toString(destServerName)) : null);
         master.moveRegion(getRpcController(), request);
         return null;
       }
@@ -1477,6 +1469,56 @@ public class HBaseAdmin implements Admin {
     });
   }
 
+  /**
+   * {@inheritDoc}
+   */
+  @Override
+  public CacheEvictionStats clearBlockCache(final TableName tableName) throws IOException {
+    checkTableExists(tableName);
+    CacheEvictionStatsBuilder cacheEvictionStats = CacheEvictionStats.builder();
+    List<Pair<RegionInfo, ServerName>> pairs =
+      MetaTableAccessor.getTableRegionsAndLocations(connection, tableName);
+    Map<ServerName, List<RegionInfo>> regionInfoByServerName =
+        pairs.stream()
+            .filter(pair -> !(pair.getFirst().isOffline()))
+            .filter(pair -> pair.getSecond() != null)
+            .collect(Collectors.groupingBy(pair -> pair.getSecond(),
+                Collectors.mapping(pair -> pair.getFirst(), Collectors.toList())));
+
+    for (Map.Entry<ServerName, List<RegionInfo>> entry : regionInfoByServerName.entrySet()) {
+      CacheEvictionStats stats = clearBlockCache(entry.getKey(), entry.getValue());
+      cacheEvictionStats = cacheEvictionStats.append(stats);
+      if (stats.getExceptionCount() > 0) {
+        for (Map.Entry<byte[], Throwable> exception : stats.getExceptions().entrySet()) {
+          LOG.debug("Failed to clear block cache for "
+              + Bytes.toStringBinary(exception.getKey())
+              + " on " + entry.getKey() + ": ", exception.getValue());
+        }
+      }
+    }
+    return cacheEvictionStats.build();
+  }
+
+  private CacheEvictionStats clearBlockCache(final ServerName sn, final List<RegionInfo> hris)
+      throws IOException {
+    HBaseRpcController controller = rpcControllerFactory.newController();
+    AdminService.BlockingInterface admin = this.connection.getAdmin(sn);
+    ClearRegionBlockCacheRequest request =
+      RequestConverter.buildClearRegionBlockCacheRequest(hris);
+    ClearRegionBlockCacheResponse response;
+    try {
+      response = admin.clearRegionBlockCache(controller, request);
+      return ProtobufUtil.toCacheEvictionStats(response.getStats());
+    } catch (ServiceException se) {
+      throw ProtobufUtil.getRemoteException(se);
+    }
+  }
+
+  /**
+   * Invoke region normalizer. Can NOT run for various reasons.  Check logs.
+   *
+   * @return True if region normalizer ran, false otherwise.
+   */
   @Override
   public boolean normalize() throws IOException {
     return executeCallable(new MasterCallable<Boolean>(getConnection(), getRpcControllerFactory()) {
@@ -1548,9 +1590,8 @@ public class HBaseAdmin implements Admin {
   public boolean cleanerChoreSwitch(final boolean on) throws IOException {
     return executeCallable(new MasterCallable<Boolean>(getConnection(), getRpcControllerFactory()) {
       @Override public Boolean rpcCall() throws Exception {
-        return master.setCleanerChoreRunning(getRpcController(), RequestConverter
-                                                                   .buildSetCleanerChoreRunningRequest(
-                                                                     on)).getPrevValue();
+        return master.setCleanerChoreRunning(getRpcController(),
+            RequestConverter.buildSetCleanerChoreRunningRequest(on)).getPrevValue();
       }
     });
   }
@@ -1559,10 +1600,8 @@ public class HBaseAdmin implements Admin {
   public boolean runCleanerChore() throws IOException {
     return executeCallable(new MasterCallable<Boolean>(getConnection(), getRpcControllerFactory()) {
       @Override public Boolean rpcCall() throws Exception {
-        return master
-                 .runCleanerChore(getRpcController(), RequestConverter
-                                                        .buildRunCleanerChoreRequest())
-                 .getCleanerChoreRan();
+        return master.runCleanerChore(getRpcController(),
+            RequestConverter.buildRunCleanerChoreRequest()).getCleanerChoreRan();
       }
     });
   }
@@ -1572,8 +1611,7 @@ public class HBaseAdmin implements Admin {
     return executeCallable(new MasterCallable<Boolean>(getConnection(), getRpcControllerFactory()) {
       @Override public Boolean rpcCall() throws Exception {
         return master.isCleanerChoreEnabled(getRpcController(),
-                                            RequestConverter.buildIsCleanerChoreEnabledRequest())
-                     .getValue();
+            RequestConverter.buildIsCleanerChoreEnabledRequest()).getValue();
       }
     });
   }
@@ -1651,11 +1689,12 @@ public class HBaseAdmin implements Admin {
     byte[][] encodedNameofRegionsToMerge = new byte[nameofRegionsToMerge.length][];
     for(int i = 0; i < nameofRegionsToMerge.length; i++) {
       encodedNameofRegionsToMerge[i] = HRegionInfo.isEncodedRegionName(nameofRegionsToMerge[i]) ?
-        nameofRegionsToMerge[i] : HRegionInfo.encodeRegionName(nameofRegionsToMerge[i]).getBytes();
+          nameofRegionsToMerge[i] :
+          Bytes.toBytes(HRegionInfo.encodeRegionName(nameofRegionsToMerge[i]));
     }
 
     TableName tableName = null;
-    Pair<HRegionInfo, ServerName> pair;
+    Pair<RegionInfo, ServerName> pair;
 
     for(int i = 0; i < nameofRegionsToMerge.length; i++) {
       pair = getRegion(nameofRegionsToMerge[i]);
@@ -1749,8 +1788,8 @@ public class HBaseAdmin implements Admin {
   public Future<Void> splitRegionAsync(byte[] regionName, byte[] splitPoint)
       throws IOException {
     byte[] encodedNameofRegionToSplit = HRegionInfo.isEncodedRegionName(regionName) ?
-        regionName : HRegionInfo.encodeRegionName(regionName).getBytes();
-    Pair<HRegionInfo, ServerName> pair = getRegion(regionName);
+        regionName : Bytes.toBytes(HRegionInfo.encodeRegionName(regionName));
+    Pair<RegionInfo, ServerName> pair = getRegion(regionName);
     if (pair != null) {
       if (pair.getFirst() != null &&
           pair.getFirst().getReplicaId() != HRegionInfo.DEFAULT_REPLICA_ID) {
@@ -1762,11 +1801,10 @@ public class HBaseAdmin implements Admin {
               + Bytes.toStringBinary(encodedNameofRegionToSplit));
     }
 
-    HRegionInfo hri = pair.getFirst();
-    return splitRegionAsync(hri, splitPoint);
+    return splitRegionAsync(pair.getFirst(), splitPoint);
   }
 
-  Future<Void> splitRegionAsync(HRegionInfo hri, byte[] splitPoint) throws IOException {
+  Future<Void> splitRegionAsync(RegionInfo hri, byte[] splitPoint) throws IOException {
     TableName tableName = hri.getTable();
     if (hri.getStartKey() != null && splitPoint != null &&
         Bytes.compareTo(hri.getStartKey(), splitPoint) == 0) {
@@ -1818,43 +1856,31 @@ public class HBaseAdmin implements Admin {
   }
 
   @Override
-  public void split(final TableName tableName, final byte [] splitPoint) throws IOException {
-    ZooKeeperWatcher zookeeper = null;
-    try {
-      checkTableExists(tableName);
-      zookeeper = new ZooKeeperWatcher(conf, ZK_IDENTIFIER_PREFIX + connection.toString(),
-        new ThrowableAbortable());
-      List<Pair<HRegionInfo, ServerName>> pairs;
-      if (TableName.META_TABLE_NAME.equals(tableName)) {
-        pairs = new MetaTableLocator().getMetaRegionsAndLocations(zookeeper);
-      } else {
-        pairs = MetaTableAccessor.getTableRegionsAndLocations(connection, tableName);
+  public void split(final TableName tableName, final byte[] splitPoint) throws IOException {
+    checkTableExists(tableName);
+    for (HRegionLocation loc : connection.locateRegions(tableName, false, false)) {
+      ServerName sn = loc.getServerName();
+      if (sn == null) {
+        continue;
       }
-      if (splitPoint == null) {
-        LOG.info("SplitPoint is null, will find bestSplitPoint from Region");
+      RegionInfo r = loc.getRegion();
+      // check for parents
+      if (r.isSplitParent()) {
+        continue;
       }
-      for (Pair<HRegionInfo, ServerName> pair: pairs) {
-        // May not be a server for a particular row
-        if (pair.getSecond() == null) continue;
-        HRegionInfo r = pair.getFirst();
-        // check for parents
-        if (r.isSplitParent()) continue;
-        // if a split point given, only split that particular region
-        if (r.getReplicaId() != HRegionInfo.DEFAULT_REPLICA_ID ||
-           (splitPoint != null && !r.containsRow(splitPoint))) continue;
-        // call out to master to do split now
-        splitRegionAsync(pair.getFirst(), splitPoint);
+      // if a split point given, only split that particular region
+      if (r.getReplicaId() != RegionInfo.DEFAULT_REPLICA_ID ||
+          (splitPoint != null && !r.containsRow(splitPoint))) {
+        continue;
       }
-    } finally {
-      if (zookeeper != null) {
-        zookeeper.close();
-      }
+      // call out to master to do split now
+      splitRegionAsync(r, splitPoint);
     }
   }
 
   @Override
   public void splitRegion(final byte[] regionName, final byte [] splitPoint) throws IOException {
-    Pair<HRegionInfo, ServerName> regionServerPair = getRegion(regionName);
+    Pair<RegionInfo, ServerName> regionServerPair = getRegion(regionName);
     if (regionServerPair == null) {
       throw new IllegalArgumentException("Invalid region: " + Bytes.toStringBinary(regionName));
     }
@@ -1921,19 +1947,18 @@ public class HBaseAdmin implements Admin {
    * Throw IllegalArgumentException if <code>regionName</code> is null.
    * @throws IOException
    */
-  Pair<HRegionInfo, ServerName> getRegion(final byte[] regionName) throws IOException {
+  Pair<RegionInfo, ServerName> getRegion(final byte[] regionName) throws IOException {
     if (regionName == null) {
       throw new IllegalArgumentException("Pass a table name or region name");
     }
-    Pair<HRegionInfo, ServerName> pair =
-      MetaTableAccessor.getRegion(connection, regionName);
+    Pair<RegionInfo, ServerName> pair = MetaTableAccessor.getRegion(connection, regionName);
     if (pair == null) {
-      final AtomicReference<Pair<HRegionInfo, ServerName>> result = new AtomicReference<>(null);
+      final AtomicReference<Pair<RegionInfo, ServerName>> result = new AtomicReference<>(null);
       final String encodedName = Bytes.toString(regionName);
       MetaTableAccessor.Visitor visitor = new MetaTableAccessor.Visitor() {
         @Override
         public boolean visit(Result data) throws IOException {
-          HRegionInfo info = MetaTableAccessor.getHRegionInfo(data);
+          RegionInfo info = MetaTableAccessor.getRegionInfo(data);
           if (info == null) {
             LOG.warn("No serialized HRegionInfo in " + data);
             return true;
@@ -1979,7 +2004,7 @@ public class HBaseAdmin implements Admin {
       return HRegionInfo.FIRST_META_REGIONINFO.getRegionName();
     }
     byte[] tmp = regionNameOrEncodedRegionName;
-    Pair<HRegionInfo, ServerName> regionServerPair = getRegion(regionNameOrEncodedRegionName);
+    Pair<RegionInfo, ServerName> regionServerPair = getRegion(regionNameOrEncodedRegionName);
     if (regionServerPair != null && regionServerPair.getFirst() != null) {
       tmp = regionServerPair.getFirst().getRegionName();
     }
@@ -2062,39 +2087,31 @@ public class HBaseAdmin implements Admin {
   }
 
   @Override
-  public ClusterStatus getClusterStatus() throws IOException {
-    return getClusterStatus(EnumSet.allOf(Option.class));
-  }
-
-  @Override
-  public ClusterStatus getClusterStatus(EnumSet<Option> options) throws IOException {
-    return executeCallable(new MasterCallable<ClusterStatus>(getConnection(),
+  public ClusterMetrics getClusterMetrics(EnumSet<Option> options) throws IOException {
+    return executeCallable(new MasterCallable<ClusterMetrics>(getConnection(),
         this.rpcControllerFactory) {
       @Override
-      protected ClusterStatus rpcCall() throws Exception {
+      protected ClusterMetrics rpcCall() throws Exception {
         GetClusterStatusRequest req = RequestConverter.buildGetClusterStatusRequest(options);
-        return ProtobufUtil.convert(
+        return ClusterMetricsBuilder.toClusterMetrics(
           master.getClusterStatus(getRpcController(), req).getClusterStatus());
       }
     });
   }
 
   @Override
-  public Map<byte[], RegionLoad> getRegionLoad(final ServerName sn) throws IOException {
-    return getRegionLoad(sn, null);
-  }
-
-  @Override
-  public Map<byte[], RegionLoad> getRegionLoad(final ServerName sn, final TableName tableName)
+  public List<RegionMetrics> getRegionMetrics(ServerName serverName, TableName tableName)
       throws IOException {
-    AdminService.BlockingInterface admin = this.connection.getAdmin(sn);
+    AdminService.BlockingInterface admin = this.connection.getAdmin(serverName);
     HBaseRpcController controller = rpcControllerFactory.newController();
-    List<RegionLoad> regionLoads = ProtobufUtil.getRegionLoad(controller, admin, tableName);
-    Map<byte[], RegionLoad> resultMap = new TreeMap<>(Bytes.BYTES_COMPARATOR);
-    for (RegionLoad regionLoad : regionLoads) {
-      resultMap.put(regionLoad.getName(), regionLoad);
+    AdminProtos.GetRegionLoadRequest request =
+      RequestConverter.buildGetRegionLoadRequest(tableName);
+    try {
+      return admin.getRegionLoad(controller, request).getRegionLoadsList().stream()
+        .map(RegionMetricsBuilder::toRegionMetrics).collect(Collectors.toList());
+    } catch (ServiceException se) {
+      throw ProtobufUtil.getRemoteException(se);
     }
-    return resultMap;
   }
 
   @Override
@@ -2103,7 +2120,7 @@ public class HBaseAdmin implements Admin {
   }
 
   /**
-   * Do a get with a timeout against the passed in <code>future<code>.
+   * Do a get with a timeout against the passed in <code>future</code>.
    */
   private static <T> T get(final Future<T> future, final long timeout, final TimeUnit units)
   throws IOException {
@@ -2302,32 +2319,14 @@ public class HBaseAdmin implements Admin {
   }
 
   /**
-   * Check to see if HBase is running. Throw an exception if not.
-   * @param conf system configuration
-   * @throws MasterNotRunningException if the master is not running
-   * @throws ZooKeeperConnectionException if unable to connect to zookeeper
-   * @deprecated since hbase-2.0.0 because throws a ServiceException. We don't want to have
-   * protobuf as part of our public API. Use {@link #available(Configuration)}
-   */
-  // Used by tests and by the Merge tool. Merge tool uses it to figure if HBase is up or not.
-  // MOB uses it too.
-  // NOTE: hbase-2.0.0 removes ServiceException from the throw.
-  @Deprecated
-  public static void checkHBaseAvailable(Configuration conf)
-  throws MasterNotRunningException, ZooKeeperConnectionException, IOException,
-  com.google.protobuf.ServiceException {
-    available(conf);
-  }
-
-  /**
    * Is HBase available? Throw an exception if not.
    * @param conf system configuration
    * @throws MasterNotRunningException if the master is not running.
-   * @throws ZooKeeperConnectionException if unable to connect to zookeeper.
-   * // TODO do not expose ZKConnectionException.
+   * @throws ZooKeeperConnectionException if unable to connect to zookeeper. // TODO do not expose
+   *           ZKConnectionException.
    */
   public static void available(final Configuration conf)
-  throws MasterNotRunningException, ZooKeeperConnectionException, IOException {
+      throws MasterNotRunningException, ZooKeeperConnectionException, IOException {
     Configuration copyOfConf = HBaseConfiguration.create(conf);
     // We set it to make it fail as soon as possible if HBase is not available
     copyOfConf.setInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, 1);
@@ -2337,26 +2336,6 @@ public class HBaseAdmin implements Admin {
     // If the connection exists, we may have a connection to ZK that does not work anymore
     try (ClusterConnection connection =
         (ClusterConnection) ConnectionFactory.createConnection(copyOfConf)) {
-      // Check ZK first.
-      // If the connection exists, we may have a connection to ZK that does not work anymore
-      ZooKeeperKeepAliveConnection zkw = null;
-      try {
-        // This is NASTY. FIX!!!! Dependent on internal implementation! TODO
-        zkw = ((ConnectionImplementation) connection)
-            .getKeepAliveZooKeeperWatcher();
-          zkw.getRecoverableZooKeeper().getZooKeeper().exists(zkw.znodePaths.baseZNode, false);
-      } catch (IOException e) {
-        throw new ZooKeeperConnectionException("Can't connect to ZooKeeper", e);
-      } catch (InterruptedException e) {
-        throw (InterruptedIOException)
-            new InterruptedIOException("Can't connect to ZooKeeper").initCause(e);
-      } catch (KeeperException e){
-        throw new ZooKeeperConnectionException("Can't connect to ZooKeeper", e);
-      } finally {
-        if (zkw != null) {
-          zkw.close();
-        }
-      }
       // can throw MasterNotRunningException
       connection.isMasterRunning();
     }
@@ -2373,23 +2352,10 @@ public class HBaseAdmin implements Admin {
   @Deprecated
   @Override
   public List<HRegionInfo> getTableRegions(final TableName tableName)
-  throws IOException {
-    ZooKeeperWatcher zookeeper =
-      new ZooKeeperWatcher(conf, ZK_IDENTIFIER_PREFIX + connection.toString(),
-        new ThrowableAbortable());
-    List<HRegionInfo> regions = null;
-    try {
-      if (TableName.META_TABLE_NAME.equals(tableName)) {
-        regions = new MetaTableLocator().getMetaRegions(zookeeper);
-      } else {
-        regions = MetaTableAccessor.getTableRegions(connection, tableName, true);
-      }
-    } finally {
-      zookeeper.close();
-    }
-    return regions == null ? null : regions.stream()
-            .map(hri -> new ImmutableHRegionInfo(hri))
-            .collect(Collectors.toList());
+    throws IOException {
+    return getRegions(tableName).stream()
+        .map(ImmutableHRegionInfo::new)
+        .collect(Collectors.toList());
   }
 
   @Override
@@ -2405,10 +2371,9 @@ public class HBaseAdmin implements Admin {
       protected HTableDescriptor[] rpcCall() throws Exception {
         GetTableDescriptorsRequest req =
             RequestConverter.buildGetTableDescriptorsRequest(tableNames);
-          return ProtobufUtil.toTableDescriptorList(master.getTableDescriptors(getRpcController(), req))
-                  .stream()
-                  .map(ImmutableHTableDescriptor::new)
-                  .toArray(HTableDescriptor[]::new);
+        return ProtobufUtil
+            .toTableDescriptorList(master.getTableDescriptors(getRpcController(), req)).stream()
+            .map(ImmutableHTableDescriptor::new).toArray(HTableDescriptor[]::new);
       }
     });
   }
@@ -2481,16 +2446,6 @@ public class HBaseAdmin implements Admin {
   }
 
   @Override
-  public String[] getMasterCoprocessors() {
-    try {
-      return getClusterStatus(EnumSet.of(Option.MASTER_COPROCESSORS)).getMasterCoprocessors();
-    } catch (IOException e) {
-      LOG.error("Could not getClusterStatus()",e);
-      return null;
-    }
-  }
-
-  @Override
   public CompactionState getCompactionState(final TableName tableName)
   throws IOException {
     return getCompactionState(tableName, CompactType.NORMAL);
@@ -2499,7 +2454,7 @@ public class HBaseAdmin implements Admin {
   @Override
   public CompactionState getCompactionStateForRegion(final byte[] regionName)
   throws IOException {
-    final Pair<HRegionInfo, ServerName> regionServerPair = getRegion(regionName);
+    final Pair<RegionInfo, ServerName> regionServerPair = getRegion(regionName);
     if (regionServerPair == null) {
       throw new IllegalArgumentException("Invalid region: " + Bytes.toStringBinary(regionName));
     }
@@ -2796,8 +2751,8 @@ public class HBaseAdmin implements Admin {
   }
 
   @Override
-  public byte[] execProcedureWithReturn(String signature, String instance, Map<String, String> props)
-      throws IOException {
+  public byte[] execProcedureWithReturn(String signature, String instance, Map<String,
+      String> props) throws IOException {
     ProcedureDescription desc = ProtobufUtil.buildProcedureDescription(signature, instance, props);
     final ExecProcedureRequest request =
         ExecProcedureRequest.newBuilder().setProcedure(desc).build();
@@ -2883,7 +2838,8 @@ public class HBaseAdmin implements Admin {
   private Future<Void> internalRestoreSnapshotAsync(final String snapshotName,
       final TableName tableName, final boolean restoreAcl)
       throws IOException, RestoreSnapshotException {
-    final SnapshotProtos.SnapshotDescription snapshot = SnapshotProtos.SnapshotDescription.newBuilder()
+    final SnapshotProtos.SnapshotDescription snapshot =
+        SnapshotProtos.SnapshotDescription.newBuilder()
         .setName(snapshotName).setTable(tableName.getNameAsString()).build();
 
     // actually restore the snapshot
@@ -3027,9 +2983,8 @@ public class HBaseAdmin implements Admin {
       try {
         internalDeleteSnapshot(snapshot);
       } catch (IOException ex) {
-        LOG.info(
-          "Failed to delete snapshot " + snapshot.getName() + " for table " + snapshot.getTableNameAsString(),
-          ex);
+        LOG.info("Failed to delete snapshot " + snapshot.getName() + " for table "
+                + snapshot.getTableNameAsString(), ex);
       }
     }
   }
@@ -3081,6 +3036,18 @@ public class HBaseAdmin implements Admin {
     return QuotaRetriever.open(conf, filter);
   }
 
+  @Override
+  public List<QuotaSettings> getQuota(QuotaFilter filter) throws IOException {
+    List<QuotaSettings> quotas = new LinkedList<>();
+    try (QuotaRetriever retriever = QuotaRetriever.open(conf, filter)) {
+      Iterator<QuotaSettings> iterator = retriever.iterator();
+      while (iterator.hasNext()) {
+        quotas.add(iterator.next());
+      }
+    }
+    return quotas;
+  }
+
   private <C extends RetryingCallable<V> & Closeable, V> V executeCallable(C callable)
       throws IOException {
     return executeCallable(callable, rpcCallerFactory, operationTimeout, rpcTimeout);
@@ -3119,7 +3086,7 @@ public class HBaseAdmin implements Admin {
                 CoprocessorRpcUtils.getCoprocessorServiceRequest(method, request);
             return this.master.execMasterService(getRpcController(), csr);
           }
-        };) {
+        }) {
           // TODO: Are we retrying here? Does not seem so. We should use RetryingRpcCaller
           callable.prepare(false);
           int operationTimeout = connection.getConnectionConfiguration().getOperationTimeout();
@@ -3188,39 +3155,16 @@ public class HBaseAdmin implements Admin {
 
   @Override
   public void updateConfiguration() throws IOException {
-    ClusterStatus status = getClusterStatus(
+    ClusterMetrics status = getClusterMetrics(
       EnumSet.of(Option.LIVE_SERVERS, Option.MASTER, Option.BACKUP_MASTERS));
-    for (ServerName server : status.getServers()) {
+    for (ServerName server : status.getLiveServerMetrics().keySet()) {
       updateConfiguration(server);
     }
 
-    updateConfiguration(status.getMaster());
+    updateConfiguration(status.getMasterName());
 
-    for (ServerName server : status.getBackupMasters()) {
+    for (ServerName server : status.getBackupMasterNames()) {
       updateConfiguration(server);
-    }
-  }
-
-  @Override
-  public int getMasterInfoPort() throws IOException {
-    // TODO: Fix!  Reaching into internal implementation!!!!
-    ConnectionImplementation connection = (ConnectionImplementation)this.connection;
-    ZooKeeperKeepAliveConnection zkw = connection.getKeepAliveZooKeeperWatcher();
-    try {
-      return MasterAddressTracker.getMasterInfoPort(zkw);
-    } catch (KeeperException e) {
-      throw new IOException("Failed to get master info port from MasterAddressTracker", e);
-    }
-  }
-
-  private ServerName getMasterAddress() throws IOException {
-    // TODO: Fix!  Reaching into internal implementation!!!!
-    ConnectionImplementation connection = (ConnectionImplementation)this.connection;
-    ZooKeeperKeepAliveConnection zkw = connection.getKeepAliveZooKeeperWatcher();
-    try {
-      return MasterAddressTracker.getMasterAddress(zkw);
-    } catch (KeeperException e) {
-      throw new IOException("Failed to get master server name from MasterAddressTracker", e);
     }
   }
 
@@ -3292,102 +3236,88 @@ public class HBaseAdmin implements Admin {
    * {@inheritDoc}
    */
   @Override
-  public CompactionState getCompactionState(final TableName tableName,
-    CompactType compactType) throws IOException {
+  public CompactionState getCompactionState(final TableName tableName, CompactType compactType)
+      throws IOException {
     AdminProtos.GetRegionInfoResponse.CompactionState state =
-        AdminProtos.GetRegionInfoResponse.CompactionState.NONE;
+      AdminProtos.GetRegionInfoResponse.CompactionState.NONE;
     checkTableExists(tableName);
     // TODO: There is no timeout on this controller. Set one!
-    final HBaseRpcController rpcController = rpcControllerFactory.newController();
+    HBaseRpcController rpcController = rpcControllerFactory.newController();
     switch (compactType) {
       case MOB:
         final AdminProtos.AdminService.BlockingInterface masterAdmin =
-          this.connection.getAdmin(getMasterAddress());
+          this.connection.getAdminForMaster();
         Callable<AdminProtos.GetRegionInfoResponse.CompactionState> callable =
-            new Callable<AdminProtos.GetRegionInfoResponse.CompactionState>() {
-          @Override
-          public AdminProtos.GetRegionInfoResponse.CompactionState call() throws Exception {
-            HRegionInfo info = getMobRegionInfo(tableName);
-            GetRegionInfoRequest request = RequestConverter.buildGetRegionInfoRequest(
-                info.getRegionName(), true);
-            GetRegionInfoResponse response = masterAdmin.getRegionInfo(rpcController, request);
-            return response.getCompactionState();
-          }
-        };
+          new Callable<AdminProtos.GetRegionInfoResponse.CompactionState>() {
+            @Override
+            public AdminProtos.GetRegionInfoResponse.CompactionState call() throws Exception {
+              RegionInfo info = RegionInfo.createMobRegionInfo(tableName);
+              GetRegionInfoRequest request =
+                RequestConverter.buildGetRegionInfoRequest(info.getRegionName(), true);
+              GetRegionInfoResponse response = masterAdmin.getRegionInfo(rpcController, request);
+              return response.getCompactionState();
+            }
+          };
         state = ProtobufUtil.call(callable);
         break;
       case NORMAL:
-      default:
-        ZooKeeperWatcher zookeeper = null;
-        try {
-          List<Pair<HRegionInfo, ServerName>> pairs;
-          if (TableName.META_TABLE_NAME.equals(tableName)) {
-            zookeeper = new ZooKeeperWatcher(conf, ZK_IDENTIFIER_PREFIX + connection.toString(),
-              new ThrowableAbortable());
-            pairs = new MetaTableLocator().getMetaRegionsAndLocations(zookeeper);
-          } else {
-            pairs = MetaTableAccessor.getTableRegionsAndLocations(connection, tableName);
+        for (HRegionLocation loc : connection.locateRegions(tableName, false, false)) {
+          ServerName sn = loc.getServerName();
+          if (sn == null) {
+            continue;
           }
-          for (Pair<HRegionInfo, ServerName> pair: pairs) {
-            if (pair.getFirst().isOffline()) continue;
-            if (pair.getSecond() == null) continue;
-            final ServerName sn = pair.getSecond();
-            final byte [] regionName = pair.getFirst().getRegionName();
-            final AdminService.BlockingInterface snAdmin = this.connection.getAdmin(sn);
-            try {
-              Callable<GetRegionInfoResponse> regionInfoCallable =
-                  new Callable<GetRegionInfoResponse>() {
+          byte[] regionName = loc.getRegion().getRegionName();
+          AdminService.BlockingInterface snAdmin = this.connection.getAdmin(sn);
+          try {
+            Callable<GetRegionInfoResponse> regionInfoCallable =
+              new Callable<GetRegionInfoResponse>() {
                 @Override
                 public GetRegionInfoResponse call() throws Exception {
-                  GetRegionInfoRequest request = RequestConverter.buildGetRegionInfoRequest(
-                      regionName, true);
+                  GetRegionInfoRequest request =
+                    RequestConverter.buildGetRegionInfoRequest(regionName, true);
                   return snAdmin.getRegionInfo(rpcController, request);
                 }
               };
-              GetRegionInfoResponse response = ProtobufUtil.call(regionInfoCallable);
-              switch (response.getCompactionState()) {
-                case MAJOR_AND_MINOR:
+            GetRegionInfoResponse response = ProtobufUtil.call(regionInfoCallable);
+            switch (response.getCompactionState()) {
+              case MAJOR_AND_MINOR:
+                return CompactionState.MAJOR_AND_MINOR;
+              case MAJOR:
+                if (state == AdminProtos.GetRegionInfoResponse.CompactionState.MINOR) {
                   return CompactionState.MAJOR_AND_MINOR;
-                case MAJOR:
-                  if (state == AdminProtos.GetRegionInfoResponse.CompactionState.MINOR) {
-                    return CompactionState.MAJOR_AND_MINOR;
-                  }
-                  state = AdminProtos.GetRegionInfoResponse.CompactionState.MAJOR;
-                  break;
-                case MINOR:
-                  if (state == AdminProtos.GetRegionInfoResponse.CompactionState.MAJOR) {
-                    return CompactionState.MAJOR_AND_MINOR;
-                  }
-                  state = AdminProtos.GetRegionInfoResponse.CompactionState.MINOR;
-                  break;
-                case NONE:
-                default: // nothing, continue
-              }
-            } catch (NotServingRegionException e) {
-              if (LOG.isDebugEnabled()) {
-                LOG.debug("Trying to get compaction state of " +
-                        pair.getFirst() + ": " +
-                        StringUtils.stringifyException(e));
-              }
-            } catch (RemoteException e) {
-              if (e.getMessage().indexOf(NotServingRegionException.class.getName()) >= 0) {
-                if (LOG.isDebugEnabled()) {
-                  LOG.debug("Trying to get compaction state of " + pair.getFirst() + ": "
-                          + StringUtils.stringifyException(e));
                 }
-              } else {
-                throw e;
-              }
+                state = AdminProtos.GetRegionInfoResponse.CompactionState.MAJOR;
+                break;
+              case MINOR:
+                if (state == AdminProtos.GetRegionInfoResponse.CompactionState.MAJOR) {
+                  return CompactionState.MAJOR_AND_MINOR;
+                }
+                state = AdminProtos.GetRegionInfoResponse.CompactionState.MINOR;
+                break;
+              case NONE:
+              default: // nothing, continue
             }
-          }
-        } finally {
-          if (zookeeper != null) {
-            zookeeper.close();
+          } catch (NotServingRegionException e) {
+            if (LOG.isDebugEnabled()) {
+              LOG.debug("Trying to get compaction state of " + loc.getRegion() + ": " +
+                StringUtils.stringifyException(e));
+            }
+          } catch (RemoteException e) {
+            if (e.getMessage().indexOf(NotServingRegionException.class.getName()) >= 0) {
+              if (LOG.isDebugEnabled()) {
+                LOG.debug("Trying to get compaction state of " + loc.getRegion() + ": " +
+                  StringUtils.stringifyException(e));
+              }
+            } else {
+              throw e;
+            }
           }
         }
         break;
+      default:
+        throw new IllegalArgumentException("Unknown compactType: " + compactType);
     }
-    if(state != null) {
+    if (state != null) {
       return ProtobufUtil.createCompactionState(state);
     }
     return null;
@@ -3693,7 +3623,7 @@ public class HBaseAdmin implements Admin {
       return "Operation: " + getOperationType() + ", "
           + "Table Name: " + tableName.getNameWithNamespaceInclAsString();
 
-    };
+    }
 
     protected abstract class TableWaitForStateCallable implements WaitForStateCallable {
       @Override
@@ -3855,6 +3785,25 @@ public class HBaseAdmin implements Admin {
     }
   }
 
+  @InterfaceAudience.Private
+  @InterfaceStability.Evolving
+  private static class ReplicationFuture extends ProcedureFuture<Void> {
+    private final String peerId;
+    private final Supplier<String> getOperation;
+
+    public ReplicationFuture(HBaseAdmin admin, String peerId, Long procId,
+        Supplier<String> getOperation) {
+      super(admin, procId);
+      this.peerId = peerId;
+      this.getOperation = getOperation;
+    }
+
+    @Override
+    public String toString() {
+      return "Operation: " + getOperation.get() + ", peerId: " + peerId;
+    }
+  }
+
   @Override
   public List<SecurityCapability> getSecurityCapabilities() throws IOException {
     try {
@@ -3876,41 +3825,48 @@ public class HBaseAdmin implements Admin {
   }
 
   @Override
-  public boolean[] splitOrMergeEnabledSwitch(final boolean enabled, final boolean synchronous,
-                                          final MasterSwitchType... switchTypes)
-    throws IOException {
-    return executeCallable(new MasterCallable<boolean[]>(getConnection(),
-        getRpcControllerFactory()) {
+  public boolean splitSwitch(boolean enabled, boolean synchronous) throws IOException {
+    return splitOrMergeSwitch(enabled, synchronous, MasterSwitchType.SPLIT);
+  }
+
+  @Override
+  public boolean mergeSwitch(boolean enabled, boolean synchronous) throws IOException {
+    return splitOrMergeSwitch(enabled, synchronous, MasterSwitchType.MERGE);
+  }
+
+  private boolean splitOrMergeSwitch(boolean enabled, boolean synchronous,
+      MasterSwitchType switchType) throws IOException {
+    return executeCallable(new MasterCallable<Boolean>(getConnection(), getRpcControllerFactory()) {
       @Override
-      protected boolean[] rpcCall() throws Exception {
-        MasterProtos.SetSplitOrMergeEnabledResponse response =
-            master.setSplitOrMergeEnabled(getRpcController(),
-                RequestConverter.buildSetSplitOrMergeEnabledRequest(enabled, synchronous,
-                    switchTypes));
-        boolean[] result = new boolean[switchTypes.length];
-        int i = 0;
-        for (Boolean prevValue : response.getPrevValueList()) {
-          result[i++] = prevValue;
-        }
-        return result;
+      protected Boolean rpcCall() throws Exception {
+        MasterProtos.SetSplitOrMergeEnabledResponse response = master.setSplitOrMergeEnabled(
+          getRpcController(),
+          RequestConverter.buildSetSplitOrMergeEnabledRequest(enabled, synchronous, switchType));
+        return response.getPrevValueList().get(0);
       }
     });
   }
 
   @Override
-  public boolean splitOrMergeEnabledSwitch(final MasterSwitchType switchType) throws IOException {
+  public boolean isSplitEnabled() throws IOException {
     return executeCallable(new MasterCallable<Boolean>(getConnection(), getRpcControllerFactory()) {
       @Override
       protected Boolean rpcCall() throws Exception {
         return master.isSplitOrMergeEnabled(getRpcController(),
-          RequestConverter.buildIsSplitOrMergeEnabledRequest(switchType)).getEnabled();
+          RequestConverter.buildIsSplitOrMergeEnabledRequest(MasterSwitchType.SPLIT)).getEnabled();
       }
     });
   }
 
-  private HRegionInfo getMobRegionInfo(TableName tableName) {
-    return new HRegionInfo(tableName, Bytes.toBytes(".mob"),
-            HConstants.EMPTY_END_ROW, false, 0);
+  @Override
+  public boolean isMergeEnabled() throws IOException {
+    return executeCallable(new MasterCallable<Boolean>(getConnection(), getRpcControllerFactory()) {
+      @Override
+      protected Boolean rpcCall() throws Exception {
+        return master.isSplitOrMergeEnabled(getRpcController(),
+          RequestConverter.buildIsSplitOrMergeEnabledRequest(MasterSwitchType.MERGE)).getEnabled();
+      }
+    });
   }
 
   private RpcControllerFactory getRpcControllerFactory() {
@@ -3918,52 +3874,84 @@ public class HBaseAdmin implements Admin {
   }
 
   @Override
-  public void addReplicationPeer(String peerId, ReplicationPeerConfig peerConfig)
+  public void addReplicationPeer(String peerId, ReplicationPeerConfig peerConfig, boolean enabled)
       throws IOException {
-    executeCallable(new MasterCallable<Void>(getConnection(), getRpcControllerFactory()) {
-      @Override
-      protected Void rpcCall() throws Exception {
-        master.addReplicationPeer(getRpcController(),
-          RequestConverter.buildAddReplicationPeerRequest(peerId, peerConfig));
-        return null;
-      }
-    });
+    get(addReplicationPeerAsync(peerId, peerConfig, enabled), this.syncWaitTimeout,
+      TimeUnit.MILLISECONDS);
+  }
+
+  @Override
+  public Future<Void> addReplicationPeerAsync(String peerId, ReplicationPeerConfig peerConfig,
+      boolean enabled) throws IOException {
+    AddReplicationPeerResponse response = executeCallable(
+      new MasterCallable<AddReplicationPeerResponse>(getConnection(), getRpcControllerFactory()) {
+        @Override
+        protected AddReplicationPeerResponse rpcCall() throws Exception {
+          return master.addReplicationPeer(getRpcController(),
+            RequestConverter.buildAddReplicationPeerRequest(peerId, peerConfig, enabled));
+        }
+      });
+    return new ReplicationFuture(this, peerId, response.getProcId(), () -> "ADD_REPLICATION_PEER");
   }
 
   @Override
   public void removeReplicationPeer(String peerId) throws IOException {
-    executeCallable(new MasterCallable<Void>(getConnection(), getRpcControllerFactory()) {
-      @Override
-      protected Void rpcCall() throws Exception {
-        master.removeReplicationPeer(getRpcController(),
-          RequestConverter.buildRemoveReplicationPeerRequest(peerId));
-        return null;
-      }
-    });
+    get(removeReplicationPeerAsync(peerId), this.syncWaitTimeout, TimeUnit.MILLISECONDS);
+  }
+
+  @Override
+  public Future<Void> removeReplicationPeerAsync(String peerId) throws IOException {
+    RemoveReplicationPeerResponse response =
+      executeCallable(new MasterCallable<RemoveReplicationPeerResponse>(getConnection(),
+          getRpcControllerFactory()) {
+        @Override
+        protected RemoveReplicationPeerResponse rpcCall() throws Exception {
+          return master.removeReplicationPeer(getRpcController(),
+            RequestConverter.buildRemoveReplicationPeerRequest(peerId));
+        }
+      });
+    return new ReplicationFuture(this, peerId, response.getProcId(),
+      () -> "REMOVE_REPLICATION_PEER");
   }
 
   @Override
   public void enableReplicationPeer(final String peerId) throws IOException {
-    executeCallable(new MasterCallable<Void>(getConnection(), getRpcControllerFactory()) {
-      @Override
-      protected Void rpcCall() throws Exception {
-        master.enableReplicationPeer(getRpcController(),
-          RequestConverter.buildEnableReplicationPeerRequest(peerId));
-        return null;
-      }
-    });
+    get(enableReplicationPeerAsync(peerId), this.syncWaitTimeout, TimeUnit.MILLISECONDS);
+  }
+
+  @Override
+  public Future<Void> enableReplicationPeerAsync(final String peerId) throws IOException {
+    EnableReplicationPeerResponse response =
+      executeCallable(new MasterCallable<EnableReplicationPeerResponse>(getConnection(),
+          getRpcControllerFactory()) {
+        @Override
+        protected EnableReplicationPeerResponse rpcCall() throws Exception {
+          return master.enableReplicationPeer(getRpcController(),
+            RequestConverter.buildEnableReplicationPeerRequest(peerId));
+        }
+      });
+    return new ReplicationFuture(this, peerId, response.getProcId(),
+      () -> "ENABLE_REPLICATION_PEER");
   }
 
   @Override
   public void disableReplicationPeer(final String peerId) throws IOException {
-    executeCallable(new MasterCallable<Void>(getConnection(), getRpcControllerFactory()) {
-      @Override
-      protected Void rpcCall() throws Exception {
-        master.disableReplicationPeer(getRpcController(),
-          RequestConverter.buildDisableReplicationPeerRequest(peerId));
-        return null;
-      }
-    });
+    get(disableReplicationPeerAsync(peerId), this.syncWaitTimeout, TimeUnit.MILLISECONDS);
+  }
+
+  @Override
+  public Future<Void> disableReplicationPeerAsync(final String peerId) throws IOException {
+    DisableReplicationPeerResponse response =
+      executeCallable(new MasterCallable<DisableReplicationPeerResponse>(getConnection(),
+          getRpcControllerFactory()) {
+        @Override
+        protected DisableReplicationPeerResponse rpcCall() throws Exception {
+          return master.disableReplicationPeer(getRpcController(),
+            RequestConverter.buildDisableReplicationPeerRequest(peerId));
+        }
+      });
+    return new ReplicationFuture(this, peerId, response.getProcId(),
+      () -> "DISABLE_REPLICATION_PEER");
   }
 
   @Override
@@ -3974,7 +3962,7 @@ public class HBaseAdmin implements Admin {
       protected ReplicationPeerConfig rpcCall() throws Exception {
         GetReplicationPeerConfigResponse response = master.getReplicationPeerConfig(
           getRpcController(), RequestConverter.buildGetReplicationPeerConfigRequest(peerId));
-        return ReplicationSerDeHelper.convert(response.getPeerConfig());
+        return ReplicationPeerConfigUtil.convert(response.getPeerConfig());
       }
     });
   }
@@ -3982,48 +3970,55 @@ public class HBaseAdmin implements Admin {
   @Override
   public void updateReplicationPeerConfig(final String peerId,
       final ReplicationPeerConfig peerConfig) throws IOException {
-    executeCallable(new MasterCallable<Void>(getConnection(), getRpcControllerFactory()) {
-      @Override
-      protected Void rpcCall() throws Exception {
-        master.updateReplicationPeerConfig(getRpcController(),
-          RequestConverter.buildUpdateReplicationPeerConfigRequest(peerId, peerConfig));
-        return null;
-      }
-    });
+    get(updateReplicationPeerConfigAsync(peerId, peerConfig), this.syncWaitTimeout,
+      TimeUnit.MILLISECONDS);
+  }
+
+  @Override
+  public Future<Void> updateReplicationPeerConfigAsync(final String peerId,
+      final ReplicationPeerConfig peerConfig) throws IOException {
+    UpdateReplicationPeerConfigResponse response =
+      executeCallable(new MasterCallable<UpdateReplicationPeerConfigResponse>(getConnection(),
+          getRpcControllerFactory()) {
+        @Override
+        protected UpdateReplicationPeerConfigResponse rpcCall() throws Exception {
+          return master.updateReplicationPeerConfig(getRpcController(),
+            RequestConverter.buildUpdateReplicationPeerConfigRequest(peerId, peerConfig));
+        }
+      });
+    return new ReplicationFuture(this, peerId, response.getProcId(),
+      () -> "UPDATE_REPLICATION_PEER_CONFIG");
   }
 
   @Override
   public void appendReplicationPeerTableCFs(String id,
-      Map<TableName, ? extends Collection<String>> tableCfs) throws ReplicationException,
-      IOException {
+      Map<TableName, List<String>> tableCfs)
+      throws ReplicationException, IOException {
     if (tableCfs == null) {
       throw new ReplicationException("tableCfs is null");
     }
     ReplicationPeerConfig peerConfig = getReplicationPeerConfig(id);
-    ReplicationSerDeHelper.appendTableCFsToReplicationPeerConfig(tableCfs, peerConfig);
-    updateReplicationPeerConfig(id, peerConfig);
+    ReplicationPeerConfig newPeerConfig =
+        ReplicationPeerConfigUtil.appendTableCFsToReplicationPeerConfig(tableCfs, peerConfig);
+    updateReplicationPeerConfig(id, newPeerConfig);
   }
 
   @Override
   public void removeReplicationPeerTableCFs(String id,
-      Map<TableName, ? extends Collection<String>> tableCfs) throws ReplicationException,
-      IOException {
+      Map<TableName, List<String>> tableCfs)
+      throws ReplicationException, IOException {
     if (tableCfs == null) {
       throw new ReplicationException("tableCfs is null");
     }
     ReplicationPeerConfig peerConfig = getReplicationPeerConfig(id);
-    ReplicationSerDeHelper.removeTableCFsFromReplicationPeerConfig(tableCfs, peerConfig, id);
-    updateReplicationPeerConfig(id, peerConfig);
+    ReplicationPeerConfig newPeerConfig =
+        ReplicationPeerConfigUtil.removeTableCFsFromReplicationPeerConfig(tableCfs, peerConfig, id);
+    updateReplicationPeerConfig(id, newPeerConfig);
   }
 
   @Override
   public List<ReplicationPeerDescription> listReplicationPeers() throws IOException {
     return listReplicationPeers((Pattern)null);
-  }
-
-  @Override
-  public List<ReplicationPeerDescription> listReplicationPeers(String regex) throws IOException {
-    return listReplicationPeers(Pattern.compile(regex));
   }
 
   @Override
@@ -4038,7 +4033,7 @@ public class HBaseAdmin implements Admin {
             .getPeerDescList();
         List<ReplicationPeerDescription> result = new ArrayList<>(peersList.size());
         for (ReplicationProtos.ReplicationPeerDescription peer : peersList) {
-          result.add(ReplicationSerDeHelper.toReplicationPeerDescription(peer));
+          result.add(ReplicationPeerConfigUtil.toReplicationPeerDescription(peer));
         }
         return result;
       }
@@ -4046,27 +4041,29 @@ public class HBaseAdmin implements Admin {
   }
 
   @Override
-  public void drainRegionServers(List<ServerName> servers) throws IOException {
+  public void decommissionRegionServers(List<ServerName> servers, boolean offload)
+      throws IOException {
     executeCallable(new MasterCallable<Void>(getConnection(), getRpcControllerFactory()) {
       @Override
       public Void rpcCall() throws ServiceException {
-        master.drainRegionServers(getRpcController(),
-          RequestConverter.buildDrainRegionServersRequest(servers));
+        master.decommissionRegionServers(getRpcController(),
+          RequestConverter.buildDecommissionRegionServersRequest(servers, offload));
         return null;
       }
     });
   }
 
   @Override
-  public List<ServerName> listDrainingRegionServers() throws IOException {
+  public List<ServerName> listDecommissionedRegionServers() throws IOException {
     return executeCallable(new MasterCallable<List<ServerName>>(getConnection(),
               getRpcControllerFactory()) {
       @Override
       public List<ServerName> rpcCall() throws ServiceException {
-        ListDrainingRegionServersRequest req = ListDrainingRegionServersRequest.newBuilder().build();
+        ListDecommissionedRegionServersRequest req =
+            ListDecommissionedRegionServersRequest.newBuilder().build();
         List<ServerName> servers = new ArrayList<>();
-        for (HBaseProtos.ServerName server : master.listDrainingRegionServers(null, req)
-            .getServerNameList()) {
+        for (HBaseProtos.ServerName server : master
+            .listDecommissionedRegionServers(getRpcController(), req).getServerNameList()) {
           servers.add(ProtobufUtil.toServerName(server));
         }
         return servers;
@@ -4075,11 +4072,13 @@ public class HBaseAdmin implements Admin {
   }
 
   @Override
-  public void removeDrainFromRegionServers(List<ServerName> servers) throws IOException {
+  public void recommissionRegionServer(ServerName server, List<byte[]> encodedRegionNames)
+      throws IOException {
     executeCallable(new MasterCallable<Void>(getConnection(), getRpcControllerFactory()) {
       @Override
       public Void rpcCall() throws ServiceException {
-        master.removeDrainFromRegionServers(getRpcController(), RequestConverter.buildRemoveDrainFromRegionServersRequest(servers));
+        master.recommissionRegionServer(getRpcController(),
+          RequestConverter.buildRecommissionRegionServerRequest(server, encodedRegionNames));
         return null;
       }
     });
@@ -4088,19 +4087,18 @@ public class HBaseAdmin implements Admin {
   @Override
   public List<TableCFs> listReplicatedTableCFs() throws IOException {
     List<TableCFs> replicatedTableCFs = new ArrayList<>();
-    HTableDescriptor[] tables = listTables();
-    for (HTableDescriptor table : tables) {
-      HColumnDescriptor[] columns = table.getColumnFamilies();
+    List<TableDescriptor> tables = listTableDescriptors();
+    tables.forEach(table -> {
       Map<String, Integer> cfs = new HashMap<>();
-      for (HColumnDescriptor column : columns) {
-        if (column.getScope() != HConstants.REPLICATION_SCOPE_LOCAL) {
-          cfs.put(column.getNameAsString(), column.getScope());
-        }
-      }
+      Stream.of(table.getColumnFamilies())
+          .filter(column -> column.getScope() != HConstants.REPLICATION_SCOPE_LOCAL)
+          .forEach(column -> {
+            cfs.put(column.getNameAsString(), column.getScope());
+          });
       if (!cfs.isEmpty()) {
         replicatedTableCFs.add(new TableCFs(table.getTableName(), cfs));
       }
-    }
+    });
     return replicatedTableCFs;
   }
 
@@ -4124,81 +4122,10 @@ public class HBaseAdmin implements Admin {
       throw new IllegalArgumentException("Table name is null");
     }
     if (!tableExists(tableName)) {
-      throw new TableNotFoundException("Table '" + tableName.getNamespaceAsString()
+      throw new TableNotFoundException("Table '" + tableName.getNameAsString()
           + "' does not exists.");
     }
     setTableRep(tableName, false);
-  }
-
-  /**
-   * Copies the REPLICATION_SCOPE of table descriptor passed as an argument. Before copy, the method
-   * ensures that the name of table and column-families should match.
-   * @param peerHtd descriptor on peer cluster
-   * @param localHtd - The HTableDescriptor of table from source cluster.
-   * @return true If the name of table and column families match and REPLICATION_SCOPE copied
-   *         successfully. false If there is any mismatch in the names.
-   */
-  private boolean copyReplicationScope(final HTableDescriptor peerHtd,
-      final HTableDescriptor localHtd) {
-    // Copy the REPLICATION_SCOPE only when table names and the names of
-    // Column-Families are same.
-    int result = peerHtd.getTableName().compareTo(localHtd.getTableName());
-
-    if (result == 0) {
-      Iterator<HColumnDescriptor> remoteHCDIter = peerHtd.getFamilies().iterator();
-      Iterator<HColumnDescriptor> localHCDIter = localHtd.getFamilies().iterator();
-
-      while (remoteHCDIter.hasNext() && localHCDIter.hasNext()) {
-        HColumnDescriptor remoteHCD = remoteHCDIter.next();
-        HColumnDescriptor localHCD = localHCDIter.next();
-
-        String remoteHCDName = remoteHCD.getNameAsString();
-        String localHCDName = localHCD.getNameAsString();
-
-        if (remoteHCDName.equals(localHCDName)) {
-          remoteHCD.setScope(localHCD.getScope());
-        } else {
-          result = -1;
-          break;
-        }
-      }
-      if (remoteHCDIter.hasNext() || localHCDIter.hasNext()) {
-        return false;
-      }
-    }
-
-    return result == 0;
-  }
-
-  /**
-   * Compare the contents of the descriptor with another one passed as a parameter for replication
-   * purpose. The REPLICATION_SCOPE field is ignored during comparison.
-   * @param peerHtd descriptor on peer cluster
-   * @param localHtd descriptor on source cluster which needs to be replicated.
-   * @return true if the contents of the two descriptors match (ignoring just REPLICATION_SCOPE).
-   * @see java.lang.Object#equals(java.lang.Object)
-   */
-  private boolean compareForReplication(HTableDescriptor peerHtd, HTableDescriptor localHtd) {
-    if (peerHtd == localHtd) {
-      return true;
-    }
-    if (peerHtd == null) {
-      return false;
-    }
-    boolean result = false;
-
-    // Create a copy of peer HTD as we need to change its replication
-    // scope to match with the local HTD.
-    HTableDescriptor peerHtdCopy = new HTableDescriptor(peerHtd);
-
-    result = copyReplicationScope(peerHtdCopy, localHtd);
-
-    // If copy was successful, compare the two tables now.
-    if (result) {
-      result = (peerHtdCopy.compareTo(localHtd) == 0);
-    }
-
-    return result;
   }
 
   /**
@@ -4221,21 +4148,23 @@ public class HBaseAdmin implements Admin {
     }
 
     for (ReplicationPeerDescription peerDesc : peers) {
-      if (needToReplicate(tableName, peerDesc)) {
-        Configuration peerConf = getPeerClusterConfiguration(peerDesc);
+      if (peerDesc.getPeerConfig().needToReplicate(tableName)) {
+        Configuration peerConf =
+            ReplicationPeerConfigUtil.getPeerClusterConfiguration(this.conf, peerDesc);
         try (Connection conn = ConnectionFactory.createConnection(peerConf);
             Admin repHBaseAdmin = conn.getAdmin()) {
-          HTableDescriptor localHtd = getTableDescriptor(tableName);
-          HTableDescriptor peerHtd = null;
+          TableDescriptor tableDesc = getDescriptor(tableName);
+          TableDescriptor peerTableDesc = null;
           if (!repHBaseAdmin.tableExists(tableName)) {
-            repHBaseAdmin.createTable(localHtd, splits);
+            repHBaseAdmin.createTable(tableDesc, splits);
           } else {
-            peerHtd = repHBaseAdmin.getTableDescriptor(tableName);
-            if (peerHtd == null) {
+            peerTableDesc = repHBaseAdmin.getDescriptor(tableName);
+            if (peerTableDesc == null) {
               throw new IllegalArgumentException("Failed to get table descriptor for table "
                   + tableName.getNameAsString() + " from peer cluster " + peerDesc.getPeerId());
             }
-            if (!compareForReplication(peerHtd, localHtd)) {
+            if (TableDescriptor.COMPARATOR_IGNORE_REPLICATION.compare(peerTableDesc,
+              tableDesc) != 0) {
               throw new IllegalArgumentException("Table " + tableName.getNameAsString()
                   + " exists in peer cluster " + peerDesc.getPeerId()
                   + ", but the table descriptors are not same when compared with source cluster."
@@ -4248,106 +4177,18 @@ public class HBaseAdmin implements Admin {
   }
 
   /**
-   * Decide whether the table need replicate to the peer cluster according to the peer config
-   * @param table name of the table
-   * @param peer config for the peer
-   * @return true if the table need replicate to the peer cluster
-   */
-  private boolean needToReplicate(TableName table, ReplicationPeerDescription peer) {
-    ReplicationPeerConfig peerConfig = peer.getPeerConfig();
-    Set<String> namespaces = peerConfig.getNamespaces();
-    Map<TableName, List<String>> tableCFsMap = peerConfig.getTableCFsMap();
-    // If null means user has explicitly not configured any namespaces and table CFs
-    // so all the tables data are applicable for replication
-    if (namespaces == null && tableCFsMap == null) {
-      return true;
-    }
-    if (namespaces != null && namespaces.contains(table.getNamespaceAsString())) {
-      return true;
-    }
-    if (tableCFsMap != null && tableCFsMap.containsKey(table)) {
-      return true;
-    }
-    LOG.debug("Table " + table.getNameAsString()
-        + " doesn't need replicate to peer cluster, peerId=" + peer.getPeerId() + ", clusterKey="
-        + peerConfig.getClusterKey());
-    return false;
-  }
-
-  /**
    * Set the table's replication switch if the table's replication switch is already not set.
    * @param tableName name of the table
    * @param enableRep is replication switch enable or disable
    * @throws IOException if a remote or network exception occurs
    */
   private void setTableRep(final TableName tableName, boolean enableRep) throws IOException {
-    HTableDescriptor htd = new HTableDescriptor(getTableDescriptor(tableName));
-    ReplicationState currentReplicationState = getTableReplicationState(htd);
-    if (enableRep && currentReplicationState != ReplicationState.ENABLED
-        || !enableRep && currentReplicationState != ReplicationState.DISABLED) {
-      for (HColumnDescriptor hcd : htd.getFamilies()) {
-        hcd.setScope(enableRep ? HConstants.REPLICATION_SCOPE_GLOBAL
-            : HConstants.REPLICATION_SCOPE_LOCAL);
-      }
-      modifyTable(tableName, htd);
+    TableDescriptor tableDesc = getDescriptor(tableName);
+    if (!tableDesc.matchReplicationScope(enableRep)) {
+      int scope =
+          enableRep ? HConstants.REPLICATION_SCOPE_GLOBAL : HConstants.REPLICATION_SCOPE_LOCAL;
+      modifyTable(TableDescriptorBuilder.newBuilder(tableDesc).setReplicationScope(scope).build());
     }
-  }
-
-  /**
-   * This enum indicates the current state of the replication for a given table.
-   */
-  private enum ReplicationState {
-    ENABLED, // all column families enabled
-    MIXED, // some column families enabled, some disabled
-    DISABLED // all column families disabled
-  }
-
-  /**
-   * @param htd table descriptor details for the table to check
-   * @return ReplicationState the current state of the table.
-   */
-  private ReplicationState getTableReplicationState(HTableDescriptor htd) {
-    boolean hasEnabled = false;
-    boolean hasDisabled = false;
-
-    for (HColumnDescriptor hcd : htd.getFamilies()) {
-      if (hcd.getScope() != HConstants.REPLICATION_SCOPE_GLOBAL
-          && hcd.getScope() != HConstants.REPLICATION_SCOPE_SERIAL) {
-        hasDisabled = true;
-      } else {
-        hasEnabled = true;
-      }
-    }
-
-    if (hasEnabled && hasDisabled) return ReplicationState.MIXED;
-    if (hasEnabled) return ReplicationState.ENABLED;
-    return ReplicationState.DISABLED;
-  }
-
-  /**
-   * Returns the configuration needed to talk to the remote slave cluster.
-   * @param peer the description of replication peer
-   * @return the configuration for the peer cluster, null if it was unable to get the configuration
-   * @throws IOException
-   */
-  private Configuration getPeerClusterConfiguration(ReplicationPeerDescription peer)
-      throws IOException {
-    ReplicationPeerConfig peerConfig = peer.getPeerConfig();
-    Configuration otherConf;
-    try {
-      otherConf = HBaseConfiguration.createClusterConf(this.conf, peerConfig.getClusterKey());
-    } catch (IOException e) {
-      throw new IOException("Can't get peer configuration for peerId=" + peer.getPeerId(), e);
-    }
-
-    if (!peerConfig.getConfiguration().isEmpty()) {
-      CompoundConfiguration compound = new CompoundConfiguration();
-      compound.add(otherConf);
-      compound.addStringMap(peerConfig.getConfiguration());
-      return compound;
-    }
-
-    return otherConf;
   }
 
   @Override
@@ -4369,19 +4210,6 @@ public class HBaseAdmin implements Admin {
       }
     };
     ProtobufUtil.call(callable);
-  }
-
-  @Override
-  public List<ServerName> listDeadServers() throws IOException {
-    return executeCallable(new MasterCallable<List<ServerName>>(getConnection(),
-            getRpcControllerFactory()) {
-      @Override
-      public List<ServerName> rpcCall() throws ServiceException {
-        ListDeadServersRequest req = ListDeadServersRequest.newBuilder().build();
-        return ProtobufUtil.toServerNameList(
-                master.listDeadServers(getRpcController(), req).getServerNameList());
-      }
-    });
   }
 
   @Override

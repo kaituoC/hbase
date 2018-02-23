@@ -28,7 +28,7 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.exceptions.DeserializationException;
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.FilterProtos;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.InvalidProtocolBufferException;
+import org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException;
 
 /**
  * This filter is used to filter based on the column qualifier. It takes an
@@ -70,11 +70,17 @@ public class QualifierFilter extends CompareFilter {
     super(op, qualifierComparator);
   }
 
+  @Deprecated
   @Override
-  public ReturnCode filterKeyValue(Cell v) {
-    int qualifierLength = v.getQualifierLength();
+  public ReturnCode filterKeyValue(final Cell c) {
+    return filterCell(c);
+  }
+
+  @Override
+  public ReturnCode filterCell(final Cell c) {
+    int qualifierLength = c.getQualifierLength();
     if (qualifierLength > 0) {
-      if (compareQualifier(getCompareOperator(), this.comparator, v)) {
+      if (compareQualifier(getCompareOperator(), this.comparator, c)) {
         return ReturnCode.SKIP;
       }
     }
@@ -91,6 +97,7 @@ public class QualifierFilter extends CompareFilter {
   /**
    * @return The filter serialized using pb
    */
+  @Override
   public byte [] toByteArray() {
     FilterProtos.QualifierFilter.Builder builder =
       FilterProtos.QualifierFilter.newBuilder();
@@ -129,6 +136,7 @@ public class QualifierFilter extends CompareFilter {
    * @return true if and only if the fields of the filter that are serialized
    * are equal to the corresponding fields in other.  Used for testing.
    */
+  @Override
   boolean areSerializedFieldsEqual(Filter o) {
     if (o == this) return true;
     if (!(o instanceof QualifierFilter)) return false;

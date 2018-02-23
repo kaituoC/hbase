@@ -17,8 +17,6 @@
  */
 package org.apache.hadoop.hbase.tool;
 
-import static java.lang.String.format;
-
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InterruptedIOException;
@@ -34,6 +32,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.Optional;
 import java.util.Set;
 import java.util.SortedMap;
 import java.util.TreeMap;
@@ -47,10 +46,8 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
-
+import static java.lang.String.format;
 import org.apache.commons.lang3.mutable.MutableInt;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FileStatus;
@@ -61,7 +58,6 @@ import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotFoundException;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.ClientServiceCallable;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
@@ -91,16 +87,22 @@ import org.apache.hadoop.hbase.regionserver.StoreFileInfo;
 import org.apache.hadoop.hbase.regionserver.StoreFileWriter;
 import org.apache.hadoop.hbase.security.UserProvider;
 import org.apache.hadoop.hbase.security.token.FsDelegationToken;
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.HashMultimap;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Multimap;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Multimaps;
-import org.apache.hadoop.hbase.shaded.com.google.common.util.concurrent.ThreadFactoryBuilder;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.collect.HashMultimap;
+import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
+import org.apache.hbase.thirdparty.com.google.common.collect.Maps;
+import org.apache.hbase.thirdparty.com.google.common.collect.Multimap;
+import org.apache.hbase.thirdparty.com.google.common.collect.Multimaps;
+import org.apache.hbase.thirdparty.com.google.common.util.concurrent.ThreadFactoryBuilder;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSHDFSUtils;
+import org.apache.hadoop.hbase.util.FSVisitor;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Tool to load the output of HFileOutputFormat into an existing table.
@@ -108,7 +110,7 @@ import org.apache.hadoop.util.ToolRunner;
 @InterfaceAudience.Public
 public class LoadIncrementalHFiles extends Configured implements Tool {
 
-  private static final Log LOG = LogFactory.getLog(LoadIncrementalHFiles.class);
+  private static final Logger LOG = LoggerFactory.getLogger(LoadIncrementalHFiles.class);
 
   public static final String NAME = "completebulkload";
   static final String RETRY_ON_IO_EXCEPTION = "hbase.bulkload.retries.retryOnIOException";
@@ -180,10 +182,12 @@ public class LoadIncrementalHFiles extends Configured implements Tool {
   }
 
   private void usage() {
-    System.err.println("usage: " + NAME + " /path/to/hfileoutputformat-output tablename" + "\n -D" +
-        CREATE_TABLE_CONF_KEY + "=no - can be used to avoid creation of table by this tool\n" +
-        "  Note: if you set this to 'no', then the target table must already exist in HBase\n -D" +
-        IGNORE_UNMATCHED_CF_CONF_KEY + "=yes - can be used to ignore unmatched column families\n" +
+    System.err.println("usage: " + NAME + " /path/to/hfileoutputformat-output tablename -loadTable"
+        + "\n -D" + CREATE_TABLE_CONF_KEY + "=no - can be used to avoid creation of table by "
+        + "this tool\n  Note: if you set this to 'no', then the target table must already exist "
+        + "in HBase\n -loadTable implies your baseDirectory to store file has a depth of 3 ,you"
+        + " must have an existing table\n-D" + IGNORE_UNMATCHED_CF_CONF_KEY + "=yes - can be used "
+        + "to ignore unmatched column families\n" +
         "\n");
   }
 
@@ -327,7 +331,7 @@ public class LoadIncrementalHFiles extends Configured implements Tool {
       if (queue.isEmpty()) {
         LOG.warn(
           "Bulk load operation did not find any files to load in " + "directory " + hfofDir != null
-              ? hfofDir.toUri()
+              ? hfofDir.toUri().toString()
               : "" + ".  Does it contain files in " +
                   "subdirectories that correspond to column family names?");
         return Collections.emptyMap();
@@ -702,7 +706,7 @@ public class LoadIncrementalHFiles extends Configured implements Tool {
       Multimap<ByteBuffer, LoadQueueItem> regionGroups, final LoadQueueItem item, final Table table,
       final Pair<byte[][], byte[][]> startEndKeys) throws IOException {
     Path hfilePath = item.getFilePath();
-    byte[] first, last;
+    Optional<byte[]> first, last;
     try (HFile.Reader hfr = HFile.createReader(hfilePath.getFileSystem(getConf()), hfilePath,
       new CacheConfig(getConf()), true, getConf())) {
       hfr.loadFileInfo();
@@ -713,19 +717,19 @@ public class LoadIncrementalHFiles extends Configured implements Tool {
       return new Pair<>(null, hfilePath.getName());
     }
 
-    LOG.info("Trying to load hfile=" + hfilePath + " first=" + Bytes.toStringBinary(first) +
-        " last=" + Bytes.toStringBinary(last));
-    if (first == null || last == null) {
-      assert first == null && last == null;
+    LOG.info("Trying to load hfile=" + hfilePath + " first=" + first.map(Bytes::toStringBinary) +
+        " last=" + last.map(Bytes::toStringBinary));
+    if (!first.isPresent() || !last.isPresent()) {
+      assert !first.isPresent() && !last.isPresent();
       // TODO what if this is due to a bad HFile?
       LOG.info("hfile " + hfilePath + " has no entries, skipping");
       return null;
     }
-    if (Bytes.compareTo(first, last) > 0) {
-      throw new IllegalArgumentException(
-          "Invalid range: " + Bytes.toStringBinary(first) + " > " + Bytes.toStringBinary(last));
+    if (Bytes.compareTo(first.get(), last.get()) > 0) {
+      throw new IllegalArgumentException("Invalid range: " + Bytes.toStringBinary(first.get()) +
+          " > " + Bytes.toStringBinary(last.get()));
     }
-    int idx = Arrays.binarySearch(startEndKeys.getFirst(), first, Bytes.BYTES_COMPARATOR);
+    int idx = Arrays.binarySearch(startEndKeys.getFirst(), first.get(), Bytes.BYTES_COMPARATOR);
     if (idx < 0) {
       // not on boundary, returns -(insertion index). Calculate region it
       // would be in.
@@ -753,7 +757,7 @@ public class LoadIncrementalHFiles extends Configured implements Tool {
           "Please use hbck tool to fix it first.");
     }
 
-    boolean lastKeyInRange = Bytes.compareTo(last, startEndKeys.getSecond()[idx]) < 0 ||
+    boolean lastKeyInRange = Bytes.compareTo(last.get(), startEndKeys.getSecond()[idx]) < 0 ||
         Bytes.equals(startEndKeys.getSecond()[idx], HConstants.EMPTY_BYTE_ARRAY);
     if (!lastKeyInRange) {
       List<LoadQueueItem> lqis = splitStoreFile(item, table,
@@ -834,8 +838,8 @@ public class LoadIncrementalHFiles extends Configured implements Tool {
                 " for family " + builder.getNameAsString());
           }
           reader.loadFileInfo();
-          byte[] first = reader.getFirstRowKey();
-          byte[] last = reader.getLastRowKey();
+          byte[] first = reader.getFirstRowKey().get();
+          byte[] last = reader.getLastRowKey().get();
 
           LOG.info("Trying to figure out region boundaries hfile=" + hfile + " first=" +
               Bytes.toStringBinary(first) + " last=" + Bytes.toStringBinary(last));
@@ -876,7 +880,7 @@ public class LoadIncrementalHFiles extends Configured implements Tool {
       for (LoadQueueItem q : queue) {
         err.append("  ").append(q.getFilePath()).append('\n');
       }
-      LOG.error(err);
+      LOG.error(err.toString());
     }
   }
 
@@ -967,7 +971,7 @@ public class LoadIncrementalHFiles extends Configured implements Tool {
         continue;
       }
       Path familyDir = familyStat.getPath();
-      byte[] familyName = familyDir.getName().getBytes();
+      byte[] familyName = Bytes.toBytes(familyDir.getName());
       // Skip invalid family
       try {
         ColumnFamilyDescriptorBuilder.isLegalColumnFamilyName(familyName);
@@ -1149,7 +1153,8 @@ public class LoadIncrementalHFiles extends Configured implements Tool {
       }
       try (Table table = connection.getTable(tableName);
           RegionLocator locator = connection.getRegionLocator(tableName)) {
-        return doBulkLoad(new Path(hfofDir), admin, table, locator, isSilence(), isAlwaysCopyFiles());
+        return doBulkLoad(new Path(hfofDir), admin, table, locator, isSilence(),
+            isAlwaysCopyFiles());
       }
     }
   }
@@ -1177,13 +1182,33 @@ public class LoadIncrementalHFiles extends Configured implements Tool {
 
   @Override
   public int run(String[] args) throws Exception {
-    if (args.length < 2) {
+    if (args.length != 2 && args.length != 3) {
       usage();
       return -1;
     }
     String dirPath = args[0];
     TableName tableName = TableName.valueOf(args[1]);
-    return !run(dirPath, tableName).isEmpty() ? 0 : -1;
+
+
+    if (args.length == 2) {
+      return !run(dirPath, tableName).isEmpty() ? 0 : -1;
+    } else {
+      Map<byte[], List<Path>> family2Files = Maps.newHashMap();
+      FileSystem fs = FileSystem.get(getConf());
+      for (FileStatus regionDir : fs.listStatus(new Path(dirPath))) {
+        FSVisitor.visitRegionStoreFiles(fs, regionDir.getPath(), (region, family, hfileName) -> {
+          Path path = new Path(regionDir.getPath(), new Path(family, hfileName));
+          byte[] familyName = Bytes.toBytes(family);
+          if (family2Files.containsKey(familyName)) {
+            family2Files.get(familyName).add(path);
+          } else {
+            family2Files.put(familyName, Lists.newArrayList(path));
+          }
+        });
+      }
+      return !run(family2Files, tableName).isEmpty() ? 0 : -1;
+    }
+
   }
 
   public static void main(String[] args) throws Exception {

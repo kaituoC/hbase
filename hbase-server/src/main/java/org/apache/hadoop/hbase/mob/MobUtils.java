@@ -27,6 +27,7 @@ import java.util.Calendar;
 import java.util.Collection;
 import java.util.Date;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.RejectedExecutionException;
@@ -35,25 +36,23 @@ import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
-import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
+import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.Tag;
 import org.apache.hadoop.hbase.TagType;
 import org.apache.hadoop.hbase.TagUtil;
 import org.apache.hadoop.hbase.backup.HFileArchiver;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.MobCompactPartitionPolicy;
+import org.apache.hadoop.hbase.client.RegionInfo;
+import org.apache.hadoop.hbase.client.RegionInfoBuilder;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.io.HFileLink;
@@ -70,7 +69,6 @@ import org.apache.hadoop.hbase.mob.compactions.PartitionedMobCompactor;
 import org.apache.hadoop.hbase.regionserver.BloomType;
 import org.apache.hadoop.hbase.regionserver.HStore;
 import org.apache.hadoop.hbase.regionserver.HStoreFile;
-import org.apache.hadoop.hbase.regionserver.StoreFile;
 import org.apache.hadoop.hbase.regionserver.StoreFileWriter;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ChecksumType;
@@ -78,6 +76,9 @@ import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.util.ReflectionUtils;
 import org.apache.hadoop.hbase.util.Threads;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * The mob utilities
@@ -85,7 +86,7 @@ import org.apache.hadoop.hbase.util.Threads;
 @InterfaceAudience.Private
 public final class MobUtils {
 
-  private static final Log LOG = LogFactory.getLog(MobUtils.class);
+  private static final Logger LOG = LoggerFactory.getLogger(MobUtils.class);
   private final static long WEEKLY_THRESHOLD_MULTIPLIER = 7;
   private final static long MONTHLY_THRESHOLD_MULTIPLIER = 4 * WEEKLY_THRESHOLD_MULTIPLIER;
 
@@ -175,8 +176,10 @@ public final class MobUtils {
    */
   public static boolean isMobReferenceCell(Cell cell) {
     if (cell.getTagsLength() > 0) {
-      Tag tag = CellUtil.getTag(cell, TagType.MOB_REFERENCE_TAG_TYPE);
-      return tag != null;
+      Optional<Tag> tag = PrivateCellUtil.getTag(cell, TagType.MOB_REFERENCE_TAG_TYPE);
+      if (tag.isPresent()) {
+        return true;
+      }
     }
     return false;
   }
@@ -188,7 +191,10 @@ public final class MobUtils {
    */
   public static Tag getTableNameTag(Cell cell) {
     if (cell.getTagsLength() > 0) {
-      return CellUtil.getTag(cell, TagType.MOB_TABLE_NAME_TAG_TYPE);
+      Optional<Tag> tag = PrivateCellUtil.getTag(cell, TagType.MOB_TABLE_NAME_TAG_TYPE);
+      if (tag.isPresent()) {
+        return tag.get();
+      }
     }
     return null;
   }
@@ -315,7 +321,7 @@ public final class MobUtils {
       // no file found
       return;
     }
-    List<StoreFile> filesToClean = new ArrayList<>();
+    List<HStoreFile> filesToClean = new ArrayList<>();
     int deletedFileCount = 0;
     for (FileStatus file : stats) {
       String fileName = file.getPath().getName();
@@ -386,7 +392,7 @@ public final class MobUtils {
    */
   public static Path getMobRegionPath(Configuration conf, TableName tableName) {
     Path tablePath = FSUtils.getTableDir(getMobHome(conf), tableName);
-    HRegionInfo regionInfo = getMobRegionInfo(tableName);
+    RegionInfo regionInfo = getMobRegionInfo(tableName);
     return new Path(tablePath, regionInfo.getEncodedName());
   }
 
@@ -414,24 +420,27 @@ public final class MobUtils {
   }
 
   /**
-   * Gets the HRegionInfo of the mob files.
+   * Gets the RegionInfo of the mob files.
    * This is a dummy region. The mob files are not saved in a region in HBase.
    * This is only used in mob snapshot. It's internally used only.
    * @param tableName
    * @return A dummy mob region info.
    */
-  public static HRegionInfo getMobRegionInfo(TableName tableName) {
-    HRegionInfo info = new HRegionInfo(tableName, MobConstants.MOB_REGION_NAME_BYTES,
-        HConstants.EMPTY_END_ROW, false, 0);
-    return info;
+  public static RegionInfo getMobRegionInfo(TableName tableName) {
+    return RegionInfoBuilder.newBuilder(tableName)
+        .setStartKey(MobConstants.MOB_REGION_NAME_BYTES)
+        .setEndKey(HConstants.EMPTY_END_ROW)
+        .setSplit(false)
+        .setRegionId(0)
+        .build();
   }
 
   /**
-   * Gets whether the current HRegionInfo is a mob one.
-   * @param regionInfo The current HRegionInfo.
-   * @return If true, the current HRegionInfo is a mob one.
+   * Gets whether the current RegionInfo is a mob one.
+   * @param regionInfo The current RegionInfo.
+   * @return If true, the current RegionInfo is a mob one.
    */
-  public static boolean isMobRegionInfo(HRegionInfo regionInfo) {
+  public static boolean isMobRegionInfo(RegionInfo regionInfo) {
     return regionInfo == null ? false : getMobRegionInfo(regionInfo.getTable()).getEncodedName()
         .equals(regionInfo.getEncodedName());
   }
@@ -467,7 +476,7 @@ public final class MobUtils {
    * @throws IOException
    */
   public static void removeMobFiles(Configuration conf, FileSystem fs, TableName tableName,
-      Path tableDir, byte[] family, Collection<StoreFile> storeFiles) throws IOException {
+      Path tableDir, byte[] family, Collection<HStoreFile> storeFiles) throws IOException {
     HFileArchiver.archiveStoreFiles(conf, fs, getMobRegionInfo(tableName), tableDir, family,
         storeFiles);
   }
@@ -498,7 +507,7 @@ public final class MobUtils {
 
   public static Cell createMobRefCell(Cell cell, byte[] fileName, byte[] refCellTags) {
     byte[] refValue = Bytes.add(Bytes.toBytes(cell.getValueLength()), fileName);
-    return CellUtil.createCell(cell, refValue, TagUtil.concatTags(refCellTags, cell));
+    return PrivateCellUtil.createCell(cell, refValue, TagUtil.concatTags(refCellTags, cell));
   }
 
   /**
@@ -678,7 +687,7 @@ public final class MobUtils {
 
     StoreFileWriter w = new StoreFileWriter.Builder(conf, writerCacheConf, fs)
         .withFilePath(path)
-        .withComparator(CellComparator.COMPARATOR).withBloomType(bloomType)
+        .withComparator(CellComparator.getInstance()).withBloomType(bloomType)
         .withMaxKeyCount(maxKeyCount).withFileContext(hFileContext).build();
     return w;
   }
@@ -721,7 +730,7 @@ public final class MobUtils {
    */
   private static void validateMobFile(Configuration conf, FileSystem fs, Path path,
       CacheConfig cacheConfig, boolean primaryReplica) throws IOException {
-    StoreFile storeFile = null;
+    HStoreFile storeFile = null;
     try {
       storeFile = new HStoreFile(fs, path, conf, cacheConfig, BloomType.NONE, primaryReplica);
       storeFile.initReader();
@@ -730,7 +739,7 @@ public final class MobUtils {
       throw e;
     } finally {
       if (storeFile != null) {
-        storeFile.closeReader(false);
+        storeFile.closeStoreFile(false);
       }
     }
   }
@@ -758,7 +767,7 @@ public final class MobUtils {
    * @return The real mob value length.
    */
   public static int getMobValueLength(Cell cell) {
-    return CellUtil.getValueAsInt(cell);
+    return PrivateCellUtil.getValueAsInt(cell);
   }
 
   /**
@@ -888,7 +897,7 @@ public final class MobUtils {
    * @return A delete marker with the ref tag.
    */
   public static Cell createMobRefDeleteMarker(Cell cell) {
-    return CellUtil.createCell(cell, TagUtil.concatTags(REF_DELETE_MARKER_TAG_BYTES, cell));
+    return PrivateCellUtil.createCell(cell, TagUtil.concatTags(REF_DELETE_MARKER_TAG_BYTES, cell));
   }
 
   /**

@@ -1,5 +1,4 @@
-/*
- *
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -31,27 +30,26 @@ import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
-
 import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.Stoppable;
+import org.apache.hadoop.hbase.Server;
+import org.apache.hadoop.hbase.ServerName;
+import org.apache.hadoop.hbase.TableDescriptors;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.hadoop.hbase.regionserver.HRegionServer;
 import org.apache.hadoop.hbase.regionserver.RSRpcServices;
+import org.apache.hadoop.hbase.regionserver.RegionServerCoprocessorHost;
 import org.apache.hadoop.hbase.replication.ChainWALEntryFilter;
 import org.apache.hadoop.hbase.replication.ClusterMarkingEntryFilter;
 import org.apache.hadoop.hbase.replication.ReplicationEndpoint;
 import org.apache.hadoop.hbase.replication.ReplicationException;
 import org.apache.hadoop.hbase.replication.ReplicationPeer;
-import org.apache.hadoop.hbase.replication.ReplicationPeers;
 import org.apache.hadoop.hbase.replication.ReplicationQueueInfo;
-import org.apache.hadoop.hbase.replication.ReplicationQueues;
+import org.apache.hadoop.hbase.replication.ReplicationQueueStorage;
 import org.apache.hadoop.hbase.replication.SystemTableWALEntryFilter;
 import org.apache.hadoop.hbase.replication.WALEntryFilter;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -59,9 +57,11 @@ import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.util.Threads;
 import org.apache.hadoop.hbase.wal.AbstractFSWALProvider;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
-
+import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 
 /**
  * Class that handles the source of a replication stream.
@@ -75,16 +75,16 @@ import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
  * </p>
  */
 @InterfaceAudience.Private
-public class ReplicationSource extends Thread implements ReplicationSourceInterface {
+public class ReplicationSource implements ReplicationSourceInterface {
 
-  private static final Log LOG = LogFactory.getLog(ReplicationSource.class);
+  private static final Logger LOG = LoggerFactory.getLogger(ReplicationSource.class);
   // Queues of logs to process, entry in format of walGroupId->queue,
   // each presents a queue for one wal group
   private Map<String, PriorityBlockingQueue<Path>> queues = new HashMap<>();
   // per group queue size, keep no more than this number of logs in each wal group
   protected int queueSizePerGroup;
-  protected ReplicationQueues replicationQueues;
-  private ReplicationPeers replicationPeers;
+  protected ReplicationQueueStorage queueStorage;
+  private ReplicationPeer replicationPeer;
 
   protected Configuration conf;
   protected ReplicationQueueInfo replicationQueueInfo;
@@ -94,7 +94,7 @@ public class ReplicationSource extends Thread implements ReplicationSourceInterf
   // The manager of all sources to which we ping back our progress
   protected ReplicationSourceManager manager;
   // Should we stop everything?
-  protected Stoppable stopper;
+  protected Server server;
   // How long should we sleep for each retry
   private long sleepForRetries;
   protected FileSystem fs;
@@ -105,17 +105,17 @@ public class ReplicationSource extends Thread implements ReplicationSourceInterf
   // total number of edits we replicated
   private AtomicLong totalReplicatedEdits = new AtomicLong(0);
   // The znode we currently play with
-  protected String peerClusterZnode;
+  protected String queueId;
   // Maximum number of retries before taking bold actions
   private int maxRetriesMultiplier;
   // Indicates if this particular source is running
   private volatile boolean sourceRunning = false;
   // Metrics for this source
   private MetricsSource metrics;
-  //WARN threshold for the number of queued logs, defaults to 2
+  // WARN threshold for the number of queued logs, defaults to 2
   private int logQueueWarnThreshold;
   // ReplicationEndpoint which will handle the actual replication
-  private ReplicationEndpoint replicationEndpoint;
+  private volatile ReplicationEndpoint replicationEndpoint;
   // A filter (or a chain of filters) for the WAL entries.
   protected WALEntryFilter walEntryFilter;
   // throttler
@@ -133,25 +133,24 @@ public class ReplicationSource extends Thread implements ReplicationSourceInterf
   public static final int DEFAULT_WAIT_ON_ENDPOINT_SECONDS = 30;
   private int waitOnEndpointSeconds = -1;
 
+  private Thread initThread;
+
   /**
    * Instantiation method used by region servers
-   *
    * @param conf configuration to use
    * @param fs file system to use
    * @param manager replication manager to ping to
-   * @param stopper     the atomic boolean to use to stop the regionserver
-   * @param peerClusterZnode the name of our znode
+   * @param server the server for this region server
+   * @param queueId the id of our replication queue
    * @param clusterId unique UUID for the cluster
-   * @param replicationEndpoint the replication endpoint implementation
    * @param metrics metrics for replication source
-   * @throws IOException
    */
   @Override
   public void init(Configuration conf, FileSystem fs, ReplicationSourceManager manager,
-      ReplicationQueues replicationQueues, ReplicationPeers replicationPeers, Stoppable stopper,
-      String peerClusterZnode, UUID clusterId, ReplicationEndpoint replicationEndpoint,
-      WALFileLengthProvider walFileLengthProvider, MetricsSource metrics) throws IOException {
-    this.stopper = stopper;
+      ReplicationQueueStorage queueStorage, ReplicationPeer replicationPeer, Server server,
+      String queueId, UUID clusterId, WALFileLengthProvider walFileLengthProvider,
+      MetricsSource metrics) throws IOException {
+    this.server = server;
     this.conf = HBaseConfiguration.create(conf);
     this.waitOnEndpointSeconds =
       this.conf.getInt(WAIT_ON_ENDPOINT_SECONDS, DEFAULT_WAIT_ON_ENDPOINT_SECONDS);
@@ -161,26 +160,25 @@ public class ReplicationSource extends Thread implements ReplicationSourceInterf
     this.maxRetriesMultiplier =
         this.conf.getInt("replication.source.maxretriesmultiplier", 300); // 5 minutes @ 1 sec per
     this.queueSizePerGroup = this.conf.getInt("hbase.regionserver.maxlogs", 32);
-    this.replicationQueues = replicationQueues;
-    this.replicationPeers = replicationPeers;
+    this.queueStorage = queueStorage;
+    this.replicationPeer = replicationPeer;
     this.manager = manager;
     this.fs = fs;
     this.metrics = metrics;
     this.clusterId = clusterId;
 
-    this.peerClusterZnode = peerClusterZnode;
-    this.replicationQueueInfo = new ReplicationQueueInfo(peerClusterZnode);
+    this.queueId = queueId;
+    this.replicationQueueInfo = new ReplicationQueueInfo(queueId);
     // ReplicationQueueInfo parses the peerId out of the znode for us
     this.peerId = this.replicationQueueInfo.getPeerId();
     this.logQueueWarnThreshold = this.conf.getInt("replication.source.log.queue.warn", 2);
-    this.replicationEndpoint = replicationEndpoint;
 
     defaultBandwidth = this.conf.getLong("replication.source.per.peer.node.bandwidth", 0);
     currentBandwidth = getCurrentBandwidth();
     this.throttler = new ReplicationThrottler((double) currentBandwidth / 10.0);
     this.totalBufferUsed = manager.getTotalBufferUsed();
     this.walFileLengthProvider = walFileLengthProvider;
-    LOG.info("peerClusterZnode=" + peerClusterZnode + ", ReplicationSource : " + peerId
+    LOG.info("queueId=" + queueId + ", ReplicationSource : " + peerId
         + ", currentBandwidth=" + this.currentBandwidth);
   }
 
@@ -198,7 +196,7 @@ public class ReplicationSource extends Thread implements ReplicationSourceInterf
     if (queue == null) {
       queue = new PriorityBlockingQueue<>(queueSizePerGroup, new LogsComparator());
       queues.put(logPrefix, queue);
-      if (this.sourceRunning) {
+      if (this.isSourceActive() && this.replicationEndpoint != null) {
         // new wal group observed after source startup, start a new worker thread to track it
         // notice: it's possible that log enqueued when this.running is set but worker thread
         // still not launched, so it's necessary to check workerThreads before start the worker
@@ -218,18 +216,12 @@ public class ReplicationSource extends Thread implements ReplicationSourceInterf
   @Override
   public void addHFileRefs(TableName tableName, byte[] family, List<Pair<Path, Path>> pairs)
       throws ReplicationException {
-    String peerId = peerClusterZnode;
-    if (peerId.contains("-")) {
-      // peerClusterZnode will be in the form peerId + "-" + rsZNode.
-      // A peerId will not have "-" in its name, see HBASE-11394
-      peerId = peerClusterZnode.split("-")[0];
-    }
-    Map<TableName, List<String>> tableCFMap = replicationPeers.getConnectedPeer(peerId).getTableCFs();
+    Map<TableName, List<String>> tableCFMap = replicationPeer.getTableCFs();
     if (tableCFMap != null) {
       List<String> tableCfs = tableCFMap.get(tableName);
       if (tableCFMap.containsKey(tableName)
           && (tableCfs == null || tableCfs.contains(Bytes.toString(family)))) {
-        this.replicationQueues.addHFileRefs(peerId, pairs);
+        this.queueStorage.addHFileRefs(peerId, pairs);
         metrics.incrSizeOfHFileRefsQueue(pairs.size());
       } else {
         LOG.debug("HFiles will not be replicated belonging to the table " + tableName + " family "
@@ -238,60 +230,52 @@ public class ReplicationSource extends Thread implements ReplicationSourceInterf
     } else {
       // user has explicitly not defined any table cfs for replication, means replicate all the
       // data
-      this.replicationQueues.addHFileRefs(peerId, pairs);
+      this.queueStorage.addHFileRefs(peerId, pairs);
       metrics.incrSizeOfHFileRefsQueue(pairs.size());
     }
   }
 
-  @Override
-  public void run() {
-    // mark we are running now
-    this.sourceRunning = true;
-    try {
-      // start the endpoint, connect to the cluster
-      this.replicationEndpoint.start();
-      this.replicationEndpoint.awaitRunning(this.waitOnEndpointSeconds, TimeUnit.SECONDS);
-    } catch (Exception ex) {
-      LOG.warn("Error starting ReplicationEndpoint, exiting", ex);
-      uninitialize();
-      throw new RuntimeException(ex);
+  private ReplicationEndpoint createReplicationEndpoint()
+      throws InstantiationException, IllegalAccessException, ClassNotFoundException, IOException {
+    RegionServerCoprocessorHost rsServerHost = null;
+    if (server instanceof HRegionServer) {
+      rsServerHost = ((HRegionServer) server).getRegionServerCoprocessorHost();
     }
-
-    int sleepMultiplier = 1;
-    // delay this until we are in an asynchronous thread
-    while (this.isSourceActive() && this.peerClusterId == null) {
-      this.peerClusterId = replicationEndpoint.getPeerUUID();
-      if (this.isSourceActive() && this.peerClusterId == null) {
-        if (sleepForRetries("Cannot contact the peer's zk ensemble", sleepMultiplier)) {
-          sleepMultiplier++;
-        }
+    String replicationEndpointImpl = replicationPeer.getPeerConfig().getReplicationEndpointImpl();
+    if (replicationEndpointImpl == null) {
+      // Default to HBase inter-cluster replication endpoint
+      replicationEndpointImpl = HBaseInterClusterReplicationEndpoint.class.getName();
+    }
+    ReplicationEndpoint replicationEndpoint =
+      Class.forName(replicationEndpointImpl).asSubclass(ReplicationEndpoint.class).newInstance();
+    if (rsServerHost != null) {
+      ReplicationEndpoint newReplicationEndPoint =
+        rsServerHost.postCreateReplicationEndPoint(replicationEndpoint);
+      if (newReplicationEndPoint != null) {
+        // Override the newly created endpoint from the hook with configured end point
+        replicationEndpoint = newReplicationEndPoint;
       }
     }
+    return replicationEndpoint;
+  }
 
-    // In rare case, zookeeper setting may be messed up. That leads to the incorrect
-    // peerClusterId value, which is the same as the source clusterId
-    if (clusterId.equals(peerClusterId) && !replicationEndpoint.canReplicateToSameCluster()) {
-      this.terminate("ClusterId " + clusterId + " is replicating to itself: peerClusterId "
-          + peerClusterId + " which is not allowed by ReplicationEndpoint:"
-          + replicationEndpoint.getClass().getName(), null, false);
-      this.manager.closeQueue(this);
-      return;
+  private void initAndStartReplicationEndpoint(ReplicationEndpoint replicationEndpoint)
+      throws IOException, TimeoutException {
+    TableDescriptors tableDescriptors = null;
+    if (server instanceof HRegionServer) {
+      tableDescriptors = ((HRegionServer) server).getTableDescriptors();
     }
-    LOG.info("Replicating " + clusterId + " -> " + peerClusterId);
-
-    initializeWALEntryFilter();
-    // start workers
-    for (Map.Entry<String, PriorityBlockingQueue<Path>> entry : queues.entrySet()) {
-      String walGroupId = entry.getKey();
-      PriorityBlockingQueue<Path> queue = entry.getValue();
-      tryStartNewShipper(walGroupId, queue);
-    }
+    replicationEndpoint
+        .init(new ReplicationEndpoint.Context(conf, replicationPeer.getConfiguration(), fs, peerId,
+            clusterId, replicationPeer, metrics, tableDescriptors, server));
+    replicationEndpoint.start();
+    replicationEndpoint.awaitRunning(waitOnEndpointSeconds, TimeUnit.SECONDS);
   }
 
   private void initializeWALEntryFilter() {
     // get the WALEntryFilter from ReplicationEndpoint and add it to default filters
-    ArrayList<WALEntryFilter> filters = Lists.newArrayList(
-      (WALEntryFilter)new SystemTableWALEntryFilter());
+    ArrayList<WALEntryFilter> filters =
+      Lists.<WALEntryFilter> newArrayList(new SystemTableWALEntryFilter());
     WALEntryFilter filterFromEndpoint = this.replicationEndpoint.getWALEntryfilter();
     if (filterFromEndpoint != null) {
       filters.add(filterFromEndpoint);
@@ -301,38 +285,31 @@ public class ReplicationSource extends Thread implements ReplicationSourceInterf
   }
 
   protected void tryStartNewShipper(String walGroupId, PriorityBlockingQueue<Path> queue) {
-    final ReplicationSourceShipper worker = new ReplicationSourceShipper(conf,
-        walGroupId, queue, this);
+    ReplicationSourceShipper worker = new ReplicationSourceShipper(conf, walGroupId, queue, this);
     ReplicationSourceShipper extant = workerThreads.putIfAbsent(walGroupId, worker);
     if (extant != null) {
       LOG.debug("Someone has beat us to start a worker thread for wal group " + walGroupId);
     } else {
       LOG.debug("Starting up worker for wal group " + walGroupId);
-      worker.startup(getUncaughtExceptionHandler());
-      worker.setWALReader(startNewWALReader(worker.getName(), walGroupId, queue,
-        worker.getStartPosition()));
-      workerThreads.put(walGroupId, worker);
+      worker.startup(this::uncaughtException);
+      worker.setWALReader(
+        startNewWALReader(worker.getName(), walGroupId, queue, worker.getStartPosition()));
     }
   }
 
   protected ReplicationSourceWALReader startNewWALReader(String threadName, String walGroupId,
       PriorityBlockingQueue<Path> queue, long startPosition) {
     ReplicationSourceWALReader walReader =
-        new ReplicationSourceWALReader(fs, conf, queue, startPosition, walEntryFilter, this);
+      new ReplicationSourceWALReader(fs, conf, queue, startPosition, walEntryFilter, this);
     return (ReplicationSourceWALReader) Threads.setDaemonThreadRunning(walReader,
-      threadName + ".replicationSource.wal-reader." + walGroupId + "," + peerClusterZnode,
-      getUncaughtExceptionHandler());
+      threadName + ".replicationSource.wal-reader." + walGroupId + "," + queueId,
+      this::uncaughtException);
   }
 
-  public Thread.UncaughtExceptionHandler getUncaughtExceptionHandler() {
-    return new Thread.UncaughtExceptionHandler() {
-      @Override
-      public void uncaughtException(final Thread t, final Throwable e) {
-        RSRpcServices.exitIfOOME(e);
-        LOG.error("Unexpected exception in " + t.getName() + " currentPath=" + getCurrentPath(), e);
-        stopper.stop("Unexpected exception in " + t.getName());
-      }
-    };
+  protected final void uncaughtException(Thread t, Throwable e) {
+    RSRpcServices.exitIfOOME(e);
+    LOG.error("Unexpected exception in " + t.getName() + " currentPath=" + getCurrentPath(), e);
+    server.abort("Unexpected exception in " + t.getName(), e);
   }
 
   @Override
@@ -372,23 +349,9 @@ public class ReplicationSource extends Thread implements ReplicationSourceInterf
   }
 
   private long getCurrentBandwidth() {
-    ReplicationPeer replicationPeer = this.replicationPeers.getConnectedPeer(peerId);
-    long peerBandwidth = replicationPeer != null ? replicationPeer.getPeerBandwidth() : 0;
+    long peerBandwidth = replicationPeer.getPeerBandwidth();
     // user can set peer bandwidth to 0 to use default bandwidth
     return peerBandwidth != 0 ? peerBandwidth : defaultBandwidth;
-  }
-
-  private void uninitialize() {
-    LOG.debug("Source exiting " + this.peerId);
-    metrics.clear();
-    if (this.replicationEndpoint.isRunning() || this.replicationEndpoint.isStarting()) {
-      this.replicationEndpoint.stop();
-      try {
-        this.replicationEndpoint.awaitTerminated(this.waitOnEndpointSeconds, TimeUnit.SECONDS);
-      } catch (TimeoutException e) {
-        LOG.warn("Failed termination after " + this.waitOnEndpointSeconds + " seconds.");
-      }
-    }
   }
 
   /**
@@ -412,25 +375,83 @@ public class ReplicationSource extends Thread implements ReplicationSourceInterf
 
   /**
    * check whether the peer is enabled or not
-   *
    * @return true if the peer is enabled, otherwise false
    */
   @Override
   public boolean isPeerEnabled() {
-    return this.replicationPeers.getStatusOfPeer(this.peerId);
+    return replicationPeer.isPeerEnabled();
+  }
+
+  private void initialize() {
+    int sleepMultiplier = 1;
+    while (this.isSourceActive()) {
+      ReplicationEndpoint replicationEndpoint;
+      try {
+        replicationEndpoint = createReplicationEndpoint();
+      } catch (Exception e) {
+        LOG.warn("error creating ReplicationEndpoint, retry", e);
+        if (sleepForRetries("Error creating ReplicationEndpoint", sleepMultiplier)) {
+          sleepMultiplier++;
+        }
+        continue;
+      }
+
+      try {
+        initAndStartReplicationEndpoint(replicationEndpoint);
+        this.replicationEndpoint = replicationEndpoint;
+        break;
+      } catch (Exception e) {
+        LOG.warn("Error starting ReplicationEndpoint, retry", e);
+        replicationEndpoint.stop();
+        if (sleepForRetries("Error starting ReplicationEndpoint", sleepMultiplier)) {
+          sleepMultiplier++;
+        }
+      }
+    }
+
+    if (!this.isSourceActive()) {
+      return;
+    }
+
+    sleepMultiplier = 1;
+    // delay this until we are in an asynchronous thread
+    while (this.isSourceActive() && this.peerClusterId == null) {
+      this.peerClusterId = replicationEndpoint.getPeerUUID();
+      if (this.isSourceActive() && this.peerClusterId == null) {
+        if (sleepForRetries("Cannot contact the peer's zk ensemble", sleepMultiplier)) {
+          sleepMultiplier++;
+        }
+      }
+    }
+
+    // In rare case, zookeeper setting may be messed up. That leads to the incorrect
+    // peerClusterId value, which is the same as the source clusterId
+    if (clusterId.equals(peerClusterId) && !replicationEndpoint.canReplicateToSameCluster()) {
+      this.terminate("ClusterId " + clusterId + " is replicating to itself: peerClusterId "
+          + peerClusterId + " which is not allowed by ReplicationEndpoint:"
+          + replicationEndpoint.getClass().getName(), null, false);
+      this.manager.removeSource(this);
+      return;
+    }
+    LOG.info("Replicating " + clusterId + " -> " + peerClusterId);
+
+    initializeWALEntryFilter();
+    // start workers
+    for (Map.Entry<String, PriorityBlockingQueue<Path>> entry : queues.entrySet()) {
+      String walGroupId = entry.getKey();
+      PriorityBlockingQueue<Path> queue = entry.getValue();
+      tryStartNewShipper(walGroupId, queue);
+    }
   }
 
   @Override
   public void startup() {
-    String n = Thread.currentThread().getName();
-    Thread.UncaughtExceptionHandler handler = new Thread.UncaughtExceptionHandler() {
-      @Override
-      public void uncaughtException(final Thread t, final Throwable e) {
-        LOG.error("Unexpected exception in ReplicationSource", e);
-      }
-    };
-    Threads
-        .setDaemonThreadRunning(this, n + ".replicationSource," + this.peerClusterZnode, handler);
+    // mark we are running now
+    this.sourceRunning = true;
+    initThread = new Thread(this::initialize);
+    Threads.setDaemonThreadRunning(initThread,
+      Thread.currentThread().getName() + ".replicationSource," + this.queueId,
+      this::uncaughtException);
   }
 
   @Override
@@ -445,14 +466,19 @@ public class ReplicationSource extends Thread implements ReplicationSourceInterf
 
   public void terminate(String reason, Exception cause, boolean join) {
     if (cause == null) {
-      LOG.info("Closing source "
-          + this.peerClusterZnode + " because: " + reason);
-
+      LOG.info("Closing source " + this.queueId + " because: " + reason);
     } else {
-      LOG.error("Closing source " + this.peerClusterZnode
-          + " because an error occurred: " + reason, cause);
+      LOG.error("Closing source " + this.queueId + " because an error occurred: " + reason,
+        cause);
     }
     this.sourceRunning = false;
+    if (initThread != null && Thread.currentThread() != initThread) {
+      // This usually won't happen but anyway, let's wait until the initialization thread exits.
+      // And notice that we may call terminate directly from the initThread so here we need to
+      // avoid join on ourselves.
+      initThread.interrupt();
+      Threads.shutdown(initThread, this.sleepForRetries);
+    }
     Collection<ReplicationSourceShipper> workers = workerThreads.values();
     for (ReplicationSourceShipper worker : workers) {
       worker.stopWorker();
@@ -469,19 +495,19 @@ public class ReplicationSource extends Thread implements ReplicationSourceInterf
       }
       if (this.replicationEndpoint != null) {
         try {
-          this.replicationEndpoint.awaitTerminated(sleepForRetries * maxRetriesMultiplier, TimeUnit.MILLISECONDS);
+          this.replicationEndpoint.awaitTerminated(sleepForRetries * maxRetriesMultiplier,
+            TimeUnit.MILLISECONDS);
         } catch (TimeoutException te) {
-          LOG.warn("Got exception while waiting for endpoint to shutdown for replication source :"
-              + this.peerClusterZnode,
-            te);
+          LOG.warn("Got exception while waiting for endpoint to shutdown for replication source :" +
+            this.queueId, te);
         }
       }
     }
   }
 
   @Override
-  public String getPeerClusterZnode() {
-    return this.peerClusterZnode;
+  public String getQueueId() {
+    return this.queueId;
   }
 
   @Override
@@ -493,14 +519,16 @@ public class ReplicationSource extends Thread implements ReplicationSourceInterf
   public Path getCurrentPath() {
     // only for testing
     for (ReplicationSourceShipper worker : workerThreads.values()) {
-      if (worker.getCurrentPath() != null) return worker.getCurrentPath();
+      if (worker.getCurrentPath() != null) {
+        return worker.getCurrentPath();
+      }
     }
     return null;
   }
 
   @Override
   public boolean isSourceActive() {
-    return !this.stopper.isStopped() && this.sourceRunning;
+    return !this.server.isStopped() && this.sourceRunning;
   }
 
   /**
@@ -563,5 +591,10 @@ public class ReplicationSource extends Thread implements ReplicationSourceInterf
   @Override
   public WALFileLengthProvider getWALFileLengthProvider() {
     return walFileLengthProvider;
+  }
+
+  @Override
+  public ServerName getServerWALsBelongTo() {
+    return server.getServerName();
   }
 }

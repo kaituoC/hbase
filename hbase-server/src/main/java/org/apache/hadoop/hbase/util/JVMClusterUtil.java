@@ -24,9 +24,9 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.util.List;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.CoordinatedStateManager;
 import org.apache.hadoop.hbase.master.HMaster;
@@ -37,7 +37,7 @@ import org.apache.hadoop.hbase.regionserver.HRegionServer;
  */
 @InterfaceAudience.Private
 public class JVMClusterUtil {
-  private static final Log LOG = LogFactory.getLog(JVMClusterUtil.class);
+  private static final Logger LOG = LoggerFactory.getLogger(JVMClusterUtil.class);
 
   /**
    * Datastructure to hold RegionServer Thread and RegionServer instance
@@ -72,23 +72,18 @@ public class JVMClusterUtil {
    * Creates a {@link RegionServerThread}.
    * Call 'start' on the returned thread to make it run.
    * @param c Configuration to use.
-   * @param cp consensus provider to use
    * @param hrsc Class to create.
    * @param index Used distinguishing the object returned.
    * @throws IOException
    * @return Region server added.
    */
-  public static JVMClusterUtil.RegionServerThread createRegionServerThread(
-      final Configuration c, CoordinatedStateManager cp, final Class<? extends HRegionServer> hrsc,
-      final int index)
-  throws IOException {
+  public static JVMClusterUtil.RegionServerThread createRegionServerThread(final Configuration c,
+      final Class<? extends HRegionServer> hrsc, final int index) throws IOException {
     HRegionServer server;
     try {
-
-      Constructor<? extends HRegionServer> ctor = hrsc.getConstructor(Configuration.class,
-      CoordinatedStateManager.class);
+      Constructor<? extends HRegionServer> ctor = hrsc.getConstructor(Configuration.class);
       ctor.setAccessible(true);
-      server = ctor.newInstance(c, cp);
+      server = ctor.newInstance(c);
     } catch (InvocationTargetException ite) {
       Throwable target = ite.getTargetException();
       throw new RuntimeException("Failed construction of RegionServer: " +
@@ -124,20 +119,16 @@ public class JVMClusterUtil {
    * Creates a {@link MasterThread}.
    * Call 'start' on the returned thread to make it run.
    * @param c Configuration to use.
-   * @param cp consensus provider to use
    * @param hmc Class to create.
    * @param index Used distinguishing the object returned.
    * @throws IOException
    * @return Master added.
    */
-  public static JVMClusterUtil.MasterThread createMasterThread(
-      final Configuration c, CoordinatedStateManager cp, final Class<? extends HMaster> hmc,
-      final int index)
-  throws IOException {
+  public static JVMClusterUtil.MasterThread createMasterThread(final Configuration c,
+      final Class<? extends HMaster> hmc, final int index) throws IOException {
     HMaster server;
     try {
-      server = hmc.getConstructor(Configuration.class, CoordinatedStateManager.class).
-        newInstance(c, cp);
+      server = hmc.getConstructor(Configuration.class).newInstance(c);
     } catch (InvocationTargetException ite) {
       Throwable target = ite.getTargetException();
       throw new RuntimeException("Failed construction of Master: " +
@@ -196,7 +187,9 @@ public class JVMClusterUtil {
       int startTimeout = configuration != null ? Integer.parseInt(
         configuration.get("hbase.master.start.timeout.localHBaseCluster", "30000")) : 30000;
       if (System.currentTimeMillis() > startTime + startTimeout) {
-        throw new RuntimeException(String.format("Master not active after %s seconds", startTimeout));
+        String msg = "Master not active after " + startTimeout + "ms";
+        Threads.printThreadInfo(System.out, "Thread dump because: " + msg);
+        throw new RuntimeException(msg);
       }
     }
 
@@ -225,8 +218,7 @@ public class JVMClusterUtil {
       }
       if (System.currentTimeMillis() > startTime + maxwait) {
         String msg = "Master not initialized after " + maxwait + "ms seconds";
-        Threads.printThreadInfo(System.out,
-          "Thread dump because: " + msg);
+        Threads.printThreadInfo(System.out, "Thread dump because: " + msg);
         throw new RuntimeException(msg);
       }
       try {
@@ -266,7 +258,6 @@ public class JVMClusterUtil {
           LOG.error("Exception occurred in HMaster.shutdown()", e);
         }
       }
-
     }
     boolean wasInterrupted = false;
     final long maxTime = System.currentTimeMillis() + 30 * 1000;
@@ -305,7 +296,11 @@ public class JVMClusterUtil {
         if (!atLeastOneLiveServer) break;
         for (RegionServerThread t : regionservers) {
           if (t.isAlive()) {
-            LOG.warn("RegionServerThreads taking too long to stop, interrupting");
+            LOG.warn("RegionServerThreads taking too long to stop, interrupting; thread dump "  +
+              "if > 3 attempts: i=" + i);
+            if (i > 3) {
+              Threads.printThreadInfo(System.out, "Thread dump " + t.getName());
+            }
             t.interrupt();
           }
         }

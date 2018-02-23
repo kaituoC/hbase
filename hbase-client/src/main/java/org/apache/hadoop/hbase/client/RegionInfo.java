@@ -18,17 +18,6 @@
  */
 package org.apache.hadoop.hbase.client;
 
-import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.exceptions.DeserializationException;
-import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos;
-import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.hbase.util.MD5Hash;
-import org.apache.hadoop.io.DataInputBuffer;
-import org.apache.hadoop.util.StringUtils;
-import org.apache.yetus.audience.InterfaceAudience;
-
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -36,9 +25,21 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Collectors;
+
+import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.exceptions.DeserializationException;
 import org.apache.hadoop.hbase.util.ByteArrayHashKey;
+import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.HashKey;
 import org.apache.hadoop.hbase.util.JenkinsHash;
+import org.apache.hadoop.hbase.util.MD5Hash;
+import org.apache.hadoop.io.DataInputBuffer;
+import org.apache.hadoop.util.StringUtils;
+import org.apache.yetus.audience.InterfaceAudience;
+
+import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos;
 
 /**
  * Information about a region. A region is a range of keys in the whole keyspace
@@ -214,16 +215,6 @@ public interface RegionInfo {
   boolean isSplitParent();
 
   /**
-   * @return true if this region is from hbase:meta.
-   */
-  boolean isMetaTable();
-
-  /**
-   * @return true if this region is from a system table.
-   */
-  boolean isSystemTable();
-
-  /**
    * @return true if this region is a meta region.
    */
   boolean isMetaRegion();
@@ -313,6 +304,9 @@ public interface RegionInfo {
         offset = i;
         break;
       }
+    }
+    if (offset <= 0) {
+      throw new IllegalArgumentException("offset=" + offset);
     }
     byte[] buff  = new byte[offset];
     System.arraycopy(regionName, 0, buff, 0, offset);
@@ -436,7 +430,7 @@ public interface RegionInfo {
    * @see #parseFrom(byte[])
    */
   static byte [] toByteArray(RegionInfo ri) {
-    byte [] bytes = ProtobufUtil.toProtoRegionInfo(ri).toByteArray();
+    byte [] bytes = ProtobufUtil.toRegionInfo(ri).toByteArray();
     return ProtobufUtil.prependPBMagic(bytes);
   }
 
@@ -582,6 +576,17 @@ public interface RegionInfo {
   }
 
   /**
+   * Creates a RegionInfo object for MOB data.
+   *
+   * @param tableName the name of the table
+   * @return the MOB {@link RegionInfo}.
+   */
+  static RegionInfo createMobRegionInfo(TableName tableName) {
+    return RegionInfoBuilder.newBuilder(tableName)
+        .setStartKey(Bytes.toBytes(".mob")).setRegionId(0).build();
+  }
+
+  /**
    * Separate elements of a regionName.
    * @param regionName
    * @return Array of byte[] containing tableName, startKey and id
@@ -691,7 +696,7 @@ public interface RegionInfo {
    * @throws IOException
    */
   static byte [] toDelimitedByteArray(RegionInfo ri) throws IOException {
-    return ProtobufUtil.toDelimitedByteArray(ProtobufUtil.toProtoRegionInfo(ri));
+    return ProtobufUtil.toDelimitedByteArray(ProtobufUtil.toRegionInfo(ri));
   }
 
   /**

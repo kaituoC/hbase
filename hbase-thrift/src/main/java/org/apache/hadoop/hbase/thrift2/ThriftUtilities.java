@@ -27,14 +27,16 @@ import java.util.List;
 import java.util.Map;
 
 import org.apache.commons.collections4.MapUtils;
+import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellBuilderFactory;
+import org.apache.hadoop.hbase.CellBuilderType;
+import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.CompareOperator;
+import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HRegionLocation;
+import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.ServerName;
-import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.CellUtil;
-import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.client.Append;
 import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Durability;
@@ -46,7 +48,6 @@ import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.RowMutations;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.Scan.ReadType;
-import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
 import org.apache.hadoop.hbase.filter.ParseFilter;
 import org.apache.hadoop.hbase.security.visibility.Authorizations;
 import org.apache.hadoop.hbase.security.visibility.CellVisibility;
@@ -70,9 +71,10 @@ import org.apache.hadoop.hbase.thrift2.generated.TScan;
 import org.apache.hadoop.hbase.thrift2.generated.TServerName;
 import org.apache.hadoop.hbase.thrift2.generated.TTimeRange;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.yetus.audience.InterfaceAudience;
 
 @InterfaceAudience.Private
-public class ThriftUtilities {
+public final class ThriftUtilities {
 
   private ThriftUtilities() {
     throw new UnsupportedOperationException("Can't initialize class");
@@ -115,7 +117,7 @@ public class ThriftUtilities {
     if (in.isSetAuthorizations()) {
       out.setAuthorizations(new Authorizations(in.getAuthorizations().getLabels()));
     }
-    
+
     if (!in.isSetColumns()) {
       return out;
     }
@@ -171,7 +173,7 @@ public class ThriftUtilities {
       col.setTimestamp(kv.getTimestamp());
       col.setValue(CellUtil.cloneValue(kv));
       if (kv.getTagsLength() > 0) {
-        col.setTags(CellUtil.getTagArray(kv));
+        col.setTags(PrivateCellUtil.cloneTags(kv));
       }
       columnValues.add(col);
     }
@@ -217,20 +219,35 @@ public class ThriftUtilities {
     }
 
     for (TColumnValue columnValue : in.getColumnValues()) {
-      if (columnValue.isSetTimestamp()) {
-        out.addImmutable(
-            columnValue.getFamily(), columnValue.getQualifier(), columnValue.getTimestamp(),
-            columnValue.getValue());
-      } else {
-        out.addImmutable(
-            columnValue.getFamily(), columnValue.getQualifier(), columnValue.getValue());
+      try {
+        if (columnValue.isSetTimestamp()) {
+          out.add(CellBuilderFactory.create(CellBuilderType.DEEP_COPY)
+              .setRow(out.getRow())
+              .setFamily(columnValue.getFamily())
+              .setQualifier(columnValue.getQualifier())
+              .setTimestamp(columnValue.getTimestamp())
+              .setType(Cell.Type.Put)
+              .setValue(columnValue.getValue())
+              .build());
+        } else {
+          out.add(CellBuilderFactory.create(CellBuilderType.DEEP_COPY)
+              .setRow(out.getRow())
+              .setFamily(columnValue.getFamily())
+              .setQualifier(columnValue.getQualifier())
+              .setTimestamp(out.getTimeStamp())
+              .setType(Cell.Type.Put)
+              .setValue(columnValue.getValue())
+              .build());
+        }
+      } catch (IOException e) {
+        throw new IllegalArgumentException((e));
       }
     }
 
     if (in.isSetAttributes()) {
       addAttributes(out,in.getAttributes());
     }
-    
+
     if (in.getCellVisibility() != null) {
       out.setCellVisibility(new CellVisibility(in.getCellVisibility().getExpression()));
     }
@@ -270,35 +287,37 @@ public class ThriftUtilities {
       for (TColumn column : in.getColumns()) {
         if (in.isSetDeleteType()) {
           switch (in.getDeleteType()) {
-          case DELETE_COLUMN:
-            if (column.isSetTimestamp()) {
-              out.addColumn(column.getFamily(), column.getQualifier(), column.getTimestamp());
-            } else {
-              out.addColumn(column.getFamily(), column.getQualifier());
-            }
-            break;
-          case DELETE_COLUMNS:
-            if (column.isSetTimestamp()) {
-              out.addColumns(column.getFamily(), column.getQualifier(), column.getTimestamp());
-            } else {
-              out.addColumns(column.getFamily(), column.getQualifier());
-            }
-            break;
-          case DELETE_FAMILY:
-            if (column.isSetTimestamp()) {
-              out.addFamily(column.getFamily(), column.getTimestamp());
-            } else {
-              out.addFamily(column.getFamily());
-            }
-            break;
-          case DELETE_FAMILY_VERSION:
-            if (column.isSetTimestamp()) {
-              out.addFamilyVersion(column.getFamily(), column.getTimestamp());
-            } else {
-              throw new IllegalArgumentException(
-                  "Timestamp is required for TDelete with DeleteFamilyVersion type");
-            }
-            break;
+            case DELETE_COLUMN:
+              if (column.isSetTimestamp()) {
+                out.addColumn(column.getFamily(), column.getQualifier(), column.getTimestamp());
+              } else {
+                out.addColumn(column.getFamily(), column.getQualifier());
+              }
+              break;
+            case DELETE_COLUMNS:
+              if (column.isSetTimestamp()) {
+                out.addColumns(column.getFamily(), column.getQualifier(), column.getTimestamp());
+              } else {
+                out.addColumns(column.getFamily(), column.getQualifier());
+              }
+              break;
+            case DELETE_FAMILY:
+              if (column.isSetTimestamp()) {
+                out.addFamily(column.getFamily(), column.getTimestamp());
+              } else {
+                out.addFamily(column.getFamily());
+              }
+              break;
+            case DELETE_FAMILY_VERSION:
+              if (column.isSetTimestamp()) {
+                out.addFamilyVersion(column.getFamily(), column.getTimestamp());
+              } else {
+                throw new IllegalArgumentException(
+                    "Timestamp is required for TDelete with DeleteFamilyVersion type");
+              }
+              break;
+            default:
+              throw new IllegalArgumentException("DeleteType is required for TDelete");
           }
         } else {
           throw new IllegalArgumentException("DeleteType is required for TDelete");
@@ -399,12 +418,15 @@ public class ThriftUtilities {
   public static Scan scanFromThrift(TScan in) throws IOException {
     Scan out = new Scan();
 
-    if (in.isSetStartRow())
+    if (in.isSetStartRow()) {
       out.setStartRow(in.getStartRow());
-    if (in.isSetStopRow())
+    }
+    if (in.isSetStopRow()) {
       out.setStopRow(in.getStopRow());
-    if (in.isSetCaching())
+    }
+    if (in.isSetCaching()) {
       out.setCaching(in.getCaching());
+    }
     if (in.isSetMaxVersions()) {
       out.setMaxVersions(in.getMaxVersions());
     }
@@ -437,7 +459,7 @@ public class ThriftUtilities {
     if (in.isSetAttributes()) {
       addAttributes(out,in.getAttributes());
     }
-    
+
     if (in.isSetAuthorizations()) {
       out.setAuthorizations(new Authorizations(in.getAuthorizations().getLabels()));
     }
@@ -484,7 +506,7 @@ public class ThriftUtilities {
     if (in.isSetDurability()) {
       out.setDurability(durabilityFromThrift(in.getDurability()));
     }
-    
+
     if(in.getCellVisibility() != null) {
       out.setCellVisibility(new CellVisibility(in.getCellVisibility().getExpression()));
     }
@@ -505,7 +527,7 @@ public class ThriftUtilities {
     if (append.isSetDurability()) {
       out.setDurability(durabilityFromThrift(append.getDurability()));
     }
-    
+
     if(append.getCellVisibility() != null) {
       out.setCellVisibility(new CellVisibility(append.getCellVisibility().getExpression()));
     }

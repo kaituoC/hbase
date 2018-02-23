@@ -44,7 +44,6 @@ import org.apache.hadoop.hbase.filter.ColumnPaginationFilter;
 import org.apache.hadoop.hbase.filter.ColumnPrefixFilter;
 import org.apache.hadoop.hbase.filter.ColumnRangeFilter;
 import org.apache.hadoop.hbase.filter.CompareFilter;
-import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
 import org.apache.hadoop.hbase.filter.DependentColumnFilter;
 import org.apache.hadoop.hbase.filter.FamilyFilter;
 import org.apache.hadoop.hbase.filter.Filter;
@@ -77,9 +76,9 @@ import org.apache.hadoop.hbase.util.Base64;
 import org.apache.hadoop.hbase.util.ByteStringer;
 import org.apache.hadoop.hbase.util.Bytes;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.jaxrs.json.JacksonJaxbJsonProvider;
 import com.google.protobuf.ByteString;
-
-import org.codehaus.jackson.jaxrs.JacksonJaxbJsonProvider;
 
 /**
  * A representation of Scanner parameters.
@@ -101,13 +100,14 @@ import org.codehaus.jackson.jaxrs.JacksonJaxbJsonProvider;
  * </pre>
  */
 @XmlRootElement(name="Scanner")
+@JsonInclude(JsonInclude.Include.NON_NULL)
 @InterfaceAudience.Private
 public class ScannerModel implements ProtobufMessageHandler, Serializable {
 
   private static final long serialVersionUID = 1L;
 
   private byte[] startRow = HConstants.EMPTY_START_ROW;
-  private byte[] endRow = HConstants.EMPTY_END_ROW;;
+  private byte[] endRow = HConstants.EMPTY_END_ROW;
   private List<byte[]> columns = new ArrayList<>();
   private int batch = Integer.MAX_VALUE;
   private long startTime = 0;

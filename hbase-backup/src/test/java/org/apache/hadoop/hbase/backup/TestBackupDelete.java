@@ -1,13 +1,13 @@
 /**
  * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements. See the NOTICE file
+ * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
- * regarding copyright ownership. The ASF licenses this file
+ * regarding copyright ownership.  The ASF licenses this file
  * to you under the Apache License, Version 2.0 (the
  * "License"); you may not use this file except in compliance
- * with the License. You may obtain a copy of the License at
+ * with the License.  You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.backup;
 
 import static org.junit.Assert.assertTrue;
@@ -23,29 +22,35 @@ import static org.junit.Assert.assertTrue;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.util.List;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.backup.impl.BackupSystemTable;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.util.ToolRunner;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
+import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 
 @Category(LargeTests.class)
 public class TestBackupDelete extends TestBackupBase {
 
-  private static final Log LOG = LogFactory.getLog(TestBackupDelete.class);
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestBackupDelete.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestBackupDelete.class);
 
   /**
    * Verify that full backup is created on a single table with data correctly. Verify that history
-   * works as expected
-   * @throws Exception
+   * works as expected.
+   *
+   * @throws Exception if doing the backup or an operation on the tables fails
    */
   @Test
   public void testBackupDelete() throws Exception {
@@ -71,8 +76,9 @@ public class TestBackupDelete extends TestBackupBase {
 
   /**
    * Verify that full backup is created on a single table with data correctly. Verify that history
-   * works as expected
-   * @throws Exception
+   * works as expected.
+   *
+   * @throws Exception if doing the backup or an operation on the tables fails
    */
   @Test
   public void testBackupDeleteCommand() throws Exception {
@@ -98,5 +104,4 @@ public class TestBackupDelete extends TestBackupBase {
     LOG.info(baos.toString());
     assertTrue(output.indexOf("Deleted 1 backups") >= 0);
   }
-
 }

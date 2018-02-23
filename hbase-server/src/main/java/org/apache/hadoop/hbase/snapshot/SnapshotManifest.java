@@ -28,36 +28,36 @@ import java.util.Map;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.HRegionInfo;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.errorhandling.ForeignExceptionSnare;
 import org.apache.hadoop.hbase.mob.MobUtils;
 import org.apache.hadoop.hbase.regionserver.HRegion;
 import org.apache.hadoop.hbase.regionserver.HRegionFileSystem;
-import org.apache.hadoop.hbase.regionserver.Store;
-import org.apache.hadoop.hbase.regionserver.StoreFile;
+import org.apache.hadoop.hbase.regionserver.HStore;
+import org.apache.hadoop.hbase.regionserver.HStoreFile;
 import org.apache.hadoop.hbase.regionserver.StoreFileInfo;
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.CodedInputStream;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.InvalidProtocolBufferException;
-import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotDataManifest;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotDescription;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotRegionManifest;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSTableDescriptors;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.util.Threads;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.protobuf.CodedInputStream;
+import org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException;
+import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotDataManifest;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotDescription;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotRegionManifest;
 
 /**
  * Utility class to help read/write the Snapshot Manifest.
@@ -68,7 +68,7 @@ import org.apache.hadoop.hbase.util.Threads;
  */
 @InterfaceAudience.Private
 public final class SnapshotManifest {
-  private static final Log LOG = LogFactory.getLog(SnapshotManifest.class);
+  private static final Logger LOG = LoggerFactory.getLogger(SnapshotManifest.class);
 
   public static final String SNAPSHOT_MANIFEST_SIZE_LIMIT_CONF_KEY = "snapshot.manifest.size.limit";
 
@@ -141,7 +141,7 @@ public final class SnapshotManifest {
   }
 
   interface RegionVisitor<TRegion, TFamily> {
-    TRegion regionOpen(final HRegionInfo regionInfo) throws IOException;
+    TRegion regionOpen(final RegionInfo regionInfo) throws IOException;
     void regionClose(final TRegion region) throws IOException;
 
     TFamily familyOpen(final TRegion region, final byte[] familyName) throws IOException;
@@ -163,7 +163,7 @@ public final class SnapshotManifest {
     }
   }
 
-  public void addMobRegion(HRegionInfo regionInfo) throws IOException {
+  public void addMobRegion(RegionInfo regionInfo) throws IOException {
     // Get the ManifestBuilder/RegionVisitor
     RegionVisitor visitor = createRegionVisitor(desc);
 
@@ -172,7 +172,7 @@ public final class SnapshotManifest {
   }
 
   @VisibleForTesting
-  protected void addMobRegion(HRegionInfo regionInfo, RegionVisitor visitor) throws IOException {
+  protected void addMobRegion(RegionInfo regionInfo, RegionVisitor visitor) throws IOException {
     // 1. dump region meta info into the snapshot directory
     LOG.debug("Storing mob region '" + regionInfo + "' region-info for snapshot.");
     Object regionData = visitor.regionOpen(regionInfo);
@@ -228,20 +228,20 @@ public final class SnapshotManifest {
     // 2. iterate through all the stores in the region
     LOG.debug("Creating references for hfiles");
 
-    for (Store store : region.getStores()) {
+    for (HStore store : region.getStores()) {
       // 2.1. build the snapshot reference for the store
       Object familyData = visitor.familyOpen(regionData,
           store.getColumnFamilyDescriptor().getName());
       monitor.rethrowException();
 
-      List<StoreFile> storeFiles = new ArrayList<>(store.getStorefiles());
+      List<HStoreFile> storeFiles = new ArrayList<>(store.getStorefiles());
       if (LOG.isDebugEnabled()) {
         LOG.debug("Adding snapshot references for " + storeFiles  + " hfiles");
       }
 
       // 2.2. iterate through all the store's files and create "references".
       for (int i = 0, sz = storeFiles.size(); i < sz; i++) {
-        StoreFile storeFile = storeFiles.get(i);
+        HStoreFile storeFile = storeFiles.get(i);
         monitor.rethrowException();
 
         // create "reference" to this store file.
@@ -257,7 +257,7 @@ public final class SnapshotManifest {
    * Creates a 'manifest' for the specified region, by reading directly from the disk.
    * This is used by the "offline snapshot" when the table is disabled.
    */
-  public void addRegion(final Path tableDir, final HRegionInfo regionInfo) throws IOException {
+  public void addRegion(final Path tableDir, final RegionInfo regionInfo) throws IOException {
     // Get the ManifestBuilder/RegionVisitor
     RegionVisitor visitor = createRegionVisitor(desc);
 
@@ -266,7 +266,7 @@ public final class SnapshotManifest {
   }
 
   @VisibleForTesting
-  protected void addRegion(final Path tableDir, final HRegionInfo regionInfo, RegionVisitor visitor)
+  protected void addRegion(final Path tableDir, final RegionInfo regionInfo, RegionVisitor visitor)
       throws IOException {
     boolean isMobRegion = MobUtils.isMobRegionInfo(regionInfo);
     try {
@@ -565,11 +565,11 @@ public final class SnapshotManifest {
    * Extract the region encoded name from the region manifest
    */
   static String getRegionNameFromManifest(final SnapshotRegionManifest manifest) {
-    byte[] regionName = HRegionInfo.createRegionName(
+    byte[] regionName = RegionInfo.createRegionName(
             ProtobufUtil.toTableName(manifest.getRegionInfo().getTableName()),
             manifest.getRegionInfo().getStartKey().toByteArray(),
             manifest.getRegionInfo().getRegionId(), true);
-    return HRegionInfo.encodeRegionName(regionName);
+    return RegionInfo.encodeRegionName(regionName);
   }
 
   /*

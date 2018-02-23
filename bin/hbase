@@ -17,7 +17,7 @@
 # * See the License for the specific language governing permissions and
 # * limitations under the License.
 # */
-# 
+#
 # The hbase command script.  Based on the hadoop command script putting
 # in hbase classes, libs and configurations ahead of hadoop's.
 #
@@ -91,10 +91,10 @@ if [ $# = 0 ]; then
   echo "  hfile           Store file analyzer"
   echo "  zkcli           Run the ZooKeeper shell"
   echo "  master          Run an HBase HMaster node"
-  echo "  regionserver    Run an HBase HRegionServer node" 
+  echo "  regionserver    Run an HBase HRegionServer node"
   echo "  zookeeper       Run a ZooKeeper server"
-  echo "  rest            Run an HBase REST server" 
-  echo "  thrift          Run the HBase Thrift server" 
+  echo "  rest            Run an HBase REST server"
+  echo "  thrift          Run the HBase Thrift server"
   echo "  thrift2         Run the HBase Thrift2 server"
   echo "  clean           Run the HBase clean up script"
   echo "  classpath       Dump hbase CLASSPATH"
@@ -274,7 +274,7 @@ fi
 if $cygwin; then
   JAVA_LIBRARY_PATH=`cygpath -p "$JAVA_LIBRARY_PATH"`
 fi
- 
+
 # restore ordinary behaviour
 unset IFS
 
@@ -362,7 +362,7 @@ elif [ "$COMMAND" = "wal" ] ; then
 elif [ "$COMMAND" = "hfile" ] ; then
   CLASS='org.apache.hadoop.hbase.io.hfile.HFilePrettyPrinter'
 elif [ "$COMMAND" = "zkcli" ] ; then
-  CLASS="org.apache.hadoop.hbase.zookeeper.ZooKeeperMainServer"
+  CLASS="org.apache.hadoop.hbase.zookeeper.ZKMainServer"
 elif [ "$COMMAND" = "backup" ] ; then
   CLASS='org.apache.hadoop.hbase.backup.BackupDriver'
 elif [ "$COMMAND" = "restore" ] ; then
@@ -422,7 +422,7 @@ elif [ "$COMMAND" = "zookeeper" ] ; then
   fi
 elif [ "$COMMAND" = "clean" ] ; then
   case $1 in
-    --cleanZk|--cleanHdfs|--cleanAll) 
+    --cleanZk|--cleanHdfs|--cleanAll)
       matches="yes" ;;
     *) ;;
   esac
@@ -480,16 +480,9 @@ fi
 HEAP_SETTINGS="$JAVA_HEAP_MAX $JAVA_OFFHEAP_MAX"
 # Exec unless HBASE_NOEXEC is set.
 export CLASSPATH
-# Netty is shaded in hbase. The shaded netty is pulled in with org.apache.hbase.thirdparty:hbase-shaded-netty.
-# It has a .so in it. Shading requires rename of the .so and then passing a system property so netty finds the
-# renamed .so and associates it w/ the relocated netty files.
-# So we can find the relocated .so, we need to add a system property pointing at new location. Trick is from:
-#  https://stackoverflow.com/questions/33825743/rename-files-inside-a-jar-using-some-maven-plugin
-# See toward the end of this issue for how to pass config: https://github.com/netty/netty/issues/6665
-#
-NETTY_PROP="-Dorg.apache.hadoop.hbase.shaded.io.netty.packagePrefix=org.apache.hadoop.hbase.shaded."
+
 if [ "${HBASE_NOEXEC}" != "" ]; then
-  "$JAVA" -Dproc_$COMMAND "$NETTY_PROP" -XX:OnOutOfMemoryError="kill -9 %p" $HEAP_SETTINGS $HBASE_OPTS $CLASS "$@"
+  "$JAVA" -Dproc_$COMMAND -XX:OnOutOfMemoryError="kill -9 %p" $HEAP_SETTINGS $HBASE_OPTS $CLASS "$@"
 else
-  exec "$JAVA" -Dproc_$COMMAND  "$NETTY_PROP" -XX:OnOutOfMemoryError="kill -9 %p" $HEAP_SETTINGS $HBASE_OPTS $CLASS "$@"
+  exec "$JAVA" -Dproc_$COMMAND -XX:OnOutOfMemoryError="kill -9 %p" $HEAP_SETTINGS $HBASE_OPTS $CLASS "$@"
 fi

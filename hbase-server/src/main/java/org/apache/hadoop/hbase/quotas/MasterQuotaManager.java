@@ -28,25 +28,24 @@ import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.commons.lang3.builder.HashCodeBuilder;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.MetaTableAccessor;
 import org.apache.hadoop.hbase.NamespaceDescriptor;
 import org.apache.hadoop.hbase.RegionStateListener;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.yetus.audience.InterfaceStability;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.master.MasterServices;
 import org.apache.hadoop.hbase.namespace.NamespaceAuditor;
+import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.yetus.audience.InterfaceStability;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.protobuf.TextFormat;
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.SetQuotaRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProtos.SetQuotaResponse;
-import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.TextFormat;
 
 /**
  * Master Quota Manager.
@@ -59,8 +58,8 @@ import org.apache.hadoop.hbase.shaded.com.google.protobuf.TextFormat;
 @InterfaceAudience.Private
 @InterfaceStability.Evolving
 public class MasterQuotaManager implements RegionStateListener {
-  private static final Log LOG = LogFactory.getLog(MasterQuotaManager.class);
-  private static final Map<HRegionInfo, Long> EMPTY_MAP = Collections.unmodifiableMap(
+  private static final Logger LOG = LoggerFactory.getLogger(MasterQuotaManager.class);
+  private static final Map<RegionInfo, Long> EMPTY_MAP = Collections.unmodifiableMap(
       new HashMap<>());
 
   private final MasterServices masterServices;
@@ -69,7 +68,7 @@ public class MasterQuotaManager implements RegionStateListener {
   private NamedLock<String> userLocks;
   private boolean initialized = false;
   private NamespaceAuditor namespaceQuotaManager;
-  private ConcurrentHashMap<HRegionInfo, SizeSnapshotWithTimestamp> regionSizes;
+  private ConcurrentHashMap<RegionInfo, SizeSnapshotWithTimestamp> regionSizes;
 
   public MasterQuotaManager(final MasterServices masterServices) {
     this.masterServices = masterServices;
@@ -153,12 +152,12 @@ public class MasterQuotaManager implements RegionStateListener {
       throws IOException, InterruptedException {
     setQuota(req, new SetQuotaOperations() {
       @Override
-      public GlobalQuotaSettings fetch() throws IOException {
-        return new GlobalQuotaSettings(req.getUserName(), null, null, QuotaUtil.getUserQuota(
+      public GlobalQuotaSettingsImpl fetch() throws IOException {
+        return new GlobalQuotaSettingsImpl(req.getUserName(), null, null, QuotaUtil.getUserQuota(
             masterServices.getConnection(), userName));
       }
       @Override
-      public void update(GlobalQuotaSettings quotaPojo) throws IOException {
+      public void update(GlobalQuotaSettingsImpl quotaPojo) throws IOException {
         QuotaUtil.addUserQuota(masterServices.getConnection(), userName, quotaPojo.toQuotas());
       }
       @Override
@@ -166,11 +165,11 @@ public class MasterQuotaManager implements RegionStateListener {
         QuotaUtil.deleteUserQuota(masterServices.getConnection(), userName);
       }
       @Override
-      public void preApply(GlobalQuotaSettings quotaPojo) throws IOException {
+      public void preApply(GlobalQuotaSettingsImpl quotaPojo) throws IOException {
         masterServices.getMasterCoprocessorHost().preSetUserQuota(userName, quotaPojo);
       }
       @Override
-      public void postApply(GlobalQuotaSettings quotaPojo) throws IOException {
+      public void postApply(GlobalQuotaSettingsImpl quotaPojo) throws IOException {
         masterServices.getMasterCoprocessorHost().postSetUserQuota(userName, quotaPojo);
       }
     });
@@ -180,12 +179,12 @@ public class MasterQuotaManager implements RegionStateListener {
       final SetQuotaRequest req) throws IOException, InterruptedException {
     setQuota(req, new SetQuotaOperations() {
       @Override
-      public GlobalQuotaSettings fetch() throws IOException {
-        return new GlobalQuotaSettings(userName, table, null, QuotaUtil.getUserQuota(
+      public GlobalQuotaSettingsImpl fetch() throws IOException {
+        return new GlobalQuotaSettingsImpl(userName, table, null, QuotaUtil.getUserQuota(
             masterServices.getConnection(), userName, table));
       }
       @Override
-      public void update(GlobalQuotaSettings quotaPojo) throws IOException {
+      public void update(GlobalQuotaSettingsImpl quotaPojo) throws IOException {
         QuotaUtil.addUserQuota(masterServices.getConnection(), userName, table,
             quotaPojo.toQuotas());
       }
@@ -194,11 +193,11 @@ public class MasterQuotaManager implements RegionStateListener {
         QuotaUtil.deleteUserQuota(masterServices.getConnection(), userName, table);
       }
       @Override
-      public void preApply(GlobalQuotaSettings quotaPojo) throws IOException {
+      public void preApply(GlobalQuotaSettingsImpl quotaPojo) throws IOException {
         masterServices.getMasterCoprocessorHost().preSetUserQuota(userName, table, quotaPojo);
       }
       @Override
-      public void postApply(GlobalQuotaSettings quotaPojo) throws IOException {
+      public void postApply(GlobalQuotaSettingsImpl quotaPojo) throws IOException {
         masterServices.getMasterCoprocessorHost().postSetUserQuota(userName, table, quotaPojo);
       }
     });
@@ -208,12 +207,12 @@ public class MasterQuotaManager implements RegionStateListener {
       final SetQuotaRequest req) throws IOException, InterruptedException {
     setQuota(req, new SetQuotaOperations() {
       @Override
-      public GlobalQuotaSettings fetch() throws IOException {
-        return new GlobalQuotaSettings(userName, null, namespace, QuotaUtil.getUserQuota(
+      public GlobalQuotaSettingsImpl fetch() throws IOException {
+        return new GlobalQuotaSettingsImpl(userName, null, namespace, QuotaUtil.getUserQuota(
             masterServices.getConnection(), userName, namespace));
       }
       @Override
-      public void update(GlobalQuotaSettings quotaPojo) throws IOException {
+      public void update(GlobalQuotaSettingsImpl quotaPojo) throws IOException {
         QuotaUtil.addUserQuota(masterServices.getConnection(), userName, namespace,
             quotaPojo.toQuotas());
       }
@@ -222,12 +221,12 @@ public class MasterQuotaManager implements RegionStateListener {
         QuotaUtil.deleteUserQuota(masterServices.getConnection(), userName, namespace);
       }
       @Override
-      public void preApply(GlobalQuotaSettings quotaPojo) throws IOException {
+      public void preApply(GlobalQuotaSettingsImpl quotaPojo) throws IOException {
         masterServices.getMasterCoprocessorHost().preSetUserQuota(
             userName, namespace, quotaPojo);
       }
       @Override
-      public void postApply(GlobalQuotaSettings quotaPojo) throws IOException {
+      public void postApply(GlobalQuotaSettingsImpl quotaPojo) throws IOException {
         masterServices.getMasterCoprocessorHost().postSetUserQuota(
             userName, namespace, quotaPojo);
       }
@@ -238,12 +237,12 @@ public class MasterQuotaManager implements RegionStateListener {
       throws IOException, InterruptedException {
     setQuota(req, new SetQuotaOperations() {
       @Override
-      public GlobalQuotaSettings fetch() throws IOException {
-        return new GlobalQuotaSettings(null, table, null, QuotaUtil.getTableQuota(
+      public GlobalQuotaSettingsImpl fetch() throws IOException {
+        return new GlobalQuotaSettingsImpl(null, table, null, QuotaUtil.getTableQuota(
             masterServices.getConnection(), table));
       }
       @Override
-      public void update(GlobalQuotaSettings quotaPojo) throws IOException {
+      public void update(GlobalQuotaSettingsImpl quotaPojo) throws IOException {
         QuotaUtil.addTableQuota(masterServices.getConnection(), table, quotaPojo.toQuotas());
       }
       @Override
@@ -251,11 +250,11 @@ public class MasterQuotaManager implements RegionStateListener {
         QuotaUtil.deleteTableQuota(masterServices.getConnection(), table);
       }
       @Override
-      public void preApply(GlobalQuotaSettings quotaPojo) throws IOException {
+      public void preApply(GlobalQuotaSettingsImpl quotaPojo) throws IOException {
         masterServices.getMasterCoprocessorHost().preSetTableQuota(table, quotaPojo);
       }
       @Override
-      public void postApply(GlobalQuotaSettings quotaPojo) throws IOException {
+      public void postApply(GlobalQuotaSettingsImpl quotaPojo) throws IOException {
         masterServices.getMasterCoprocessorHost().postSetTableQuota(table, quotaPojo);
       }
     });
@@ -265,25 +264,25 @@ public class MasterQuotaManager implements RegionStateListener {
       throws IOException, InterruptedException {
     setQuota(req, new SetQuotaOperations() {
       @Override
-      public GlobalQuotaSettings fetch() throws IOException {
-        return new GlobalQuotaSettings(null, null, namespace, QuotaUtil.getNamespaceQuota(
+      public GlobalQuotaSettingsImpl fetch() throws IOException {
+        return new GlobalQuotaSettingsImpl(null, null, namespace, QuotaUtil.getNamespaceQuota(
                 masterServices.getConnection(), namespace));
       }
       @Override
-      public void update(GlobalQuotaSettings quotaPojo) throws IOException {
+      public void update(GlobalQuotaSettingsImpl quotaPojo) throws IOException {
         QuotaUtil.addNamespaceQuota(masterServices.getConnection(), namespace,
-            ((GlobalQuotaSettings) quotaPojo).toQuotas());
+            ((GlobalQuotaSettingsImpl) quotaPojo).toQuotas());
       }
       @Override
       public void delete() throws IOException {
         QuotaUtil.deleteNamespaceQuota(masterServices.getConnection(), namespace);
       }
       @Override
-      public void preApply(GlobalQuotaSettings quotaPojo) throws IOException {
+      public void preApply(GlobalQuotaSettingsImpl quotaPojo) throws IOException {
         masterServices.getMasterCoprocessorHost().preSetNamespaceQuota(namespace, quotaPojo);
       }
       @Override
-      public void postApply(GlobalQuotaSettings quotaPojo) throws IOException {
+      public void postApply(GlobalQuotaSettingsImpl quotaPojo) throws IOException {
         masterServices.getMasterCoprocessorHost().postSetNamespaceQuota(namespace, quotaPojo);
       }
     });
@@ -311,7 +310,7 @@ public class MasterQuotaManager implements RegionStateListener {
     }
 
     // Apply quota changes
-    GlobalQuotaSettings currentQuota = quotaOps.fetch();
+    GlobalQuotaSettingsImpl currentQuota = quotaOps.fetch();
     if (LOG.isTraceEnabled()) {
       LOG.trace(
           "Current quota for request(" + TextFormat.shortDebugString(req)
@@ -329,7 +328,7 @@ public class MasterQuotaManager implements RegionStateListener {
     //
     // NB: while SetQuotaRequest technically allows for multi types of quotas to be set in one
     // message, the Java API (in Admin/AsyncAdmin) does not. Assume there is only one type.
-    GlobalQuotaSettings mergedQuota = currentQuota.merge(newQuota);
+    GlobalQuotaSettingsImpl mergedQuota = currentQuota.merge(newQuota);
     if (LOG.isTraceEnabled()) {
       LOG.trace("Computed merged quota from current quota and user request: " + mergedQuota);
     }
@@ -367,14 +366,14 @@ public class MasterQuotaManager implements RegionStateListener {
   }
 
   @Override
-  public void onRegionMerged(HRegionInfo mergedRegion) throws IOException {
+  public void onRegionMerged(RegionInfo mergedRegion) throws IOException {
     if (initialized) {
       namespaceQuotaManager.updateQuotaForRegionMerge(mergedRegion);
     }
   }
 
   @Override
-  public void onRegionSplit(HRegionInfo hri) throws IOException {
+  public void onRegionSplit(RegionInfo hri) throws IOException {
     if (initialized) {
       namespaceQuotaManager.checkQuotaToSplitRegion(hri);
     }
@@ -403,7 +402,7 @@ public class MasterQuotaManager implements RegionStateListener {
     /**
      * Fetches the current quota settings for the subject.
      */
-    GlobalQuotaSettings fetch() throws IOException;
+    GlobalQuotaSettingsImpl fetch() throws IOException;
     /**
      * Deletes the quota for the subject.
      */
@@ -411,17 +410,17 @@ public class MasterQuotaManager implements RegionStateListener {
     /**
      * Persist the given quota for the subject.
      */
-    void update(GlobalQuotaSettings quotaPojo) throws IOException;
+    void update(GlobalQuotaSettingsImpl quotaPojo) throws IOException;
     /**
-     * Performs some action before {@link #update(GlobalQuotaSettings)} with the current quota
-     * for the subject.
+     * Performs some action before {@link #update(GlobalQuotaSettingsImpl)} with the current
+     * quota for the subject.
      */
-    void preApply(GlobalQuotaSettings quotaPojo) throws IOException;
+    void preApply(GlobalQuotaSettingsImpl quotaPojo) throws IOException;
     /**
-     * Performs some action after {@link #update(GlobalQuotaSettings)} with the resulting quota
-     * from the request action for the subject.
+     * Performs some action after {@link #update(GlobalQuotaSettingsImpl)} with the resulting
+     * quota from the request action for the subject.
      */
-    void postApply(GlobalQuotaSettings quotaPojo) throws IOException;
+    void postApply(GlobalQuotaSettingsImpl quotaPojo) throws IOException;
   }
 
   /* ==========================================================================
@@ -456,7 +455,7 @@ public class MasterQuotaManager implements RegionStateListener {
   }
 
   private static class NamedLock<T> {
-    private HashSet<T> locks = new HashSet<>();
+    private final HashSet<T> locks = new HashSet<>();
 
     public void lock(final T name) throws InterruptedException {
       synchronized (locks) {
@@ -476,7 +475,7 @@ public class MasterQuotaManager implements RegionStateListener {
   }
 
   @Override
-  public void onRegionSplitReverted(HRegionInfo hri) throws IOException {
+  public void onRegionSplitReverted(RegionInfo hri) throws IOException {
     if (initialized) {
       this.namespaceQuotaManager.removeRegionFromNamespaceUsage(hri);
     }
@@ -502,6 +501,7 @@ public class MasterQuotaManager implements RegionStateListener {
       return time;
     }
 
+    @Override
     public boolean equals(Object o) {
       if (o instanceof SizeSnapshotWithTimestamp) {
         SizeSnapshotWithTimestamp other = (SizeSnapshotWithTimestamp) o;
@@ -510,6 +510,7 @@ public class MasterQuotaManager implements RegionStateListener {
       return false;
     }
 
+    @Override
     public int hashCode() {
       HashCodeBuilder hcb = new HashCodeBuilder();
       return hcb.append(size).append(time).toHashCode();
@@ -530,20 +531,20 @@ public class MasterQuotaManager implements RegionStateListener {
     this.regionSizes = new ConcurrentHashMap<>();
   }
 
-  public void addRegionSize(HRegionInfo hri, long size, long time) {
+  public void addRegionSize(RegionInfo hri, long size, long time) {
     if (regionSizes == null) {
       return;
     }
     regionSizes.put(hri, new SizeSnapshotWithTimestamp(size, time));
   }
 
-  public Map<HRegionInfo, Long> snapshotRegionSizes() {
+  public Map<RegionInfo, Long> snapshotRegionSizes() {
     if (regionSizes == null) {
       return EMPTY_MAP;
     }
 
-    Map<HRegionInfo, Long> copy = new HashMap<>();
-    for (Entry<HRegionInfo, SizeSnapshotWithTimestamp> entry : regionSizes.entrySet()) {
+    Map<RegionInfo, Long> copy = new HashMap<>();
+    for (Entry<RegionInfo, SizeSnapshotWithTimestamp> entry : regionSizes.entrySet()) {
       copy.put(entry.getKey(), entry.getValue().getSize());
     }
     return copy;
@@ -554,7 +555,7 @@ public class MasterQuotaManager implements RegionStateListener {
       return 0;
     }
     int numEntriesRemoved = 0;
-    Iterator<Entry<HRegionInfo,SizeSnapshotWithTimestamp>> iterator =
+    Iterator<Entry<RegionInfo,SizeSnapshotWithTimestamp>> iterator =
         regionSizes.entrySet().iterator();
     while (iterator.hasNext()) {
       long currentEntryTime = iterator.next().getValue().getTime();

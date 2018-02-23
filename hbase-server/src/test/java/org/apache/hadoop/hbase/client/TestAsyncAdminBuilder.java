@@ -17,24 +17,24 @@
  */
 package org.apache.hadoop.hbase.client;
 
-import static org.apache.hadoop.hbase.client.AsyncProcess.START_LOG_ERRORS_AFTER_COUNT_KEY;
 import static org.apache.hadoop.hbase.NamespaceDescriptor.DEFAULT_NAMESPACE_NAME_STR;
+import static org.apache.hadoop.hbase.client.AsyncProcess.START_LOG_ERRORS_AFTER_COUNT_KEY;
 import static org.junit.Assert.fail;
 
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
-
 import org.apache.commons.io.IOUtils;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.coprocessor.CoprocessorHost;
+import org.apache.hadoop.hbase.coprocessor.MasterCoprocessor;
 import org.apache.hadoop.hbase.coprocessor.MasterCoprocessorEnvironment;
 import org.apache.hadoop.hbase.coprocessor.MasterObserver;
 import org.apache.hadoop.hbase.coprocessor.ObserverContext;
@@ -43,18 +43,25 @@ import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.util.Threads;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameter;
 import org.junit.runners.Parameterized.Parameters;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @RunWith(Parameterized.class)
 @Category({ LargeTests.class, ClientTests.class })
 public class TestAsyncAdminBuilder {
 
-  private static final Log LOG = LogFactory.getLog(TestAsyncAdminBuilder.class);
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestAsyncAdminBuilder.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestAsyncAdminBuilder.class);
   private final static HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   private static AsyncConnection ASYNC_CONN;
 
@@ -170,10 +177,15 @@ public class TestAsyncAdminBuilder {
     }
   }
 
-  public static class TestRpcTimeoutCoprocessor implements MasterObserver {
+  public static class TestRpcTimeoutCoprocessor implements MasterCoprocessor, MasterObserver {
     public TestRpcTimeoutCoprocessor() {
     }
 
+
+    @Override
+    public Optional<MasterObserver> getMasterObserver() {
+      return Optional.of(this);
+    }
     @Override
     public void preGetNamespaceDescriptor(ObserverContext<MasterCoprocessorEnvironment> ctx,
         String namespace) throws IOException {
@@ -181,10 +193,15 @@ public class TestAsyncAdminBuilder {
     }
   }
 
-  public static class TestOperationTimeoutCoprocessor implements MasterObserver {
+  public static class TestOperationTimeoutCoprocessor implements MasterCoprocessor, MasterObserver {
     AtomicLong sleepTime = new AtomicLong(0);
 
     public TestOperationTimeoutCoprocessor() {
+    }
+
+    @Override
+    public Optional<MasterObserver> getMasterObserver() {
+      return Optional.of(this);
     }
 
     @Override
@@ -197,10 +214,15 @@ public class TestAsyncAdminBuilder {
     }
   }
 
-  public static class TestMaxRetriesCoprocessor implements MasterObserver {
+  public static class TestMaxRetriesCoprocessor implements MasterCoprocessor, MasterObserver {
     AtomicLong retryNum = new AtomicLong(0);
 
     public TestMaxRetriesCoprocessor() {
+    }
+
+    @Override
+    public Optional<MasterObserver> getMasterObserver() {
+      return Optional.of(this);
     }
 
     @Override

@@ -22,18 +22,19 @@ import java.io.IOException;
 import java.util.List;
 import java.util.UUID;
 
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.Stoppable;
+import org.apache.hadoop.hbase.Server;
+import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.replication.ReplicationEndpoint;
 import org.apache.hadoop.hbase.replication.ReplicationException;
-import org.apache.hadoop.hbase.replication.ReplicationPeers;
-import org.apache.hadoop.hbase.replication.ReplicationQueues;
+import org.apache.hadoop.hbase.replication.ReplicationPeer;
+import org.apache.hadoop.hbase.replication.ReplicationQueueStorage;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
+import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * Interface that defines a replication source
@@ -46,17 +47,12 @@ public interface ReplicationSourceInterface {
    * @param conf the configuration to use
    * @param fs the file system to use
    * @param manager the manager to use
-   * @param replicationQueues
-   * @param replicationPeers
-   * @param stopper the stopper object for this region server
-   * @param peerClusterZnode
-   * @param clusterId
-   * @throws IOException
+   * @param server the server for this region server
    */
   void init(Configuration conf, FileSystem fs, ReplicationSourceManager manager,
-      ReplicationQueues replicationQueues, ReplicationPeers replicationPeers, Stoppable stopper,
-      String peerClusterZnode, UUID clusterId, ReplicationEndpoint replicationEndpoint,
-      WALFileLengthProvider walFileLengthProvider, MetricsSource metrics) throws IOException;
+      ReplicationQueueStorage queueStorage, ReplicationPeer replicationPeer, Server server,
+      String queueId, UUID clusterId, WALFileLengthProvider walFileLengthProvider,
+      MetricsSource metrics) throws IOException;
 
   /**
    * Add a log to the list of logs to replicate
@@ -100,11 +96,11 @@ public interface ReplicationSourceInterface {
   Path getCurrentPath();
 
   /**
-   * Get the id that the source is replicating to
+   * Get the queue id that the source is replicating to
    *
-   * @return peer cluster id
+   * @return queue id
    */
-  String getPeerClusterZnode();
+  String getQueueId();
 
   /**
    * Get the id that the source is replicating to.
@@ -163,4 +159,11 @@ public interface ReplicationSourceInterface {
    * @param batchSize entries size pushed
    */
   void postShipEdits(List<Entry> entries, int batchSize);
+
+  /**
+   * The queue of WALs only belong to one region server. This will return the server name which all
+   * WALs belong to.
+   * @return the server name which all WALs belong to
+   */
+  ServerName getServerWALsBelongTo();
 }

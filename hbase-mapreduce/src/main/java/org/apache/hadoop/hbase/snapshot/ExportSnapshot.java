@@ -19,9 +19,9 @@
 package org.apache.hadoop.hbase.snapshot;
 
 import java.io.BufferedInputStream;
-import java.io.FileNotFoundException;
 import java.io.DataInput;
 import java.io.DataOutput;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -32,9 +32,6 @@ import java.util.List;
 
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.Option;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -44,18 +41,16 @@ import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.permission.FsPermission;
-import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
+import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.io.FileLink;
 import org.apache.hadoop.hbase.io.HFileLink;
 import org.apache.hadoop.hbase.io.WALLink;
+import org.apache.hadoop.hbase.io.hadoopbackport.ThrottledInputStream;
 import org.apache.hadoop.hbase.mapreduce.TableMapReduceUtil;
 import org.apache.hadoop.hbase.mob.MobUtils;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotDescription;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotFileInfo;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotRegionManifest;
 import org.apache.hadoop.hbase.util.AbstractHBaseTool;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.util.HFileArchiveUtil;
@@ -64,18 +59,23 @@ import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.NullWritable;
 import org.apache.hadoop.io.Writable;
+import org.apache.hadoop.mapreduce.InputFormat;
+import org.apache.hadoop.mapreduce.InputSplit;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.JobContext;
 import org.apache.hadoop.mapreduce.Mapper;
-import org.apache.hadoop.mapreduce.InputFormat;
-import org.apache.hadoop.mapreduce.InputSplit;
 import org.apache.hadoop.mapreduce.RecordReader;
 import org.apache.hadoop.mapreduce.TaskAttemptContext;
 import org.apache.hadoop.mapreduce.lib.output.NullOutputFormat;
 import org.apache.hadoop.mapreduce.security.TokenCache;
-import org.apache.hadoop.hbase.io.hadoopbackport.ThrottledInputStream;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.Tool;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotDescription;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotFileInfo;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotRegionManifest;
 
 /**
  * Export the specified snapshot to a given FileSystem.
@@ -92,7 +92,7 @@ public class ExportSnapshot extends AbstractHBaseTool implements Tool {
   /** Configuration prefix for overrides for the destination filesystem */
   public static final String CONF_DEST_PREFIX = NAME + ".to.";
 
-  private static final Log LOG = LogFactory.getLog(ExportSnapshot.class);
+  private static final Logger LOG = LoggerFactory.getLogger(ExportSnapshot.class);
 
   private static final String MR_NUM_MAPS = "mapreduce.job.maps";
   private static final String CONF_NUM_SPLITS = "snapshot.export.format.splits";
@@ -107,6 +107,7 @@ public class ExportSnapshot extends AbstractHBaseTool implements Tool {
   private static final String CONF_BUFFER_SIZE = "snapshot.export.buffer.size";
   private static final String CONF_MAP_GROUP = "snapshot.export.default.map.group";
   private static final String CONF_BANDWIDTH_MB = "snapshot.export.map.bandwidth.mb";
+  private static final String CONF_MR_JOB_NAME = "mapreduce.job.name";
   protected static final String CONF_SKIP_TMP = "snapshot.export.skip.tmp";
 
   static class Testing {
@@ -151,7 +152,7 @@ public class ExportSnapshot extends AbstractHBaseTool implements Tool {
 
   private static class ExportMapper extends Mapper<BytesWritable, NullWritable,
                                                    NullWritable, NullWritable> {
-    private static final Log LOG = LogFactory.getLog(ExportMapper.class);
+    private static final Logger LOG = LoggerFactory.getLogger(ExportMapper.class);
     final static int REPORT_SIZE = 1 * 1024 * 1024;
     final static int BUFFER_SIZE = 64 * 1024;
 
@@ -566,7 +567,7 @@ public class ExportSnapshot extends AbstractHBaseTool implements Tool {
     SnapshotReferenceUtil.visitReferencedFiles(conf, fs, snapshotDir, snapshotDesc,
       new SnapshotReferenceUtil.SnapshotVisitor() {
         @Override
-        public void storeFile(final HRegionInfo regionInfo, final String family,
+        public void storeFile(final RegionInfo regionInfo, final String family,
             final SnapshotRegionManifest.StoreFile storeFile) throws IOException {
           // for storeFile.hasReference() case, copied as part of the manifest
           if (!storeFile.hasReference()) {
@@ -806,8 +807,9 @@ public class ExportSnapshot extends AbstractHBaseTool implements Tool {
     conf.set(CONF_SNAPSHOT_NAME, snapshotName);
     conf.set(CONF_SNAPSHOT_DIR, snapshotDir.toString());
 
+    String jobname = conf.get(CONF_MR_JOB_NAME, "ExportSnapshot-" + snapshotName);
     Job job = new Job(conf);
-    job.setJobName("ExportSnapshot-" + snapshotName);
+    job.setJobName(jobname);
     job.setJarByClass(ExportSnapshot.class);
     TableMapReduceUtil.addDependencyJars(job);
     job.setMapperClass(ExportMapper.class);

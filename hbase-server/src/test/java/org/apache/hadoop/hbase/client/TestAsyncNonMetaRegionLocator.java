@@ -33,8 +33,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.IntStream;
-
 import org.apache.commons.io.IOUtils;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HRegionLocation;
@@ -42,6 +42,7 @@ import org.apache.hadoop.hbase.NotServingRegionException;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotFoundException;
+import org.apache.hadoop.hbase.Waiter.ExplainingPredicate;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
@@ -49,12 +50,16 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-import org.apache.hadoop.hbase.Waiter.ExplainingPredicate;
 
 @Category({ MediumTests.class, ClientTests.class })
 public class TestAsyncNonMetaRegionLocator {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestAsyncNonMetaRegionLocator.class);
 
   private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
 
@@ -176,7 +181,7 @@ public class TestAsyncNonMetaRegionLocator {
     ServerName[] serverNames = new ServerName[startKeys.length];
     TEST_UTIL.getHBaseCluster().getRegionServerThreads().stream().map(t -> t.getRegionServer())
         .forEach(rs -> {
-          rs.getOnlineRegions(TABLE_NAME).forEach(r -> {
+          rs.getRegions(TABLE_NAME).forEach(r -> {
             serverNames[Arrays.binarySearch(startKeys, r.getRegionInfo().getStartKey(),
               Bytes::compareTo)] = rs.getServerName();
           });
@@ -270,7 +275,7 @@ public class TestAsyncNonMetaRegionLocator {
         LOCATOR.getRegionLocation(TABLE_NAME, row, RegionLocateType.AFTER, false).get();
     ServerName afterServerName =
         TEST_UTIL.getHBaseCluster().getRegionServerThreads().stream().map(t -> t.getRegionServer())
-            .filter(rs -> rs.getOnlineRegions(TABLE_NAME).stream()
+            .filter(rs -> rs.getRegions(TABLE_NAME).stream()
                 .anyMatch(r -> Bytes.equals(splitKey, r.getRegionInfo().getStartKey())))
             .findAny().get().getServerName();
     assertLocEquals(splitKey, EMPTY_END_ROW, afterServerName, afterLoc);

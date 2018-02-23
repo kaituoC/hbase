@@ -25,7 +25,7 @@ pipeline {
   }
   options {
     buildDiscarder(logRotator(numToKeepStr: '30'))
-    timeout (time: 6, unit: 'HOURS')
+    timeout (time: 8, unit: 'HOURS')
     timestamps()
     skipDefaultCheckout()
   }
@@ -33,25 +33,22 @@ pipeline {
     TOOLS = "${env.WORKSPACE}/tools"
     // where we check out to across stages
     BASEDIR = "${env.WORKSPACE}/component"
-    YETUS_RELEASE = '0.5.0'
-    // where we'll write everything from different steps.
-    OUTPUT_RELATIVE_GENERAL = 'output-general'
-    OUTPUTDIR_GENERAL = "${env.WORKSPACE}/output-general"
-    OUTPUT_RELATIVE_JDK7 = 'output-jdk7'
-    OUTPUTDIR_JDK7 = "${env.WORKSPACE}/output-jdk7"
-    OUTPUT_RELATIVE_JDK8 = 'output-jdk8'
-    OUTPUTDIR_JDK8 = "${env.WORKSPACE}/output-jdk8"
+    YETUS_RELEASE = '0.7.0'
     PROJECT = 'hbase'
-    PROJET_PERSONALITY = 'https://raw.githubusercontent.com/apache/hbase/master/dev-support/hbase-personality.sh'
+    PROJECT_PERSONALITY = 'https://raw.githubusercontent.com/apache/hbase/master/dev-support/hbase-personality.sh'
     // This section of the docs tells folks not to use the javadoc tag. older branches have our old version of the check for said tag.
     AUTHOR_IGNORE_LIST = 'src/main/asciidoc/_chapters/developer.adoc,dev-support/test-patch.sh'
     WHITESPACE_IGNORE_LIST = '.*/generated/.*'
     // output from surefire; sadly the archive function in yetus only works on file names.
-    ARCHIVE_PATTERN_LIST = 'TEST-*.xml,org.apache.h*.txt'
+    ARCHIVE_PATTERN_LIST = 'TEST-*.xml,org.apache.h*.txt,*.dumpstream,*.dump'
     // These tests currently have known failures. Once they burn down to 0, remove from here so that new problems will cause a failure.
-    TESTS_FILTER = 'cc,checkstyle,javac,javadoc,pylint,shellcheck,whitespace,perlcritic,ruby-lint,rubocop'
+    TESTS_FILTER = 'cc,checkstyle,javac,javadoc,pylint,shellcheck,whitespace,perlcritic,ruby-lint,rubocop,mvnsite'
     BRANCH_SPECIFIC_DOCKERFILE = "${env.BASEDIR}/dev-support/docker/Dockerfile"
-    EXCLUDE_TESTS_URL = 'https://builds.apache.org/job/HBase-Find-Flaky-Tests/lastSuccessfulBuild/artifact/excludes/'
+    // Flaky urls for different branches. Replace '-' and '.' in branch name by '_' because those
+    // characters are not allowed in bash variable name.
+    // Not excluding flakies from the nightly build for now.
+    // EXCLUDE_TESTS_URL_master = 'https://builds.apache.org/job/HBase-Find-Flaky-Tests/lastSuccessfulBuild/artifact/excludes/'
+    // EXCLUDE_TESTS_URL_branch_2 = 'https://builds.apache.org/job/HBase-Find-Flaky-Tests-branch2.0/lastSuccessfulBuild/artifact/excludes/'
   }
   parameters {
     booleanParam(name: 'USE_YETUS_PRERELEASE', defaultValue: false, description: '''Check to use the current HEAD of apache/yetus rather than our configured release.
@@ -108,7 +105,7 @@ fi
         dir ("${env.TOOLS}") {
           sh """#!/usr/bin/env bash
 echo "Downloading Project personality."
-curl -L  -o personality.sh "${env.PROJET_PERSONALITY}"
+curl -L  -o personality.sh "${env.PROJECT_PERSONALITY}"
           """
         }
         stash name: 'yetus', includes: "yetus-*/*,yetus-*/**/*,tools/personality.sh"
@@ -121,26 +118,31 @@ curl -L  -o personality.sh "${env.PROJET_PERSONALITY}"
         TESTS = 'all,-unit,-findbugs'
         // on branches that don't support jdk7, this will already be JAVA_HOME, so we'll end up not
         // doing multijdk there.
-        MULTIJDK = '/usr/lib/jvm/java-8-oracle'
-        OUTPUT_RELATIVE = "${env.OUTPUT_RELATIVE_GENERAL}"
-        OUTPUTDIR = "${env.OUTPUTDIR_GENERAL}"
+        MULTIJDK = '/usr/lib/jvm/java-8-openjdk-amd64'
+        OUTPUT_DIR_RELATIVE = "output-general"
+        OUTPUT_DIR = "${env.WORKSPACE}/${env.OUTPUT_DIR_RELATIVE}"
       }
       steps {
         unstash 'yetus'
+        sh '''#!/usr/bin/env bash
+          rm -rf "${OUTPUT_DIR}" && mkdir "${OUTPUT_DIR}"
+          rm -rf "${OUTPUT_DIR}/machine" && mkdir "${OUTPUT_DIR}/machine"
+          "${BASEDIR}/dev-support/gather_machine_environment.sh" "${OUTPUT_DIR_RELATIVE}/machine"
+'''
         // TODO should this be a download from master, similar to how the personality is?
         sh "${env.BASEDIR}/dev-support/hbase_nightly_yetus.sh"
       }
       post {
         always {
-          // env variables don't work in archive? or this has to be relative to WORKSPACE. :(
-          archive 'output-general/*'
-          archive 'output-general/**/*'
+          // Has to be relative to WORKSPACE.
+          archive "${env.OUTPUT_DIR_RELATIVE}/*"
+          archive "${env.OUTPUT_DIR_RELATIVE}/**/*"
           publishHTML target: [
             allowMissing: true,
             keepAll: true,
             alwaysLinkToLastBuild: true,
-            // has to be relative to WORKSPACE :(
-            reportDir: 'output-general',
+            // Has to be relative to WORKSPACE
+            reportDir: "${env.OUTPUT_DIR_RELATIVE}",
             reportFiles: 'console-report.html',
             reportName: 'General Nightly Build Report'
           ]
@@ -153,12 +155,17 @@ curl -L  -o personality.sh "${env.PROJET_PERSONALITY}"
       }
       environment {
         TESTS = 'mvninstall,compile,javac,unit,htmlout'
-        OUTPUT_RELATIVE = "${env.OUTPUT_RELATIVE_JDK7}"
-        OUTPUTDIR = "${env.OUTPUTDIR_JDK7}"
+        OUTPUT_DIR_RELATIVE = "output-jdk7"
+        OUTPUT_DIR = "${env.WORKSPACE}/${env.OUTPUT_DIR_RELATIVE}"
         // On branches where we do jdk7 checks, jdk7 will be JAVA_HOME already.
       }
       steps {
         unstash 'yetus'
+        sh '''#!/usr/bin/env bash
+          rm -rf "${OUTPUT_DIR}" && mkdir "${OUTPUT_DIR}"
+          rm -rf "${OUTPUT_DIR}/machine" && mkdir "${OUTPUT_DIR}/machine"
+          "${BASEDIR}/dev-support/gather_machine_environment.sh" "${OUTPUT_DIR_RELATIVE}/machine"
+'''
         sh """#!/usr/bin/env bash
           # for branch-1.1 we don't do jdk8 findbugs, so do it here
           if [ "${env.BRANCH_NAME}" == "branch-1.1" ]; then
@@ -169,14 +176,14 @@ curl -L  -o personality.sh "${env.PROJET_PERSONALITY}"
       }
       post {
         always {
-          junit 'output-jdk7/**/target/**/TEST-*.xml'
+          junit testResults: "${env.OUTPUT_DIR_RELATIVE}/**/target/**/TEST-*.xml", allowEmptyResults: true
           // zip surefire reports.
           sh '''#!/bin/bash -e
-            if [ -d "${OUTPUTDIR}/archiver" ]; then
-              count=$(find "${OUTPUTDIR}/archiver" -type f | wc -l)
+            if [ -d "${OUTPUT_DIR}/archiver" ]; then
+              count=$(find "${OUTPUT_DIR}/archiver" -type f | wc -l)
               if [[ 0 -ne ${count} ]]; then
                 echo "zipping ${count} archived files"
-                zip -q -m -r "${OUTPUTDIR}/test_logs.zip" "${OUTPUTDIR}/archiver"
+                zip -q -m -r "${OUTPUT_DIR}/test_logs.zip" "${OUTPUT_DIR}/archiver"
               else
                 echo "No archived files, skipping compressing."
               fi
@@ -184,49 +191,54 @@ curl -L  -o personality.sh "${env.PROJET_PERSONALITY}"
               echo "No archiver directory, skipping compressing."
             fi
 '''
-          // env variables don't work in archive? or this has to be relative to WORKSPACE. :(
-          archive 'output-jdk7/*'
-          archive 'output-jdk7/**/*'
+          // Has to be relative to WORKSPACE.
+          archive "${env.OUTPUT_DIR_RELATIVE}/*"
+          archive "${env.OUTPUT_DIR_RELATIVE}/**/*"
           publishHTML target: [
-            allowMissing: true,
-            keepAll: true,
+            allowMissing         : true,
+            keepAll              : true,
             alwaysLinkToLastBuild: true,
-            // has to be relative to WORKSPACE :(
-            reportDir: 'output-jdk7',
-            reportFiles: 'console-report.html',
-            reportName: 'JDK7 Nightly Build Report'
+            // Has to be relative to WORKSPACE.
+            reportDir            : "${env.OUTPUT_DIR_RELATIVE}",
+            reportFiles          : 'console-report.html',
+            reportName           : 'JDK7 Nightly Build Report'
           ]
         }
       }
     }
-    stage ('yetus jdk8 checks') {
+    stage ('yetus jdk8 hadoop2 checks') {
       when {
         not {
           branch 'branch-1.1*'
         }
       }
       environment {
-        TESTS = 'mvninstall,compile,javac,unit,findbugs,htmlout'
-        OUTPUT_RELATIVE = "${env.OUTPUT_RELATIVE_JDK8}"
-        OUTPUTDIR = "${env.OUTPUTDIR_JDK8}"
+        TESTS = 'mvninstall,compile,javac,unit,htmlout'
+        OUTPUT_DIR_RELATIVE = "output-jdk8-hadoop2"
+        OUTPUT_DIR = "${env.WORKSPACE}/${env.OUTPUT_DIR_RELATIVE}"
         // This isn't strictly needed on branches that only support jdk8, but doesn't hurt
         // and is needed on branches that do both jdk7 and jdk8
-        SET_JAVA_HOME = '/usr/lib/jvm/java-8-oracle'
+        SET_JAVA_HOME = '/usr/lib/jvm/java-8-openjdk-amd64'
       }
       steps {
         unstash 'yetus'
+        sh '''#!/usr/bin/env bash
+          rm -rf "${OUTPUT_DIR}" && mkdir "${OUTPUT_DIR}"
+          rm -rf "${OUTPUT_DIR}/machine" && mkdir "${OUTPUT_DIR}/machine"
+          "${BASEDIR}/dev-support/gather_machine_environment.sh" "${OUTPUT_DIR_RELATIVE}/machine"
+'''
         sh "${env.BASEDIR}/dev-support/hbase_nightly_yetus.sh"
       }
       post {
         always {
-          junit 'output-jdk8/**/target/**/TEST-*.xml'
+          junit testResults: "${env.OUTPUT_DIR_RELATIVE}/**/target/**/TEST-*.xml", allowEmptyResults: true
           // zip surefire reports.
           sh '''#!/bin/bash -e
-            if [ -d "${OUTPUTDIR}/archiver" ]; then
-              count=$(find "${OUTPUTDIR}/archiver" -type f | wc -l)
+            if [ -d "${OUTPUT_DIR}/archiver" ]; then
+              count=$(find "${OUTPUT_DIR}/archiver" -type f | wc -l)
               if [[ 0 -ne ${count} ]]; then
                 echo "zipping ${count} archived files"
-                zip -q -m -r "${OUTPUTDIR}/test_logs.zip" "${OUTPUTDIR}/archiver"
+                zip -q -m -r "${OUTPUT_DIR}/test_logs.zip" "${OUTPUT_DIR}/archiver"
               else
                 echo "No archived files, skipping compressing."
               fi
@@ -234,17 +246,78 @@ curl -L  -o personality.sh "${env.PROJET_PERSONALITY}"
               echo "No archiver directory, skipping compressing."
             fi
 '''
-          // env variables don't work in archive? or this has to be relative to WORKSPACE. :(
-          archive 'output-jdk8/*'
-          archive 'output-jdk8/**/*'
+          // Has to be relative to WORKSPACE.
+          archive "${env.OUTPUT_DIR_RELATIVE}/*"
+          archive "${env.OUTPUT_DIR_RELATIVE}/**/*"
           publishHTML target: [
-            allowMissing: true,
-            keepAll: true,
+            allowMissing         : true,
+            keepAll              : true,
             alwaysLinkToLastBuild: true,
-            // has to be relative to WORKSPACE :(
-            reportDir: 'output-jdk8',
-            reportFiles: 'console-report.html',
-            reportName: 'JDK8 Nightly Build Report'
+            // Has to be relative to WORKSPACE.
+            reportDir            : "${env.OUTPUT_DIR_RELATIVE}",
+            reportFiles          : 'console-report.html',
+            reportName           : 'JDK8 Nightly Build Report (Hadoop2)'
+          ]
+        }
+      }
+    }
+    stage ('yetus jdk8 hadoop3 checks') {
+      when {
+        not {
+          branch 'branch-1*'
+        }
+      }
+      environment {
+        // Failure in any stage fails the build and consecutive stages are not built.
+        // Findbugs is part of this last yetus stage to prevent findbugs precluding hadoop3
+        // tests.
+        TESTS = 'mvninstall,compile,javac,unit,findbugs,htmlout'
+        OUTPUT_DIR_RELATIVE = "output-jdk8-hadoop3"
+        OUTPUT_DIR = "${env.WORKSPACE}/${env.OUTPUT_DIR_RELATIVE}"
+        // This isn't strictly needed on branches that only support jdk8, but doesn't hurt
+        // and is needed on branches that do both jdk7 and jdk8
+        SET_JAVA_HOME = '/usr/lib/jvm/java-8-openjdk-amd64'
+        // Activates hadoop 3.0 profile in maven runs.
+        HADOOP_PROFILE = '3.0'
+      }
+      steps {
+        unstash 'yetus'
+        sh '''#!/usr/bin/env bash
+          rm -rf "${OUTPUT_DIR}" && mkdir "${OUTPUT_DIR}"
+          rm -rf "${OUTPUT_DIR}/machine" && mkdir "${OUTPUT_DIR}/machine"
+          "${BASEDIR}/dev-support/gather_machine_environment.sh" "${OUTPUT_DIR_RELATIVE}/machine"
+'''
+        sh "${env.BASEDIR}/dev-support/hbase_nightly_yetus.sh"
+      }
+      post {
+        always {
+          // Not sure how two junit test reports will work. Disabling this for now.
+          // junit testResults: "${env.OUTPUT_DIR_RELATIVE}/**/target/**/TEST-*.xml", allowEmptyResults: true
+          // zip surefire reports.
+          sh '''#!/bin/bash -e
+            if [ -d "${OUTPUT_DIR}/archiver" ]; then
+              count=$(find "${OUTPUT_DIR}/archiver" -type f | wc -l)
+              if [[ 0 -ne ${count} ]]; then
+                echo "zipping ${count} archived files"
+                zip -q -m -r "${OUTPUT_DIR}/test_logs.zip" "${OUTPUT_DIR}/archiver"
+              else
+                echo "No archived files, skipping compressing."
+              fi
+            else
+              echo "No archiver directory, skipping compressing."
+            fi
+'''
+          // Has to be relative to WORKSPACE.
+          archive "${env.OUTPUT_DIR_RELATIVE}/*"
+          archive "${env.OUTPUT_DIR_RELATIVE}/**/*"
+          publishHTML target: [
+            allowMissing         : true,
+            keepAll              : true,
+            alwaysLinkToLastBuild: true,
+            // Has to be relative to WORKSPACE.
+            reportDir            : "${env.OUTPUT_DIR_RELATIVE}",
+            reportFiles          : 'console-report.html',
+            reportName           : 'JDK8 Nightly Build Report (Hadoop3)'
           ]
         }
       }
@@ -258,51 +331,31 @@ curl -L  -o personality.sh "${env.PROJET_PERSONALITY}"
         jdk "JDK 1.8 (latest)"
       }
       steps {
-        sh 'mvn --version --offline'
-        dir ("component") {
-          sh '''#!/bin/bash -e
-            echo "Clean..."
-            mvn --batch-mode -DskipTests clean
-            echo "Step 3 Build the source tarball"
-            mvn -Prelease --batch-mode -Dmaven.repo.local="${WORKSPACE}/.m2-for-repo" install -DskipTests assembly:single -Dassembly.file=hbase-assembly/src/main/assembly/src.xml
-'''
-        }
-        dir ("unpacked_src_tarball") {
-          sh '''#!/bin/bash -e
-            echo "Unpack the source tarball"
-            tar --strip-components=1 -xzf ../component/hbase-assembly/target/hbase-*-src.tar.gz
-            echo "Building from source artifact."
-            mvn -DskipTests -Prelease --batch-mode -Dmaven.repo.local="${WORKSPACE}/.m2-for-src" clean install assembly:single
-            echo "Clean up after checking ability to build."
-            mvn -DskipTests --batch-mode clean
-'''
-        }
-        dir ("component") {
-          sh '''#!/bin/bash -e
-            echo "Clean up the source checkout"
-            mvn -DskipTests --batch-mode clean
-            echo "Diff against source tree"
-            diff --binary --recursive . ../unpacked_src_tarball >../diff_output || true
-'''
-        }
-        // expectation check largely based on HBASE-14952
         sh '''#!/bin/bash -e
-          echo "Checking against things we don't expect to include in the source tarball (git related, hbase-native-client, etc.)"
-          cat >known_excluded <<END
-Only in .: .git
-Only in .: .gitattributes
-Only in .: .gitignore
-Only in .: hbase-native-client
-END
-          if ! diff known_excluded diff_output >/dev/null ; then
-            echo "Any output here are unexpected differences between the source artifact we'd make for an RC and the current branch."
-            echo "The expected differences are on the < side and the current differences are on the > side."
-            echo "In a given set of differences, '.' refers to the branch in the repo and 'unpacked_src_tarball' refers to what we pulled out of the tarball."
-            diff known_excluded diff_output
-          else
-            echo "Everything looks as expected."
-          fi
+          echo "Setting up directories"
+          rm -rf "output-srctarball" && mkdir "output-srctarball"
+          rm -rf "unpacked_src_tarball" && mkdir "unpacked_src_tarball"
+          rm -rf ".m2-for-repo" && mkdir ".m2-for-repo"
+          rm -rf ".m2-for-src" && mkdir ".m2-for-src"
 '''
+        sh '''#!/usr/bin/env bash
+          rm -rf "output-srctarball/machine" && mkdir "output-srctarball/machine"
+          "${BASEDIR}/dev-support/gather_machine_environment.sh" "output-srctarball/machine"
+'''
+        sh """#!/bin/bash -e
+          ${env.BASEDIR}/dev-support/hbase_nightly_source-artifact.sh \
+              --intermediate-file-dir output-srctarball \
+              --unpack-temp-dir unpacked_src_tarball \
+              --maven-m2-initial .m2-for-repo \
+              --maven-m2-src-build .m2-for-src \
+              --clean-source-checkout \
+              ${env.BASEDIR}
+"""
+      }
+      post {
+        always {
+          archive 'output-srctarball/*'
+        }
       }
     }
   }

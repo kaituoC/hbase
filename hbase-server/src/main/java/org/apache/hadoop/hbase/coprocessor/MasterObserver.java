@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -22,29 +21,21 @@ package org.apache.hadoop.hbase.coprocessor;
 import java.io.IOException;
 import java.util.List;
 import java.util.Set;
-
-import org.apache.hadoop.hbase.Coprocessor;
+import org.apache.hadoop.hbase.ClusterMetrics;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.MetaMutationAnnotation;
 import org.apache.hadoop.hbase.NamespaceDescriptor;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.MasterSwitchType;
 import org.apache.hadoop.hbase.client.Mutation;
 import org.apache.hadoop.hbase.client.RegionInfo;
+import org.apache.hadoop.hbase.client.SnapshotDescription;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.master.RegionPlan;
-import org.apache.hadoop.hbase.master.locking.LockProcedure;
-import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.net.Address;
-import org.apache.hadoop.hbase.procedure2.LockType;
-import org.apache.hadoop.hbase.procedure2.LockedResource;
-import org.apache.hadoop.hbase.procedure2.Procedure;
-import org.apache.hadoop.hbase.procedure2.ProcedureExecutor;
 import org.apache.hadoop.hbase.quotas.GlobalQuotaSettings;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.SnapshotProtos.SnapshotDescription;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.yetus.audience.InterfaceStability;
 
@@ -77,12 +68,11 @@ import org.apache.yetus.audience.InterfaceStability;
  */
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.COPROC)
 @InterfaceStability.Evolving
-public interface MasterObserver extends Coprocessor {
+public interface MasterObserver {
   /**
    * Called before a new table is created by
    * {@link org.apache.hadoop.hbase.master.HMaster}.  Called as part of create
    * table RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    * @param ctx the environment to interact with the framework and master
    * @param desc the TableDescriptor for the table
    * @param regions the initial regions created for the table
@@ -104,7 +94,6 @@ public interface MasterObserver extends Coprocessor {
    * Called before a new table is created by
    * {@link org.apache.hadoop.hbase.master.HMaster}.  Called as part of create
    * table procedure and it is async to the create RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    *
    * @param ctx the environment to interact with the framework and master
    * @param desc the TableDescriptor for the table
@@ -132,7 +121,6 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called before {@link org.apache.hadoop.hbase.master.HMaster} deletes a
    * table.  Called as part of delete table RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    * @param ctx the environment to interact with the framework and master
    * @param tableName the name of the table
    */
@@ -152,7 +140,6 @@ public interface MasterObserver extends Coprocessor {
    * Called before {@link org.apache.hadoop.hbase.master.HMaster} deletes a
    * table.  Called as part of delete table procedure and
    * it is async to the delete RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    *
    * @param ctx the environment to interact with the framework and master
    * @param tableName the name of the table
@@ -165,7 +152,6 @@ public interface MasterObserver extends Coprocessor {
    * Called after {@link org.apache.hadoop.hbase.master.HMaster} deletes a
    * table.  Called as part of delete table procedure and it is async to the
    * delete RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    *
    * @param ctx the environment to interact with the framework and master
    * @param tableName the name of the table
@@ -177,7 +163,6 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called before {@link org.apache.hadoop.hbase.master.HMaster} truncates a
    * table.  Called as part of truncate table RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    * @param ctx the environment to interact with the framework and master
    * @param tableName the name of the table
    */
@@ -199,7 +184,6 @@ public interface MasterObserver extends Coprocessor {
    * Called before {@link org.apache.hadoop.hbase.master.HMaster} truncates a
    * table.  Called as part of truncate table procedure and it is async
    * to the truncate RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    *
    * @param ctx the environment to interact with the framework and master
    * @param tableName the name of the table
@@ -212,7 +196,6 @@ public interface MasterObserver extends Coprocessor {
    * Called after {@link org.apache.hadoop.hbase.master.HMaster} truncates a
    * table.  Called as part of truncate table procedure and it is async to the
    * truncate RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    *
    * @param ctx the environment to interact with the framework and master
    * @param tableName the name of the table
@@ -224,7 +207,6 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called prior to modifying a table's properties.  Called as part of modify
    * table RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    * @param ctx the environment to interact with the framework and master
    * @param tableName the name of the table
    * @param htd the TableDescriptor
@@ -245,7 +227,6 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called prior to modifying a table's properties.  Called as part of modify
    * table procedure and it is async to the modify table RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    *
    * @param ctx the environment to interact with the framework and master
    * @param tableName the name of the table
@@ -259,7 +240,6 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called after to modifying a table's properties.  Called as part of modify
    * table procedure and it is async to the modify table RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    *
    * @param ctx the environment to interact with the framework and master
    * @param tableName the name of the table
@@ -271,150 +251,7 @@ public interface MasterObserver extends Coprocessor {
       final TableDescriptor htd) throws IOException {}
 
   /**
-   * Called prior to adding a new column family to the table.  Called as part of
-   * add column RPC call.
-   *
-   * @param ctx the environment to interact with the framework and master
-   * @param tableName the name of the table
-   * @param columnFamily the ColumnFamilyDescriptor
-   */
-  default void preAddColumnFamily(final ObserverContext<MasterCoprocessorEnvironment> ctx,
-      TableName tableName, ColumnFamilyDescriptor columnFamily) throws IOException {}
-
-  /**
-   * Called after the new column family has been created.  Called as part of
-   * add column RPC call.
-   *
-   * @param ctx the environment to interact with the framework and master
-   * @param tableName the name of the table
-   * @param columnFamily the ColumnFamilyDescriptor
-   */
-  default void postAddColumnFamily(final ObserverContext<MasterCoprocessorEnvironment> ctx,
-      TableName tableName, ColumnFamilyDescriptor columnFamily) throws IOException {}
-
-  /**
-   * Called prior to adding a new column family to the table.  Called as part of
-   * add column procedure.
-   *
-   * @param ctx the environment to interact with the framework and master
-   * @param tableName the name of the table
-   * @param columnFamily the ColumnFamilyDescriptor
-   */
-  default void preAddColumnFamilyAction(
-      final ObserverContext<MasterCoprocessorEnvironment> ctx,
-      final TableName tableName,
-      final ColumnFamilyDescriptor columnFamily) throws IOException {}
-
-  /**
-   * Called after the new column family has been created.  Called as part of
-   * add column procedure.
-   *
-   * @param ctx the environment to interact with the framework and master
-   * @param tableName the name of the table
-   * @param columnFamily the ColumnFamilyDescriptor
-   */
-  default void postCompletedAddColumnFamilyAction(
-      final ObserverContext<MasterCoprocessorEnvironment> ctx,
-      final TableName tableName,
-      final ColumnFamilyDescriptor columnFamily) throws IOException {}
-
-  /**
-   * Called prior to modifying a column family's attributes.  Called as part of
-   * modify column RPC call.
-   *
-   * @param ctx the environment to interact with the framework and master
-   * @param tableName the name of the table
-   * @param columnFamily the ColumnFamilyDescriptor
-   */
-  default void preModifyColumnFamily(final ObserverContext<MasterCoprocessorEnvironment> ctx,
-      TableName tableName, ColumnFamilyDescriptor columnFamily) throws IOException {}
-
-  /**
-   * Called after the column family has been updated.  Called as part of modify
-   * column RPC call.
-   *
-   * @param ctx the environment to interact with the framework and master
-   * @param tableName the name of the table
-   * @param columnFamily the ColumnFamilyDescriptor
-   */
-  default void postModifyColumnFamily(final ObserverContext<MasterCoprocessorEnvironment> ctx,
-      TableName tableName, ColumnFamilyDescriptor columnFamily) throws IOException {}
-
-  /**
-   * Called prior to modifying a column family's attributes.  Called as part of
-   * modify column procedure.
-   *
-   * @param ctx the environment to interact with the framework and master
-   * @param tableName the name of the table
-   * @param columnFamily the ColumnFamilyDescriptor
-   */
-  default void preModifyColumnFamilyAction(
-      final ObserverContext<MasterCoprocessorEnvironment> ctx,
-      final TableName tableName,
-      final ColumnFamilyDescriptor columnFamily) throws IOException {}
-
-  /**
-   * Called after the column family has been updated.  Called as part of modify
-   * column procedure.
-   *
-   * @param ctx the environment to interact with the framework and master
-   * @param tableName the name of the table
-   * @param columnFamily the ColumnFamilyDescriptor
-   */
-  default void postCompletedModifyColumnFamilyAction(
-      final ObserverContext<MasterCoprocessorEnvironment> ctx,
-      final TableName tableName,
-      final ColumnFamilyDescriptor columnFamily) throws IOException {}
-
-  /**
-   * Called prior to deleting the entire column family.  Called as part of
-   * delete column RPC call.
-   *
-   * @param ctx the environment to interact with the framework and master
-   * @param tableName the name of the table
-   * @param columnFamily the column
-   */
-  default void preDeleteColumnFamily(final ObserverContext<MasterCoprocessorEnvironment> ctx,
-      final TableName tableName, final byte[] columnFamily) throws IOException {}
-
-  /**
-   * Called after the column family has been deleted.  Called as part of delete
-   * column RPC call.
-   *
-   * @param ctx the environment to interact with the framework and master
-   * @param tableName the name of the table
-   * @param columnFamily the column family
-   */
-  default void postDeleteColumnFamily(final ObserverContext<MasterCoprocessorEnvironment> ctx,
-      final TableName tableName, final byte[] columnFamily) throws IOException {}
-
-  /**
-   * Called prior to deleting the entire column family.  Called as part of
-   * delete column procedure.
-   *
-   * @param ctx the environment to interact with the framework and master
-   * @param tableName the name of the table
-   * @param columnFamily the column family
-   */
-  default void preDeleteColumnFamilyAction(
-      final ObserverContext<MasterCoprocessorEnvironment> ctx,
-      final TableName tableName, final byte[] columnFamily) throws IOException {}
-
-  /**
-   * Called after the column family has been deleted.  Called as part of
-   * delete column procedure.
-   *
-   * @param ctx the environment to interact with the framework and master
-   * @param tableName the name of the table
-   * @param columnFamily the column family
-   */
-  default void postCompletedDeleteColumnFamilyAction(
-      final ObserverContext<MasterCoprocessorEnvironment> ctx,
-      final TableName tableName, final byte[] columnFamily) throws IOException {}
-
-  /**
    * Called prior to enabling a table.  Called as part of enable table RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    * @param ctx the environment to interact with the framework and master
    * @param tableName the name of the table
    */
@@ -433,7 +270,6 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called prior to enabling a table.  Called as part of enable table procedure
    * and it is async to the enable table RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    *
    * @param ctx the environment to interact with the framework and master
    * @param tableName the name of the table
@@ -456,7 +292,6 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called prior to disabling a table.  Called as part of disable table RPC
    * call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    * @param ctx the environment to interact with the framework and master
    * @param tableName the name of the table
    */
@@ -475,7 +310,6 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called prior to disabling a table.  Called as part of disable table procedure
    * and it is asyn to the disable table RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    *
    * @param ctx the environment to interact with the framework and master
    * @param tableName the name of the table
@@ -498,13 +332,10 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called before a abortProcedure request has been processed.
    * @param ctx the environment to interact with the framework and master
-   * @param procEnv procedure executor
    * @param procId the Id of the procedure
    */
   default void preAbortProcedure(
-      ObserverContext<MasterCoprocessorEnvironment> ctx,
-      final ProcedureExecutor<MasterProcedureEnv> procEnv,
-      final long procId) throws IOException {}
+      ObserverContext<MasterCoprocessorEnvironment> ctx, final long procId) throws IOException {}
 
   /**
    * Called after a abortProcedure request has been processed.
@@ -523,11 +354,9 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called after a getProcedures request has been processed.
    * @param ctx the environment to interact with the framework and master
-   * @param procList the list of procedures about to be returned
    */
-  default void postGetProcedures(
-      ObserverContext<MasterCoprocessorEnvironment> ctx,
-      List<Procedure<?>> procList) throws IOException {}
+  default void postGetProcedures(ObserverContext<MasterCoprocessorEnvironment> ctx)
+      throws IOException {}
 
   /**
    * Called before a getLocks request has been processed.
@@ -540,12 +369,10 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called after a getLocks request has been processed.
    * @param ctx the environment to interact with the framework and master
-   * @param lockedResources the list of locks about to be returned
    * @throws IOException if something went wrong
    */
   default void postGetLocks(
-      ObserverContext<MasterCoprocessorEnvironment> ctx,
-      List<LockedResource> lockedResources) throws IOException {}
+      ObserverContext<MasterCoprocessorEnvironment> ctx) throws IOException {}
 
   /**
    * Called prior to moving a given region from one region server to another.
@@ -606,8 +433,7 @@ public interface MasterObserver extends Coprocessor {
       final RegionInfo regionInfo, final boolean force) throws IOException {}
 
   /**
-   * Called prior to marking a given region as offline. <code>ctx.bypass()</code> will not have any
-   * impact on this hook.
+   * Called prior to marking a given region as offline.
    * @param ctx the environment to interact with the framework and master
    * @param regionInfo
    */
@@ -642,14 +468,13 @@ public interface MasterObserver extends Coprocessor {
 
   /**
    * Called prior to setting split / merge switch
+   * Supports Coprocessor 'bypass'.
    * @param ctx the coprocessor instance's environment
    * @param newValue the new value submitted in the call
    * @param switchType type of switch
    */
-  default boolean preSetSplitOrMergeEnabled(final ObserverContext<MasterCoprocessorEnvironment> ctx,
-      final boolean newValue, final MasterSwitchType switchType) throws IOException {
-    return false;
-  }
+  default void preSetSplitOrMergeEnabled(final ObserverContext<MasterCoprocessorEnvironment> ctx,
+      final boolean newValue, final MasterSwitchType switchType) throws IOException {}
 
   /**
    * Called after setting split / merge switch
@@ -696,25 +521,22 @@ public interface MasterObserver extends Coprocessor {
       final RegionInfo regionInfoB) throws IOException {}
 
   /**
-   * This will be called before PONR step as part of split transaction. Calling
-   * {@link org.apache.hadoop.hbase.coprocessor.ObserverContext#bypass()} rollback the split
+   * This will be called before update META step as part of split transaction.
    * @param ctx the environment to interact with the framework and master
    * @param splitKey
    * @param metaEntries
    */
-  default void preSplitRegionBeforePONRAction(
+  default void preSplitRegionBeforeMETAAction(
       final ObserverContext<MasterCoprocessorEnvironment> ctx,
       final byte[] splitKey,
       final List<Mutation> metaEntries) throws IOException {}
 
 
   /**
-   * This will be called after PONR step as part of split transaction
-   * Calling {@link org.apache.hadoop.hbase.coprocessor.ObserverContext#bypass()} has no
-   * effect in this hook.
+   * This will be called after update META step as part of split transaction
    * @param ctx the environment to interact with the framework and master
    */
-  default void preSplitRegionAfterPONRAction(
+  default void preSplitRegionAfterMETAAction(
       final ObserverContext<MasterCoprocessorEnvironment> ctx)
       throws IOException {}
 
@@ -728,7 +550,6 @@ public interface MasterObserver extends Coprocessor {
 
   /**
    * Called before the regions merge.
-   * Call {@link org.apache.hadoop.hbase.coprocessor.ObserverContext#bypass()} to skip the merge.
    * @param ctx the environment to interact with the framework and master
    */
   default void preMergeRegionsAction(
@@ -745,8 +566,7 @@ public interface MasterObserver extends Coprocessor {
       final RegionInfo mergedRegion) throws IOException {}
 
   /**
-   * This will be called before PONR step as part of regions merge transaction. Calling
-   * {@link org.apache.hadoop.hbase.coprocessor.ObserverContext#bypass()} rollback the merge
+   * This will be called before update META step as part of regions merge transaction.
    * @param ctx the environment to interact with the framework and master
    * @param metaEntries mutations to execute on hbase:meta atomically with regions merge updates.
    *        Any puts or deletes to execute on hbase:meta can be added to the mutations.
@@ -757,7 +577,7 @@ public interface MasterObserver extends Coprocessor {
       @MetaMutationAnnotation List<Mutation> metaEntries) throws IOException {}
 
   /**
-   * This will be called after PONR step as part of regions merge transaction.
+   * This will be called after META step as part of regions merge transaction.
    * @param ctx the environment to interact with the framework and master
    */
   default void postMergeRegionsCommitAction(
@@ -776,12 +596,9 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called prior to modifying the flag used to enable/disable region balancing.
    * @param ctx the coprocessor instance's environment
-   * @param newValue the new flag value submitted in the call
    */
-  default boolean preBalanceSwitch(final ObserverContext<MasterCoprocessorEnvironment> ctx,
-      final boolean newValue) throws IOException {
-    return newValue;
-  }
+  default void preBalanceSwitch(final ObserverContext<MasterCoprocessorEnvironment> ctx,
+      final boolean newValue) throws IOException {}
 
   /**
    * Called after the flag to enable/disable balancing has changed.
@@ -825,7 +642,6 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called before a new snapshot is taken.
    * Called as part of snapshot RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    * @param ctx the environment to interact with the framework and master
    * @param snapshot the SnapshotDescriptor for the snapshot
    * @param tableDescriptor the TableDescriptor of the table to snapshot
@@ -847,7 +663,6 @@ public interface MasterObserver extends Coprocessor {
 
   /**
    * Called before listSnapshots request has been processed.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    * @param ctx the environment to interact with the framework and master
    * @param snapshot the SnapshotDescriptor of the snapshot to list
    */
@@ -856,7 +671,6 @@ public interface MasterObserver extends Coprocessor {
 
   /**
    * Called after listSnapshots request has been processed.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    * @param ctx the environment to interact with the framework and master
    * @param snapshot the SnapshotDescriptor of the snapshot to list
    */
@@ -866,7 +680,6 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called before a snapshot is cloned.
    * Called as part of restoreSnapshot RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    * @param ctx the environment to interact with the framework and master
    * @param snapshot the SnapshotDescriptor for the snapshot
    * @param tableDescriptor the TableDescriptor of the table to create
@@ -889,7 +702,6 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called before a snapshot is restored.
    * Called as part of restoreSnapshot RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    * @param ctx the environment to interact with the framework and master
    * @param snapshot the SnapshotDescriptor for the snapshot
    * @param tableDescriptor the TableDescriptor of the table to restore
@@ -912,7 +724,6 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called before a snapshot is deleted.
    * Called as part of deleteSnapshot RPC call.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    * @param ctx the environment to interact with the framework and master
    * @param snapshot the SnapshotDescriptor of the snapshot to delete
    */
@@ -932,7 +743,7 @@ public interface MasterObserver extends Coprocessor {
    * Called before a getTableDescriptors request has been processed.
    * @param ctx the environment to interact with the framework and master
    * @param tableNamesList the list of table names, or null if querying for all
-   * @param descriptors an empty list, can be filled with what to return if bypassing
+   * @param descriptors an empty list, can be filled with what to return in coprocessor
    * @param regex regular expression used for filtering the table names
    */
   default void preGetTableDescriptors(ObserverContext<MasterCoprocessorEnvironment> ctx,
@@ -953,7 +764,7 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called before a getTableNames request has been processed.
    * @param ctx the environment to interact with the framework and master
-   * @param descriptors an empty list, can be filled with what to return if bypassing
+   * @param descriptors an empty list, can be filled with what to return by coprocessor
    * @param regex regular expression used for filtering the table names
    */
   default void preGetTableNames(ObserverContext<MasterCoprocessorEnvironment> ctx,
@@ -973,7 +784,6 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called before a new namespace is created by
    * {@link org.apache.hadoop.hbase.master.HMaster}.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    * @param ctx the environment to interact with the framework and master
    * @param ns the NamespaceDescriptor for the table
    */
@@ -990,7 +800,6 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called before {@link org.apache.hadoop.hbase.master.HMaster} deletes a
    * namespace
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    * @param ctx the environment to interact with the framework and master
    * @param namespace the name of the namespace
    */
@@ -1007,7 +816,6 @@ public interface MasterObserver extends Coprocessor {
 
   /**
    * Called prior to modifying a namespace's properties.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    * @param ctx the environment to interact with the framework and master
    * @param ns the NamespaceDescriptor
    */
@@ -1041,7 +849,7 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called before a listNamespaceDescriptors request has been processed.
    * @param ctx the environment to interact with the framework and master
-   * @param descriptors an empty list, can be filled with what to return if bypassing
+   * @param descriptors an empty list, can be filled with what to return by coprocessor
    */
   default void preListNamespaceDescriptors(ObserverContext<MasterCoprocessorEnvironment> ctx,
       List<NamespaceDescriptor> descriptors) throws IOException {}
@@ -1171,7 +979,6 @@ public interface MasterObserver extends Coprocessor {
 
   /**
    * Called before merge regions request.
-   * It can't bypass the default action, e.g., ctx.bypass() won't have effect.
    * @param ctx coprocessor environment
    * @param regionsToMerge regions to be merged
    */
@@ -1289,6 +1096,24 @@ public interface MasterObserver extends Coprocessor {
    */
   default void postBalanceRSGroup(final ObserverContext<MasterCoprocessorEnvironment> ctx,
                           String groupName, boolean balancerRan) throws IOException {}
+
+  /**
+   * Called before servers are removed from rsgroup
+   * @param ctx the environment to interact with the framework and master
+   * @param servers set of decommissioned servers to remove
+   */
+  default void preRemoveServers(
+      final ObserverContext<MasterCoprocessorEnvironment> ctx,
+      Set<Address> servers) throws IOException {}
+
+  /**
+   * Called after servers are removed from rsgroup
+   * @param ctx the environment to interact with the framework and master
+   * @param servers set of servers to remove
+   */
+  default void postRemoveServers(
+      final ObserverContext<MasterCoprocessorEnvironment> ctx,
+      Set<Address> servers) throws IOException {}
 
   /**
    * Called before add a replication peer
@@ -1411,44 +1236,40 @@ public interface MasterObserver extends Coprocessor {
    * @param ctx the environment to interact with the framework and master
    */
   default void preRequestLock(ObserverContext<MasterCoprocessorEnvironment> ctx, String namespace,
-      TableName tableName, RegionInfo[] regionInfos, LockType type,
-      String description) throws IOException {}
+      TableName tableName, RegionInfo[] regionInfos, String description) throws IOException {}
 
   /**
    * Called after new LockProcedure is queued.
    * @param ctx the environment to interact with the framework and master
    */
   default void postRequestLock(ObserverContext<MasterCoprocessorEnvironment> ctx, String namespace,
-      TableName tableName, RegionInfo[] regionInfos, LockType type,
-      String description) throws IOException {}
+      TableName tableName, RegionInfo[] regionInfos, String description) throws IOException {}
 
   /**
    * Called before heartbeat to a lock.
    * @param ctx the environment to interact with the framework and master
-   * @param keepAlive if lock should be kept alive; lock will be released if set to false.
    */
   default void preLockHeartbeat(ObserverContext<MasterCoprocessorEnvironment> ctx,
-      LockProcedure proc, boolean keepAlive) throws IOException {}
+      TableName tn, String description) throws IOException {}
 
   /**
    * Called after heartbeat to a lock.
    * @param ctx the environment to interact with the framework and master
-   * @param keepAlive if lock was kept alive; lock was released if set to false.
    */
-  default void postLockHeartbeat(ObserverContext<MasterCoprocessorEnvironment> ctx,
-      LockProcedure proc, boolean keepAlive) throws IOException {}
-
-  /**
-   * Called before list dead region servers.
-   */
-  default void preListDeadServers(ObserverContext<MasterCoprocessorEnvironment> ctx)
+  default void postLockHeartbeat(ObserverContext<MasterCoprocessorEnvironment> ctx)
       throws IOException {}
 
   /**
-   * Called after list dead region servers.
+   * Called before get cluster status.
    */
-  default void postListDeadServers(ObserverContext<MasterCoprocessorEnvironment> ctx)
+  default void preGetClusterMetrics(ObserverContext<MasterCoprocessorEnvironment> ctx)
       throws IOException {}
+
+  /**
+   * Called after get cluster status.
+   */
+  default void postGetClusterMetrics(ObserverContext<MasterCoprocessorEnvironment> ctx,
+    ClusterMetrics status) throws IOException {}
 
   /**
    * Called before clear dead region servers.
@@ -1459,6 +1280,43 @@ public interface MasterObserver extends Coprocessor {
   /**
    * Called after clear dead region servers.
    */
-  default void postClearDeadServers(ObserverContext<MasterCoprocessorEnvironment> ctx)
+  default void postClearDeadServers(ObserverContext<MasterCoprocessorEnvironment> ctx,
+      List<ServerName> servers, List<ServerName> notClearedServers)
       throws IOException {}
+
+  /**
+   * Called before decommission region servers.
+   */
+  default void preDecommissionRegionServers(ObserverContext<MasterCoprocessorEnvironment> ctx,
+      List<ServerName> servers, boolean offload) throws IOException {}
+
+  /**
+   * Called after decommission region servers.
+   */
+  default void postDecommissionRegionServers(ObserverContext<MasterCoprocessorEnvironment> ctx,
+      List<ServerName> servers, boolean offload) throws IOException {}
+
+  /**
+   * Called before list decommissioned region servers.
+   */
+  default void preListDecommissionedRegionServers(ObserverContext<MasterCoprocessorEnvironment> ctx)
+      throws IOException {}
+
+  /**
+   * Called after list decommissioned region servers.
+   */
+  default void postListDecommissionedRegionServers(ObserverContext<MasterCoprocessorEnvironment> ctx)
+      throws IOException {}
+
+  /**
+   * Called before recommission region server.
+   */
+  default void preRecommissionRegionServer(ObserverContext<MasterCoprocessorEnvironment> ctx,
+      ServerName server, List<byte[]> encodedRegionNames) throws IOException {}
+
+  /**
+   * Called after recommission region server.
+   */
+  default void postRecommissionRegionServer(ObserverContext<MasterCoprocessorEnvironment> ctx,
+      ServerName server, List<byte[]> encodedRegionNames) throws IOException {}
 }

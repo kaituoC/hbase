@@ -17,9 +17,9 @@
  */
 package org.apache.hadoop.hbase.ipc;
 
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.BlockingService;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.RpcController;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.ServiceException;
+import org.apache.hbase.thirdparty.com.google.protobuf.BlockingService;
+import org.apache.hbase.thirdparty.com.google.protobuf.RpcController;
+import org.apache.hbase.thirdparty.com.google.protobuf.ServiceException;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -114,7 +114,7 @@ public class TestProtobufRpcServiceImpl implements BlockingInterface {
   @Override
   public AddrResponseProto addr(RpcController controller, EmptyRequestProto request)
       throws ServiceException {
-    return AddrResponseProto.newBuilder().setAddr(RpcServer.getRemoteAddress().getHostAddress())
-        .build();
+    return AddrResponseProto.newBuilder()
+        .setAddr(RpcServer.getRemoteAddress().get().getHostAddress()).build();
   }
 }

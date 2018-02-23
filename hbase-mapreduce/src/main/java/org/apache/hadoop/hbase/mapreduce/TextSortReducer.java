@@ -45,7 +45,7 @@ import org.apache.hadoop.util.StringUtils;
 /**
  * Emits Sorted KeyValues. Parse the passed text and creates KeyValues. Sorts them before emit.
  * @see HFileOutputFormat2
- * @see KeyValueSortReducer
+ * @see CellSortReducer
  * @see PutSortReducer
  */
 @InterfaceAudience.Public
@@ -144,7 +144,7 @@ public class TextSortReducer extends
         "reducer.row.threshold", 1L * (1<<30));
     Iterator<Text> iter = lines.iterator();
     while (iter.hasNext()) {
-      Set<KeyValue> kvs = new TreeSet<>(CellComparator.COMPARATOR);
+      Set<KeyValue> kvs = new TreeSet<>(CellComparator.getInstance());
       long curSize = 0;
       // stop at the end or the RAM threshold
       while (iter.hasNext() && curSize < threshold) {

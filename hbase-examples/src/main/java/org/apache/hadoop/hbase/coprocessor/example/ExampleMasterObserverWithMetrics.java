@@ -19,13 +19,13 @@
 package org.apache.hadoop.hbase.coprocessor.example;
 
 import java.io.IOException;
+import java.util.Optional;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.CoprocessorEnvironment;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.TableDescriptor;
+import org.apache.hadoop.hbase.coprocessor.MasterCoprocessor;
 import org.apache.hadoop.hbase.coprocessor.MasterCoprocessorEnvironment;
 import org.apache.hadoop.hbase.coprocessor.MasterObserver;
 import org.apache.hadoop.hbase.coprocessor.ObserverContext;
@@ -33,6 +33,8 @@ import org.apache.hadoop.hbase.metrics.Counter;
 import org.apache.hadoop.hbase.metrics.Gauge;
 import org.apache.hadoop.hbase.metrics.MetricRegistry;
 import org.apache.hadoop.hbase.metrics.Timer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * An example coprocessor that collects some metrics to demonstrate the usage of exporting custom
@@ -45,9 +47,13 @@ import org.apache.hadoop.hbase.metrics.Timer;
  * </p>
  * @see ExampleRegionObserverWithMetrics
  */
-public class ExampleMasterObserverWithMetrics implements MasterObserver {
+public class ExampleMasterObserverWithMetrics implements MasterCoprocessor, MasterObserver {
+  @Override
+  public Optional<MasterObserver> getMasterObserver() {
+    return Optional.of(this);
+  }
 
-  private static final Log LOG = LogFactory.getLog(ExampleMasterObserverWithMetrics.class);
+  private static final Logger LOG = LoggerFactory.getLogger(ExampleMasterObserverWithMetrics.class);
 
   /** This is the Timer metric object to keep track of the current count across invocations */
   private Timer createTableTimer;

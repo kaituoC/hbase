@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -28,40 +28,46 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Abortable;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
+import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
-import org.apache.hadoop.hbase.client.Table;
-import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.SecurityTests;
 import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.hbase.zookeeper.ZooKeeperWatcher;
+import org.apache.hadoop.hbase.zookeeper.ZKWatcher;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.ArrayListMultimap;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.ListMultimap;
+import org.apache.hbase.thirdparty.com.google.common.collect.ArrayListMultimap;
+import org.apache.hbase.thirdparty.com.google.common.collect.ListMultimap;
 
 /**
  * Test the reading and writing of access permissions on {@code _acl_} table.
  */
 @Category({SecurityTests.class, LargeTests.class})
 public class TestTablePermissions {
-  private static final Log LOG = LogFactory.getLog(TestTablePermissions.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestTablePermissions.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestTablePermissions.class);
   private static final HBaseTestingUtility UTIL = new HBaseTestingUtility();
-  private static ZooKeeperWatcher ZKW;
+  private static ZKWatcher ZKW;
   private final static Abortable ABORTABLE = new Abortable() {
     private final AtomicBoolean abort = new AtomicBoolean(false);
 
@@ -97,7 +103,7 @@ public class TestTablePermissions {
     // Wait for the ACL table to become available
     UTIL.waitTableEnabled(AccessControlLists.ACL_TABLE_NAME);
 
-    ZKW = new ZooKeeperWatcher(UTIL.getConfiguration(),
+    ZKW = new ZKWatcher(UTIL.getConfiguration(),
       "TestTablePermissions", ABORTABLE);
 
     UTIL.createTable(TEST_TABLE, TEST_FAMILY);
@@ -189,9 +195,9 @@ public class TestTablePermissions {
     permission = userPerms.get(0);
     assertEquals("Permission should be for " + TEST_TABLE,
         TEST_TABLE, permission.getTableName());
-    assertTrue("Permission should be for family " + TEST_FAMILY,
+    assertTrue("Permission should be for family " + Bytes.toString(TEST_FAMILY),
         Bytes.equals(TEST_FAMILY, permission.getFamily()));
-    assertTrue("Permission should be for qualifier " + TEST_QUALIFIER,
+    assertTrue("Permission should be for qualifier " + Bytes.toString(TEST_QUALIFIER),
         Bytes.equals(TEST_QUALIFIER, permission.getQualifier()));
 
     // check actions

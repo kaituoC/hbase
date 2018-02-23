@@ -33,10 +33,10 @@ import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.FilterProtos;
 import org.apache.hadoop.hbase.util.Bytes;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.base.Preconditions;
+import org.apache.hbase.thirdparty.com.google.common.base.Preconditions;
 
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.InvalidProtocolBufferException;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.UnsafeByteOperations;
+import org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException;
+import org.apache.hbase.thirdparty.com.google.protobuf.UnsafeByteOperations;
 
 /**
  * A filter for adding inter-column timestamp matching
@@ -155,8 +155,14 @@ public class DependentColumnFilter extends CompareFilter {
     return false;
   }
 
+  @Deprecated
   @Override
-  public ReturnCode filterKeyValue(Cell c) {
+  public ReturnCode filterKeyValue(final Cell c) {
+    return filterCell(c);
+  }
+
+  @Override
+  public ReturnCode filterCell(final Cell c) {
     // Check if the column and qualifier match
     if (!CellUtil.matchingColumn(c, this.columnFamily, this.columnQualifier)) {
         // include non-matches for the time being, they'll be discarded afterwards
@@ -231,6 +237,7 @@ public class DependentColumnFilter extends CompareFilter {
   /**
    * @return The filter serialized using pb
    */
+  @Override
   public byte [] toByteArray() {
     FilterProtos.DependentColumnFilter.Builder builder =
       FilterProtos.DependentColumnFilter.newBuilder();
@@ -282,6 +289,7 @@ public class DependentColumnFilter extends CompareFilter {
    */
   @edu.umd.cs.findbugs.annotations.SuppressWarnings(
       value="RCN_REDUNDANT_NULLCHECK_OF_NONNULL_VALUE")
+  @Override
   boolean areSerializedFieldsEqual(Filter o) {
     if (o == this) return true;
     if (!(o instanceof DependentColumnFilter)) return false;

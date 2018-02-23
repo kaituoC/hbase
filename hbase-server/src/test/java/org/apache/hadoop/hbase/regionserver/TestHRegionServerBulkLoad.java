@@ -17,10 +17,9 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
+import static org.apache.hadoop.hbase.regionserver.HStoreFile.BULKLOAD_TIME_KEY;
 import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.assertThat;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
 
 import java.io.IOException;
 import java.io.InterruptedIOException;
@@ -30,13 +29,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicLong;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
@@ -58,6 +55,7 @@ import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.SecureBulkLoadClient;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.coprocessor.ObserverContext;
+import org.apache.hadoop.hbase.coprocessor.RegionCoprocessor;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.coprocessor.RegionObserver;
 import org.apache.hadoop.hbase.io.compress.Compression;
@@ -70,22 +68,28 @@ import org.apache.hadoop.hbase.ipc.RpcControllerFactory;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionLifeCycleTracker;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionRequest;
 import org.apache.hadoop.hbase.regionserver.wal.TestWALActionsListener;
-import org.apache.hadoop.hbase.wal.WALEdit;
-import org.apache.hadoop.hbase.shaded.protobuf.RequestConverter;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.CompactRegionRequest;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.RegionServerTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.wal.WAL;
+import org.apache.hadoop.hbase.wal.WALEdit;
 import org.apache.hadoop.hbase.wal.WALKey;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
+
+import org.apache.hadoop.hbase.shaded.protobuf.RequestConverter;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.CompactRegionRequest;
 
 /**
  * Tests bulk loading of HFiles and shows the atomicity or lack of atomicity of
@@ -94,7 +98,12 @@ import org.junit.runners.Parameterized.Parameters;
 @RunWith(Parameterized.class)
 @Category({RegionServerTests.class, LargeTests.class})
 public class TestHRegionServerBulkLoad {
-  private static final Log LOG = LogFactory.getLog(TestHRegionServerBulkLoad.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestHRegionServerBulkLoad.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestHRegionServerBulkLoad.class);
   protected static HBaseTestingUtility UTIL = new HBaseTestingUtility();
   protected final static Configuration conf = UTIL.getConfiguration();
   protected final static byte[] QUAL = Bytes.toBytes("qual");
@@ -160,7 +169,7 @@ public class TestHRegionServerBulkLoad {
         KeyValue kv = new KeyValue(rowkey(i), family, qualifier, now, value);
         writer.append(kv);
       }
-      writer.appendFileInfo(StoreFile.BULKLOAD_TIME_KEY, Bytes.toBytes(now));
+      writer.appendFileInfo(BULKLOAD_TIME_KEY, Bytes.toBytes(now));
     } finally {
       writer.close();
     }
@@ -185,6 +194,7 @@ public class TestHRegionServerBulkLoad {
       this.tableName = tableName;
     }
 
+    @Override
     public void doAnAction() throws Exception {
       long iteration = numBulkLoads.getAndIncrement();
       Path dir =  UTIL.getDataTestDirOnTestFS(String.format("bulkLoad_%08d",
@@ -240,7 +250,7 @@ public class TestHRegionServerBulkLoad {
             AdminProtos.AdminService.BlockingInterface server =
               conn.getAdmin(getLocation().getServerName());
             CompactRegionRequest request = RequestConverter.buildCompactRegionRequest(
-                getLocation().getRegionInfo().getRegionName(), true, Optional.empty());
+                getLocation().getRegionInfo().getRegionName(), true, null);
             server.compactRegion(null, request);
             numCompactions.incrementAndGet();
             return null;
@@ -251,11 +261,18 @@ public class TestHRegionServerBulkLoad {
     }
   }
 
-  public static class MyObserver implements RegionObserver {
+  public static class MyObserver implements RegionCoprocessor, RegionObserver {
     static int sleepDuration;
+
+    @Override
+    public Optional<RegionObserver> getRegionObserver() {
+      return Optional.of(this);
+    }
+
     @Override
     public InternalScanner preCompact(ObserverContext<RegionCoprocessorEnvironment> e, Store store,
-        InternalScanner scanner, ScanType scanType, CompactionLifeCycleTracker tracker)
+        InternalScanner scanner, ScanType scanType, CompactionLifeCycleTracker tracker,
+        CompactionRequest request)
         throws IOException {
       try {
         Thread.sleep(sleepDuration);
@@ -287,6 +304,7 @@ public class TestHRegionServerBulkLoad {
       table = UTIL.getConnection().getTable(TABLE_NAME);
     }
 
+    @Override
     public void doAnAction() throws Exception {
       Scan s = new Scan();
       for (byte[] family : targetFamilies) {

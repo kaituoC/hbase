@@ -67,6 +67,7 @@
     http://checkstyle.sourceforge.net/config_imports.html -->
     <module name="AvoidStarImport"/>
     <module name="ImportOrder">
+      <property name="groups" value="*,org.apache.hbase.thirdparty,org.apache.hadoop.hbase.shaded"/>
       <property name="option" value="top" />
       <property name="ordered" value="true"/>
       <property name="sortStaticImportsAlphabetically" value="true"/>
@@ -75,7 +76,9 @@
     <module name="UnusedImports">
       <property name="processJavadoc" value="true"/>
     </module>
-
+    <module name="IllegalImport">
+      <property name="illegalPkgs" value="com.google.common, io.netty, org.apache.curator.shaded, org.apache.htrace.shaded"/>
+    </module>
     <!-- Javadoc Checks
     http://checkstyle.sourceforge.net/config_javadoc.html -->
     <module name="JavadocTagContinuationIndentation">

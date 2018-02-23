@@ -17,13 +17,20 @@
  */
 package org.apache.hadoop.hbase.util;
 
-import org.apache.hadoop.hbase.testclassification.SmallTests;
 import static org.junit.Assert.assertTrue;
+
+import org.apache.hadoop.hbase.HBaseClassTestRule;
+import org.apache.hadoop.hbase.testclassification.SmallTests;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
 @Category(SmallTests.class)
 public class TestVersionInfo {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestVersionInfo.class);
 
   @Test
   public void testCompareVersion() {

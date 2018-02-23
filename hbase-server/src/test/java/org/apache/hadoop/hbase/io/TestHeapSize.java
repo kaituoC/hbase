@@ -1,5 +1,4 @@
-/*
- *
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,25 +15,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.io;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.client.Delete;
-import org.apache.hadoop.hbase.client.Mutation;
-import org.apache.hadoop.hbase.client.Put;
-import org.apache.hadoop.hbase.io.hfile.BlockCacheKey;
-import org.apache.hadoop.hbase.io.hfile.LruBlockCache;
-import org.apache.hadoop.hbase.io.hfile.LruCachedBlock;
-import org.apache.hadoop.hbase.regionserver.*;
-import org.apache.hadoop.hbase.testclassification.IOTests;
-import org.apache.hadoop.hbase.testclassification.SmallTests;
-import org.apache.hadoop.hbase.util.ClassSize;
-import org.junit.BeforeClass;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
 import java.lang.management.RuntimeMXBean;
@@ -52,9 +37,38 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
+import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.client.Delete;
+import org.apache.hadoop.hbase.client.Mutation;
+import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.io.hfile.BlockCacheKey;
+import org.apache.hadoop.hbase.io.hfile.LruBlockCache;
+import org.apache.hadoop.hbase.io.hfile.LruCachedBlock;
+import org.apache.hadoop.hbase.regionserver.CSLMImmutableSegment;
+import org.apache.hadoop.hbase.regionserver.CellArrayImmutableSegment;
+import org.apache.hadoop.hbase.regionserver.CellArrayMap;
+import org.apache.hadoop.hbase.regionserver.CellSet;
+import org.apache.hadoop.hbase.regionserver.CompactingMemStore;
+import org.apache.hadoop.hbase.regionserver.CompactionPipeline;
+import org.apache.hadoop.hbase.regionserver.DefaultMemStore;
+import org.apache.hadoop.hbase.regionserver.HRegion;
+import org.apache.hadoop.hbase.regionserver.HStore;
+import org.apache.hadoop.hbase.regionserver.ImmutableSegment;
+import org.apache.hadoop.hbase.regionserver.MemStoreCompactor;
+import org.apache.hadoop.hbase.regionserver.MutableSegment;
+import org.apache.hadoop.hbase.regionserver.Segment;
+import org.apache.hadoop.hbase.regionserver.TimeRangeTracker.NonSyncTimeRangeTracker;
+import org.apache.hadoop.hbase.regionserver.TimeRangeTracker.SyncTimeRangeTracker;
+import org.apache.hadoop.hbase.testclassification.IOTests;
+import org.apache.hadoop.hbase.testclassification.SmallTests;
+import org.apache.hadoop.hbase.util.ClassSize;
+import org.junit.BeforeClass;
+import org.junit.ClassRule;
+import org.junit.Test;
+import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Testing the sizing that HeapSize offers and compares to the size given by
@@ -62,7 +76,12 @@ import static org.junit.Assert.assertTrue;
  */
 @Category({IOTests.class, SmallTests.class})
 public class TestHeapSize  {
-  private static final Log LOG = LogFactory.getLog(TestHeapSize.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestHeapSize.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestHeapSize.class);
   // List of classes implementing HeapSize
   // BatchOperation, BatchUpdate, BlockIndex, Entry, Entry<K,V>, HStoreKey
   // KeyValue, LruBlockCache, Put, WALKey
@@ -235,10 +254,19 @@ public class TestHeapSize  {
       assertEquals(expected, actual);
     }
 
-    // TimeRangeTracker
-    cl = TimeRangeTracker.class;
+    // SyncTimeRangeTracker
+    cl = SyncTimeRangeTracker.class;
     expected = ClassSize.estimateBase(cl, false);
-    actual = ClassSize.TIMERANGE_TRACKER;
+    actual = ClassSize.SYNC_TIMERANGE_TRACKER;
+    if (expected != actual) {
+      ClassSize.estimateBase(cl, true);
+      assertEquals(expected, actual);
+    }
+
+    // NonSyncTimeRangeTracker
+    cl = NonSyncTimeRangeTracker.class;
+    expected = ClassSize.estimateBase(cl, false);
+    actual = ClassSize.NON_SYNC_TIMERANGE_TRACKER;
     if (expected != actual) {
       ClassSize.estimateBase(cl, true);
       assertEquals(expected, actual);
@@ -347,13 +375,11 @@ public class TestHeapSize  {
     expected += 2 * ClassSize.estimateBase(AtomicLong.class, false);
     expected += ClassSize.estimateBase(AtomicReference.class, false);
     expected += ClassSize.estimateBase(CellSet.class, false);
-    expected += ClassSize.estimateBase(TimeRangeTracker.class, false);
     if (expected != actual) {
       ClassSize.estimateBase(cl, true);
       ClassSize.estimateBase(AtomicLong.class, true);
       ClassSize.estimateBase(AtomicReference.class, true);
       ClassSize.estimateBase(CellSet.class, true);
-      ClassSize.estimateBase(TimeRangeTracker.class, true);
       assertEquals(expected, actual);
     }
 
@@ -364,7 +390,7 @@ public class TestHeapSize  {
     expected += 2 * ClassSize.estimateBase(AtomicLong.class, false);
     expected += ClassSize.estimateBase(AtomicReference.class, false);
     expected += ClassSize.estimateBase(CellSet.class, false);
-    expected += ClassSize.estimateBase(TimeRangeTracker.class, false);
+    expected += ClassSize.estimateBase(SyncTimeRangeTracker.class, false);
     expected += ClassSize.estimateBase(ConcurrentSkipListMap.class, false);
     if (expected != actual) {
       ClassSize.estimateBase(cl, true);
@@ -372,7 +398,7 @@ public class TestHeapSize  {
       ClassSize.estimateBase(AtomicLong.class, true);
       ClassSize.estimateBase(AtomicReference.class, true);
       ClassSize.estimateBase(CellSet.class, true);
-      ClassSize.estimateBase(TimeRangeTracker.class, true);
+      ClassSize.estimateBase(SyncTimeRangeTracker.class, true);
       ClassSize.estimateBase(ConcurrentSkipListMap.class, true);
       assertEquals(expected, actual);
     }
@@ -384,16 +410,14 @@ public class TestHeapSize  {
     expected += 2 * ClassSize.estimateBase(AtomicLong.class, false);
     expected += ClassSize.estimateBase(AtomicReference.class, false);
     expected += ClassSize.estimateBase(CellSet.class, false);
-    expected += ClassSize.estimateBase(TimeRangeTracker.class, false);
-    expected += ClassSize.estimateBase(TimeRange.class, false);
+    expected += ClassSize.estimateBase(NonSyncTimeRangeTracker.class, false);
     if (expected != actual) {
       ClassSize.estimateBase(cl, true);
       ClassSize.estimateBase(AtomicLong.class, true);
       ClassSize.estimateBase(AtomicLong.class, true);
       ClassSize.estimateBase(AtomicReference.class, true);
       ClassSize.estimateBase(CellSet.class, true);
-      ClassSize.estimateBase(TimeRangeTracker.class, true);
-      ClassSize.estimateBase(TimeRange.class, true);
+      ClassSize.estimateBase(NonSyncTimeRangeTracker.class, true);
       assertEquals(expected, actual);
     }
 
@@ -403,8 +427,7 @@ public class TestHeapSize  {
     expected += 2 * ClassSize.estimateBase(AtomicLong.class, false);
     expected += ClassSize.estimateBase(AtomicReference.class, false);
     expected += ClassSize.estimateBase(CellSet.class, false);
-    expected += ClassSize.estimateBase(TimeRangeTracker.class, false);
-    expected += ClassSize.estimateBase(TimeRange.class, false);
+    expected += ClassSize.estimateBase(NonSyncTimeRangeTracker.class, false);
     expected += ClassSize.estimateBase(ConcurrentSkipListMap.class, false);
     if (expected != actual) {
       ClassSize.estimateBase(cl, true);
@@ -412,8 +435,7 @@ public class TestHeapSize  {
       ClassSize.estimateBase(AtomicLong.class, true);
       ClassSize.estimateBase(AtomicReference.class, true);
       ClassSize.estimateBase(CellSet.class, true);
-      ClassSize.estimateBase(TimeRangeTracker.class, true);
-      ClassSize.estimateBase(TimeRange.class, true);
+      ClassSize.estimateBase(NonSyncTimeRangeTracker.class, true);
       ClassSize.estimateBase(ConcurrentSkipListMap.class, true);
       assertEquals(expected, actual);
     }
@@ -423,8 +445,7 @@ public class TestHeapSize  {
     expected += 2 * ClassSize.estimateBase(AtomicLong.class, false);
     expected += ClassSize.estimateBase(AtomicReference.class, false);
     expected += ClassSize.estimateBase(CellSet.class, false);
-    expected += ClassSize.estimateBase(TimeRangeTracker.class, false);
-    expected += ClassSize.estimateBase(TimeRange.class, false);
+    expected += ClassSize.estimateBase(NonSyncTimeRangeTracker.class, false);
     expected += ClassSize.estimateBase(CellArrayMap.class, false);
     if (expected != actual) {
       ClassSize.estimateBase(cl, true);
@@ -432,8 +453,7 @@ public class TestHeapSize  {
       ClassSize.estimateBase(AtomicLong.class, true);
       ClassSize.estimateBase(AtomicReference.class, true);
       ClassSize.estimateBase(CellSet.class, true);
-      ClassSize.estimateBase(TimeRangeTracker.class, true);
-      ClassSize.estimateBase(TimeRange.class, true);
+      ClassSize.estimateBase(NonSyncTimeRangeTracker.class, true);
       ClassSize.estimateBase(CellArrayMap.class, true);
       assertEquals(expected, actual);
     }
@@ -530,9 +550,9 @@ public class TestHeapSize  {
       assertTrue(ClassSize.OBJECT == 12 || ClassSize.OBJECT == 16); // depending on CompressedOops
     }
     if (ClassSize.useUnsafeLayout()) {
-      assertEquals(ClassSize.OBJECT + 4, ClassSize.ARRAY);
+      assertEquals(ClassSize.ARRAY, ClassSize.OBJECT + 4);
     } else {
-      assertEquals(ClassSize.OBJECT + 8, ClassSize.ARRAY);
+      assertEquals(ClassSize.ARRAY, ClassSize.OBJECT + 8);
     }
   }
 }

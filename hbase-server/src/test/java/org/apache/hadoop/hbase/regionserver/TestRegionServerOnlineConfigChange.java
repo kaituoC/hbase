@@ -15,16 +15,15 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.regionserver;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import java.io.IOException;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionInfo;
@@ -36,10 +35,11 @@ import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-
-import java.io.IOException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Verify that the Online config Changes on the HRegionServer side are actually
@@ -49,8 +49,13 @@ import java.io.IOException;
 
 @Category({MediumTests.class})
 public class TestRegionServerOnlineConfigChange {
-  private static final Log LOG =
-          LogFactory.getLog(TestRegionServerOnlineConfigChange.class.getName());
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestRegionServerOnlineConfigChange.class);
+
+  private static final Logger LOG =
+          LoggerFactory.getLogger(TestRegionServerOnlineConfigChange.class.getName());
   private static HBaseTestingUtility hbaseTestingUtility = new HBaseTestingUtility();
   private static Configuration conf = null;
 
@@ -126,7 +131,7 @@ public class TestRegionServerOnlineConfigChange {
     HStore hstore = (HStore)s;
 
     // Set the new compaction ratio to a different value.
-    double newCompactionRatio = 
+    double newCompactionRatio =
             hstore.getStoreEngine().getCompactionPolicy().getConf().getCompactionRatio() + 0.1;
     conf.setFloat(strPrefix + "ratio", (float)newCompactionRatio);
 

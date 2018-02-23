@@ -36,14 +36,11 @@ import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
-
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.GnuParser;
 import org.apache.commons.cli.HelpFormatter;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FileSystem;
@@ -51,7 +48,7 @@ import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.ClusterStatus.Option;
+import org.apache.hadoop.hbase.ClusterMetrics.Option;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
@@ -84,11 +81,11 @@ import org.apache.hadoop.hbase.mapreduce.TableRecordReaderImpl;
 import org.apache.hadoop.hbase.mapreduce.WALPlayer;
 import org.apache.hadoop.hbase.regionserver.FlushAllLargeStoresPolicy;
 import org.apache.hadoop.hbase.regionserver.FlushPolicyFactory;
-import org.apache.hadoop.hbase.wal.WALEdit;
 import org.apache.hadoop.hbase.testclassification.IntegrationTests;
 import org.apache.hadoop.hbase.util.AbstractHBaseTool;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.RegionSplitter;
+import org.apache.hadoop.hbase.wal.WALEdit;
 import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.hadoop.io.BytesWritable;
 import org.apache.hadoop.io.NullWritable;
@@ -119,8 +116,9 @@ import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Sets;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.apache.hbase.thirdparty.com.google.common.collect.Sets;
 
 /**
  * This is an integration test borrowed from goraci, written by Keith Turner,
@@ -253,7 +251,7 @@ public class IntegrationTestBigLinkedList extends IntegrationTestBase {
    */
   static class Generator extends Configured implements Tool {
 
-    private static final Log LOG = LogFactory.getLog(Generator.class);
+    private static final Logger LOG = LoggerFactory.getLogger(Generator.class);
 
     /**
      * Set this configuration if you want to test single-column family flush works. If set, we will
@@ -711,8 +709,8 @@ public class IntegrationTestBigLinkedList extends IntegrationTestBase {
           if (conf.getBoolean(HBaseTestingUtility.PRESPLIT_TEST_TABLE_KEY,
               HBaseTestingUtility.PRESPLIT_TEST_TABLE)) {
             int numberOfServers =
-                admin.getClusterStatus(EnumSet.of(Option.LIVE_SERVERS))
-                    .getServers().size();
+                admin.getClusterMetrics(EnumSet.of(Option.LIVE_SERVERS))
+                    .getLiveServerMetrics().size();
             if (numberOfServers == 0) {
               throw new IllegalStateException("No live regionservers");
             }
@@ -854,7 +852,7 @@ public class IntegrationTestBigLinkedList extends IntegrationTestBase {
    * WALs and oldWALs dirs (Some of this is TODO).
    */
   static class Search extends Configured implements Tool {
-    private static final Log LOG = LogFactory.getLog(Search.class);
+    private static final Logger LOG = LoggerFactory.getLogger(Search.class);
     protected Job job;
 
     private static void printUsage(final String error) {
@@ -914,7 +912,7 @@ public class IntegrationTestBigLinkedList extends IntegrationTestBase {
             try {
               LOG.info("Found cell=" + cell + " , walKey=" + context.getCurrentKey());
             } catch (IOException|InterruptedException e) {
-              LOG.warn(e);
+              LOG.warn(e.toString(), e);
             }
             if (rows.addAndGet(1) < MISSING_ROWS_TO_LOG) {
               context.getCounter(FOUND_GROUP_KEY, keyStr).increment(1);
@@ -1016,7 +1014,7 @@ public class IntegrationTestBigLinkedList extends IntegrationTestBase {
    */
   static class Verify extends Configured implements Tool {
 
-    private static final Log LOG = LogFactory.getLog(Verify.class);
+    private static final Logger LOG = LoggerFactory.getLogger(Verify.class);
     protected static final BytesWritable DEF = new BytesWritable(new byte[] { 0 });
     protected static final BytesWritable DEF_LOST_FAMILIES = new BytesWritable(new byte[] { 1 });
 
@@ -1455,7 +1453,7 @@ public class IntegrationTestBigLinkedList extends IntegrationTestBase {
    */
   static class Loop extends Configured implements Tool {
 
-    private static final Log LOG = LogFactory.getLog(Loop.class);
+    private static final Logger LOG = LoggerFactory.getLogger(Loop.class);
     private static final String USAGE = "Usage: Loop <num iterations> <num mappers> " +
         "<num nodes per mapper> <output dir> <num reducers> [<width> <wrap multiplier>" +
         " <num walker threads>] \n" +

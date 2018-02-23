@@ -17,35 +17,9 @@
  */
 package org.apache.hadoop.hbase.master.balancer;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.ArrayListMultimap;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
-import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.HBaseConfiguration;
-import org.apache.hadoop.hbase.HRegionInfo;
-import org.apache.hadoop.hbase.HTableDescriptor;
-import org.apache.hadoop.hbase.ServerName;
-import org.apache.hadoop.hbase.TableDescriptors;
-import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.rsgroup.RSGroupBasedLoadBalancer;
-import org.apache.hadoop.hbase.rsgroup.RSGroupInfo;
-import org.apache.hadoop.hbase.rsgroup.RSGroupInfoManager;
-import org.apache.hadoop.hbase.master.assignment.AssignmentManager;
-import org.apache.hadoop.hbase.master.HMaster;
-import org.apache.hadoop.hbase.master.LoadBalancer;
-import org.apache.hadoop.hbase.master.MasterServices;
-import org.apache.hadoop.hbase.master.RegionPlan;
-import org.apache.hadoop.hbase.net.Address;
-import org.apache.hadoop.hbase.testclassification.SmallTests;
-import org.apache.hadoop.hbase.util.Bytes;
-import org.junit.BeforeClass;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
-import org.mockito.Mockito;
-import org.mockito.invocation.InvocationOnMock;
-import org.mockito.stubbing.Answer;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -60,21 +34,54 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import org.apache.commons.lang3.StringUtils;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
+import org.apache.hadoop.hbase.HBaseConfiguration;
+import org.apache.hadoop.hbase.HTableDescriptor;
+import org.apache.hadoop.hbase.ServerName;
+import org.apache.hadoop.hbase.TableDescriptors;
+import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.client.RegionInfo;
+import org.apache.hadoop.hbase.client.RegionInfoBuilder;
+import org.apache.hadoop.hbase.master.HMaster;
+import org.apache.hadoop.hbase.master.LoadBalancer;
+import org.apache.hadoop.hbase.master.MasterServices;
+import org.apache.hadoop.hbase.master.RegionPlan;
+import org.apache.hadoop.hbase.master.assignment.AssignmentManager;
+import org.apache.hadoop.hbase.net.Address;
+import org.apache.hadoop.hbase.rsgroup.RSGroupBasedLoadBalancer;
+import org.apache.hadoop.hbase.rsgroup.RSGroupInfo;
+import org.apache.hadoop.hbase.rsgroup.RSGroupInfoManager;
+import org.apache.hadoop.hbase.testclassification.SmallTests;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.junit.BeforeClass;
+import org.junit.ClassRule;
+import org.junit.Test;
+import org.junit.experimental.categories.Category;
+import org.mockito.Mockito;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import org.apache.hbase.thirdparty.com.google.common.collect.ArrayListMultimap;
+import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 
 //TODO use stochastic based load balancer instead
 @Category(SmallTests.class)
 public class TestRSGroupBasedLoadBalancer {
 
-  private static final Log LOG = LogFactory.getLog(TestRSGroupBasedLoadBalancer.class);
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestRSGroupBasedLoadBalancer.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestRSGroupBasedLoadBalancer.class);
   private static RSGroupBasedLoadBalancer loadBalancer;
   private static SecureRandom rand;
 
-  static String[]  groups = new String[] { RSGroupInfo.DEFAULT_GROUP, "dg2", "dg3",
-      "dg4" };
+  static String[]  groups = new String[] { RSGroupInfo.DEFAULT_GROUP, "dg2", "dg3", "dg4" };
+  static TableName table0 = TableName.valueOf("dt0");
   static TableName[] tables =
       new TableName[] { TableName.valueOf("dt1"),
           TableName.valueOf("dt2"),
@@ -109,12 +116,10 @@ public class TestRSGroupBasedLoadBalancer {
    *
    * Invariant is that all servers of the group should be hosting either floor(average) or
    * ceiling(average)
-   *
-   * @throws Exception
    */
   @Test
   public void testBalanceCluster() throws Exception {
-    Map<ServerName, List<HRegionInfo>> servers = mockClusterServers();
+    Map<ServerName, List<RegionInfo>> servers = mockClusterServers();
     ArrayListMultimap<String, ServerAndLoad> list = convertToGroupBasedMap(servers);
     LOG.info("Mock Cluster :  " + printStats(list));
     List<RegionPlan> plans = loadBalancer.balanceCluster(servers);
@@ -162,18 +167,12 @@ public class TestRSGroupBasedLoadBalancer {
 
   /**
    * All regions have an assignment.
-   *
-   * @param regions
-   * @param servers
-   * @param assignments
-   * @throws java.io.IOException
-   * @throws java.io.FileNotFoundException
    */
-  private void assertImmediateAssignment(List<HRegionInfo> regions,
+  private void assertImmediateAssignment(List<RegionInfo> regions,
                                          List<ServerName> servers,
-                                         Map<HRegionInfo, ServerName> assignments)
+                                         Map<RegionInfo, ServerName> assignments)
       throws IOException {
-    for (HRegionInfo region : regions) {
+    for (RegionInfo region : regions) {
       assertTrue(assignments.containsKey(region));
       ServerName server = assignments.get(region);
       TableName tableName = region.getTable();
@@ -192,13 +191,11 @@ public class TestRSGroupBasedLoadBalancer {
    * Round-robin. Should yield a balanced cluster so same invariant as the
    * load balancer holds, all servers holding either floor(avg) or
    * ceiling(avg).
-   *
-   * @throws Exception
    */
   @Test
   public void testBulkAssignment() throws Exception {
-    List<HRegionInfo> regions = randomRegions(25);
-    Map<ServerName, List<HRegionInfo>> assignments = loadBalancer
+    List<RegionInfo> regions = randomRegions(25);
+    Map<ServerName, List<RegionInfo>> assignments = loadBalancer
         .roundRobinAssignment(regions, servers);
     //test empty region/servers scenario
     //this should not throw an NPE
@@ -207,8 +204,8 @@ public class TestRSGroupBasedLoadBalancer {
     //test regular scenario
     assertTrue(assignments.keySet().size() == servers.size());
     for (ServerName sn : assignments.keySet()) {
-      List<HRegionInfo> regionAssigned = assignments.get(sn);
-      for (HRegionInfo region : regionAssigned) {
+      List<RegionInfo> regionAssigned = assignments.get(sn);
+      for (RegionInfo region : regionAssigned) {
         TableName tableName = region.getTable();
         String groupName =
             getMockedGroupInfoManager().getRSGroupOfTable(tableName);
@@ -224,40 +221,50 @@ public class TestRSGroupBasedLoadBalancer {
     assertClusterAsBalanced(loadMap);
   }
 
+  @Test
+  public void testGetMisplacedRegions() throws Exception {
+    // Test case where region is not considered misplaced if RSGroupInfo cannot be determined
+    Map<RegionInfo, ServerName> inputForTest = new HashMap<>();
+    RegionInfo ri = RegionInfoBuilder.newBuilder(table0)
+        .setStartKey(new byte[16])
+        .setEndKey(new byte[16])
+        .setSplit(false)
+        .setRegionId(regionId++)
+        .build();
+    inputForTest.put(ri, servers.iterator().next());
+    Set<RegionInfo> misplacedRegions = loadBalancer.getMisplacedRegions(inputForTest);
+    assertFalse(misplacedRegions.contains(ri));
+  }
   /**
-   * Test the cluster startup bulk assignment which attempts to retain
-   * assignment info.
-   *
-   * @throws Exception
+   * Test the cluster startup bulk assignment which attempts to retain assignment info.
    */
   @Test
   public void testRetainAssignment() throws Exception {
     // Test simple case where all same servers are there
-    Map<ServerName, List<HRegionInfo>> currentAssignments = mockClusterServers();
-    Map<HRegionInfo, ServerName> inputForTest = new HashMap<>();
+    Map<ServerName, List<RegionInfo>> currentAssignments = mockClusterServers();
+    Map<RegionInfo, ServerName> inputForTest = new HashMap<>();
     for (ServerName sn : currentAssignments.keySet()) {
-      for (HRegionInfo region : currentAssignments.get(sn)) {
+      for (RegionInfo region : currentAssignments.get(sn)) {
         inputForTest.put(region, sn);
       }
     }
     //verify region->null server assignment is handled
     inputForTest.put(randomRegions(1).get(0), null);
-    Map<ServerName, List<HRegionInfo>> newAssignment = loadBalancer
+    Map<ServerName, List<RegionInfo>> newAssignment = loadBalancer
         .retainAssignment(inputForTest, servers);
     assertRetainedAssignment(inputForTest, servers, newAssignment);
   }
 
   /**
-   * Test BOGUS_SERVER_NAME among groups do not overwrite each other
-   * @throws Exception
+   * Test BOGUS_SERVER_NAME among groups do not overwrite each other.
    */
   @Test
   public void testRoundRobinAssignment() throws Exception {
     List<ServerName> onlineServers = new ArrayList<ServerName>(servers.size());
     onlineServers.addAll(servers);
-    List<HRegionInfo> regions = randomRegions(25);
+    List<RegionInfo> regions = randomRegions(25);
     int bogusRegion = 0;
-    for(HRegionInfo region : regions){
+    for(RegionInfo region : regions){
       String group = tableMap.get(region.getTable());
       if("dg3".equals(group) || "dg4".equals(group)){
         bogusRegion++;
@@ -273,7 +280,7 @@ public class TestRSGroupBasedLoadBalancer {
         it.remove();
       }
     }
-    Map<ServerName, List<HRegionInfo>> assignments = loadBalancer
+    Map<ServerName, List<RegionInfo>> assignments = loadBalancer
         .roundRobinAssignment(regions, onlineServers);
     assertEquals(bogusRegion, assignments.get(LoadBalancer.BOGUS_SERVER_NAME).size());
   }
@@ -287,25 +294,21 @@ public class TestRSGroupBasedLoadBalancer {
    * <li>If a region had an existing assignment to a server with the same
    * address a a currently online server, it will be assigned to it
    * </ul>
-   *
-   * @param existing
-   * @param assignment
-   * @throws java.io.IOException
-   * @throws java.io.FileNotFoundException
    */
   private void assertRetainedAssignment(
-      Map<HRegionInfo, ServerName> existing, List<ServerName> servers,
-      Map<ServerName, List<HRegionInfo>> assignment)
+      Map<RegionInfo, ServerName> existing, List<ServerName> servers,
+      Map<ServerName, List<RegionInfo>> assignment)
       throws FileNotFoundException, IOException {
     // Verify condition 1, every region assigned, and to online server
     Set<ServerName> onlineServerSet = new TreeSet<>(servers);
-    Set<HRegionInfo> assignedRegions = new TreeSet<>();
-    for (Map.Entry<ServerName, List<HRegionInfo>> a : assignment.entrySet()) {
+    Set<RegionInfo> assignedRegions = new TreeSet<>(RegionInfo.COMPARATOR);
+    for (Map.Entry<ServerName, List<RegionInfo>> a : assignment.entrySet()) {
       assertTrue(
           "Region assigned to server that was not listed as online",
           onlineServerSet.contains(a.getKey()));
-      for (HRegionInfo r : a.getValue())
+      for (RegionInfo r : a.getValue()) {
         assignedRegions.add(r);
+      }
     }
     assertEquals(existing.size(), assignedRegions.size());
 
@@ -315,9 +318,9 @@ public class TestRSGroupBasedLoadBalancer {
       onlineHostNames.add(s.getHostname());
     }
 
-    for (Map.Entry<ServerName, List<HRegionInfo>> a : assignment.entrySet()) {
+    for (Map.Entry<ServerName, List<RegionInfo>> a : assignment.entrySet()) {
       ServerName currentServer = a.getKey();
-      for (HRegionInfo r : a.getValue()) {
+      for (RegionInfo r : a.getValue()) {
         ServerName oldAssignedServer = existing.get(r);
         TableName tableName = r.getTable();
         String groupName =
@@ -374,7 +377,7 @@ public class TestRSGroupBasedLoadBalancer {
   }
 
   private ArrayListMultimap<String, ServerAndLoad> convertToGroupBasedMap(
-      final Map<ServerName, List<HRegionInfo>> serversMap) throws IOException {
+      final Map<ServerName, List<RegionInfo>> serversMap) throws IOException {
     ArrayListMultimap<String, ServerAndLoad> loadMap = ArrayListMultimap
         .create();
     for (RSGroupInfo gInfo : getMockedGroupInfoManager().listRSGroups()) {
@@ -387,7 +390,7 @@ public class TestRSGroupBasedLoadBalancer {
             break;
           }
         }
-        List<HRegionInfo> regions = serversMap.get(actual);
+        List<RegionInfo> regions = serversMap.get(actual);
         assertTrue("No load for " + actual, regions != null);
         loadMap.put(gInfo.getName(),
             new ServerAndLoad(actual, regions.size()));
@@ -434,12 +437,12 @@ public class TestRSGroupBasedLoadBalancer {
     }
   }
 
-  private Map<ServerName, List<HRegionInfo>> mockClusterServers() throws IOException {
+  private Map<ServerName, List<RegionInfo>> mockClusterServers() throws IOException {
     assertTrue(servers.size() == regionAssignment.length);
-    Map<ServerName, List<HRegionInfo>> assignment = new TreeMap<>();
+    Map<ServerName, List<RegionInfo>> assignment = new TreeMap<>();
     for (int i = 0; i < servers.size(); i++) {
       int numRegions = regionAssignment[i];
-      List<HRegionInfo> regions = assignedRegions(numRegions, servers.get(i));
+      List<RegionInfo> regions = assignedRegions(numRegions, servers.get(i));
       assignment.put(servers.get(i), regions);
     }
     return assignment;
@@ -449,10 +452,10 @@ public class TestRSGroupBasedLoadBalancer {
    * Generate a list of regions evenly distributed between the tables.
    *
    * @param numRegions The number of regions to be generated.
-   * @return List of HRegionInfo.
+   * @return List of RegionInfo.
    */
-  private List<HRegionInfo> randomRegions(int numRegions) {
-    List<HRegionInfo> regions = new ArrayList<>(numRegions);
+  private List<RegionInfo> randomRegions(int numRegions) {
+    List<RegionInfo> regions = new ArrayList<>(numRegions);
     byte[] start = new byte[16];
     byte[] end = new byte[16];
     rand.nextBytes(start);
@@ -462,9 +465,12 @@ public class TestRSGroupBasedLoadBalancer {
       Bytes.putInt(start, 0, numRegions << 1);
       Bytes.putInt(end, 0, (numRegions << 1) + 1);
       int tableIndex = (i + regionIdx) % tables.length;
-      HRegionInfo hri = new HRegionInfo(
-          tables[tableIndex], start, end, false, regionId++);
-      regions.add(hri);
+      regions.add(RegionInfoBuilder.newBuilder(tables[tableIndex])
+          .setStartKey(start)
+          .setEndKey(end)
+          .setSplit(false)
+          .setRegionId(regionId++)
+          .build());
     }
     return regions;
   }
@@ -477,18 +483,20 @@ public class TestRSGroupBasedLoadBalancer {
    * @return the list of regions
    * @throws java.io.IOException Signals that an I/O exception has occurred.
    */
-  private List<HRegionInfo> assignedRegions(int numRegions, ServerName sn) throws IOException {
-    List<HRegionInfo> regions = new ArrayList<>(numRegions);
+  private List<RegionInfo> assignedRegions(int numRegions, ServerName sn) throws IOException {
+    List<RegionInfo> regions = new ArrayList<>(numRegions);
     byte[] start = new byte[16];
     byte[] end = new byte[16];
     Bytes.putInt(start, 0, numRegions << 1);
     Bytes.putInt(end, 0, (numRegions << 1) + 1);
     for (int i = 0; i < numRegions; i++) {
       TableName tableName = getTableName(sn);
-      HRegionInfo hri = new HRegionInfo(
-          tableName, start, end, false,
-          regionId++);
-      regions.add(hri);
+      regions.add(RegionInfoBuilder.newBuilder(tableName)
+          .setStartKey(start)
+          .setEndKey(end)
+          .setSplit(false)
+          .setRegionId(regionId++)
+          .build());
     }
     return regions;
   }
@@ -546,6 +554,8 @@ public class TestRSGroupBasedLoadBalancer {
       tableMap.put(tables[i], groupName);
       tds.add(htd);
     }
+    tableMap.put(table0, "");
+    tds.add(new HTableDescriptor(table0));
     return tds;
   }
 
@@ -575,11 +585,11 @@ public class TestRSGroupBasedLoadBalancer {
     Mockito.when(gm.listRSGroups()).thenReturn(
         Lists.newLinkedList(groupMap.values()));
     Mockito.when(gm.isOnline()).thenReturn(true);
-    Mockito.when(gm.getRSGroupOfTable(Mockito.any(TableName.class)))
+    Mockito.when(gm.getRSGroupOfTable(Mockito.any()))
         .thenAnswer(new Answer<String>() {
           @Override
           public String answer(InvocationOnMock invocation) throws Throwable {
-            return tableMap.get(invocation.getArguments()[0]);
+            return tableMap.get(invocation.getArgument(0));
           }
         });
     return gm;

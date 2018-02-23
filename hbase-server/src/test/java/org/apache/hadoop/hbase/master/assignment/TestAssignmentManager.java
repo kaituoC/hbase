@@ -15,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.master.assignment;
 
 import static org.junit.Assert.assertEquals;
@@ -24,6 +23,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.net.SocketTimeoutException;
 import java.util.NavigableMap;
 import java.util.Random;
@@ -36,27 +36,23 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.CategoryBasedTimeout;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.NotServingRegionException;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.client.RegionInfo;
+import org.apache.hadoop.hbase.client.RegionInfoBuilder;
 import org.apache.hadoop.hbase.client.RetriesExhaustedException;
 import org.apache.hadoop.hbase.exceptions.UnexpectedStateException;
 import org.apache.hadoop.hbase.ipc.ServerNotRunningYetException;
 import org.apache.hadoop.hbase.master.MasterServices;
 import org.apache.hadoop.hbase.master.RegionState.State;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureConstants;
-import org.apache.hadoop.hbase.master.procedure.MasterProcedureScheduler;
 import org.apache.hadoop.hbase.master.procedure.ProcedureSyncWait;
 import org.apache.hadoop.hbase.master.procedure.RSProcedureDispatcher;
-import org.apache.hadoop.hbase.master.procedure.ServerCrashException;
 import org.apache.hadoop.hbase.procedure2.Procedure;
 import org.apache.hadoop.hbase.procedure2.ProcedureMetrics;
 import org.apache.hadoop.hbase.procedure2.ProcedureTestingUtility;
@@ -64,6 +60,23 @@ import org.apache.hadoop.hbase.procedure2.store.wal.WALProcedureStore;
 import org.apache.hadoop.hbase.procedure2.util.StringUtils;
 import org.apache.hadoop.hbase.regionserver.RegionServerAbortedException;
 import org.apache.hadoop.hbase.regionserver.RegionServerStoppedException;
+import org.apache.hadoop.hbase.testclassification.LargeTests;
+import org.apache.hadoop.hbase.testclassification.MasterTests;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.FSUtils;
+import org.apache.hadoop.ipc.RemoteException;
+import org.junit.After;
+import org.junit.Before;
+import org.junit.ClassRule;
+import org.junit.Ignore;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.experimental.categories.Category;
+import org.junit.rules.ExpectedException;
+import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.CloseRegionRequest;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.CloseRegionResponse;
@@ -73,37 +86,20 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.OpenRegionR
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.OpenRegionRequest.RegionOpenInfo;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.OpenRegionResponse;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.OpenRegionResponse.RegionOpeningState;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.RegionInfo;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProtos.RegionStateTransition;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProtos.RegionStateTransition.TransitionCode;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProtos.ReportRegionStateTransitionRequest;
-import org.apache.hadoop.hbase.testclassification.MasterTests;
-import org.apache.hadoop.hbase.testclassification.MediumTests;
-import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.hbase.util.FSUtils;
-import org.apache.hadoop.ipc.RemoteException;
-import org.apache.log4j.Level;
-import org.apache.log4j.Logger;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Ignore;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
-import org.junit.rules.ExpectedException;
-import org.junit.rules.TestName;
-import org.junit.rules.TestRule;
 
-@Category({MasterTests.class, MediumTests.class})
+@Category({MasterTests.class, LargeTests.class})
 public class TestAssignmentManager {
-  private static final Log LOG = LogFactory.getLog(TestAssignmentManager.class);
-  static {
-    Logger.getLogger(MasterProcedureScheduler.class).setLevel(Level.TRACE);
-  }
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestAssignmentManager.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestAssignmentManager.class);
+
   @Rule public TestName name = new TestName();
-  @Rule public final TestRule timeout =
-      CategoryBasedTimeout.builder().withTimeout(this.getClass()).
-        withLookingForStuckThread(true).build();
   @Rule public final ExpectedException exception = ExpectedException.none();
 
   private static final int PROC_NTHREADS = 64;
@@ -152,7 +148,7 @@ public class TestAssignmentManager {
 
   private void setUpMeta() throws Exception {
     rsDispatcher.setMockRsExecutor(new GoodRsExecutor());
-    am.assign(HRegionInfo.FIRST_META_REGIONINFO);
+    am.assign(RegionInfoBuilder.FIRST_META_REGIONINFO);
     am.wakeMetaLoadedEvent();
     am.setFailoverCleanupDone(true);
   }
@@ -167,31 +163,6 @@ public class TestAssignmentManager {
   public void testWaitServerReportEventWithNullServer() throws UnexpectedStateException {
     // Test what happens if we pass in null server. I'd expect it throws NPE.
     if (this.am.waitServerReportEvent(null, null)) throw new UnexpectedStateException();
-  }
-
-  @Ignore @Test // TODO
-  public void testGoodSplit() throws Exception {
-    TableName tableName = TableName.valueOf(this.name.getMethodName());
-    HRegionInfo hri = new HRegionInfo(tableName, Bytes.toBytes(0), Bytes.toBytes(2), false, 0);
-    SplitTableRegionProcedure split =
-        new SplitTableRegionProcedure(this.master.getMasterProcedureExecutor().getEnvironment(),
-            hri, Bytes.toBytes(1));
-    rsDispatcher.setMockRsExecutor(new GoodSplitExecutor());
-    long st = System.currentTimeMillis();
-    Thread t = new Thread() {
-      public void run() {
-        try {
-          waitOnFuture(submitProcedure(split));
-        } catch (Exception e) {
-          e.printStackTrace();
-        }
-      }
-    };
-    t.start();
-    t.join();
-    long et = System.currentTimeMillis();
-    float sec = ((et - st) / 1000.0f);
-    LOG.info(String.format("[T] Splitting in %s", StringUtils.humanTimeDiff(et - st)));
   }
 
   @Test
@@ -209,19 +180,19 @@ public class TestAssignmentManager {
   @Test
   public void testAssignAndCrashBeforeResponse() throws Exception {
     final TableName tableName = TableName.valueOf("testAssignAndCrashBeforeResponse");
-    final HRegionInfo hri = createRegionInfo(tableName, 1);
+    final RegionInfo hri = createRegionInfo(tableName, 1);
     rsDispatcher.setMockRsExecutor(new HangThenRSCrashExecutor());
-    AssignProcedure proc = am.createAssignProcedure(hri, false);
+    AssignProcedure proc = am.createAssignProcedure(hri);
     waitOnFuture(submitProcedure(proc));
   }
 
   @Test
   public void testUnassignAndCrashBeforeResponse() throws Exception {
     final TableName tableName = TableName.valueOf("testAssignAndCrashBeforeResponse");
-    final HRegionInfo hri = createRegionInfo(tableName, 1);
+    final RegionInfo hri = createRegionInfo(tableName, 1);
     rsDispatcher.setMockRsExecutor(new HangOnCloseThenRSCrashExecutor());
     for (int i = 0; i < HangOnCloseThenRSCrashExecutor.TYPES_OF_FAILURE; i++) {
-      AssignProcedure assign = am.createAssignProcedure(hri, false);
+      AssignProcedure assign = am.createAssignProcedure(hri);
       waitOnFuture(submitProcedure(assign));
       UnassignProcedure unassign = am.createUnassignProcedure(hri,
           am.getRegionStates().getRegionServerOfRegion(hri), false);
@@ -232,13 +203,13 @@ public class TestAssignmentManager {
   @Test
   public void testAssignWithRandExec() throws Exception {
     final TableName tableName = TableName.valueOf("testAssignWithRandExec");
-    final HRegionInfo hri = createRegionInfo(tableName, 1);
+    final RegionInfo hri = createRegionInfo(tableName, 1);
 
     rsDispatcher.setMockRsExecutor(new RandRsExecutor());
     // Loop a bunch of times so we hit various combos of exceptions.
     for (int i = 0; i < 10; i++) {
-      LOG.info("" + i);
-      AssignProcedure proc = am.createAssignProcedure(hri, false);
+      LOG.info("ROUND=" + i);
+      AssignProcedure proc = am.createAssignProcedure(hri);
       waitOnFuture(submitProcedure(proc));
     }
   }
@@ -246,13 +217,13 @@ public class TestAssignmentManager {
   @Ignore @Test // Disabled for now. Since HBASE-18551, this mock is insufficient.
   public void testSocketTimeout() throws Exception {
     final TableName tableName = TableName.valueOf(this.name.getMethodName());
-    final HRegionInfo hri = createRegionInfo(tableName, 1);
+    final RegionInfo hri = createRegionInfo(tableName, 1);
 
     // collect AM metrics before test
     collectAssignmentManagerMetrics();
 
     rsDispatcher.setMockRsExecutor(new SocketTimeoutRsExecutor(20, 3));
-    waitOnFuture(submitProcedure(am.createAssignProcedure(hri, false)));
+    waitOnFuture(submitProcedure(am.createAssignProcedure(hri)));
 
     rsDispatcher.setMockRsExecutor(new SocketTimeoutRsExecutor(20, 1));
     // exception.expect(ServerCrashException.class);
@@ -272,7 +243,7 @@ public class TestAssignmentManager {
 
   private void testRetriesExhaustedFailure(final TableName tableName,
       final MockRSExecutor executor) throws Exception {
-    final HRegionInfo hri = createRegionInfo(tableName, 1);
+    final RegionInfo hri = createRegionInfo(tableName, 1);
 
     // collect AM metrics before test
     collectAssignmentManagerMetrics();
@@ -280,7 +251,7 @@ public class TestAssignmentManager {
     // Test Assign operation failure
     rsDispatcher.setMockRsExecutor(executor);
     try {
-      waitOnFuture(submitProcedure(am.createAssignProcedure(hri, false)));
+      waitOnFuture(submitProcedure(am.createAssignProcedure(hri)));
       fail("unexpected assign completion");
     } catch (RetriesExhaustedException e) {
       // expected exception
@@ -289,7 +260,7 @@ public class TestAssignmentManager {
 
     // Assign the region (without problems)
     rsDispatcher.setMockRsExecutor(new GoodRsExecutor());
-    waitOnFuture(submitProcedure(am.createAssignProcedure(hri, false)));
+    waitOnFuture(submitProcedure(am.createAssignProcedure(hri)));
 
     // TODO: Currently unassign just keeps trying until it sees a server crash.
     // There is no count on unassign.
@@ -335,16 +306,16 @@ public class TestAssignmentManager {
 
   private void testFailedOpen(final TableName tableName,
       final MockRSExecutor executor) throws Exception {
-    final HRegionInfo hri = createRegionInfo(tableName, 1);
+    final RegionInfo hri = createRegionInfo(tableName, 1);
 
     // Test Assign operation failure
     rsDispatcher.setMockRsExecutor(executor);
     try {
-      waitOnFuture(submitProcedure(am.createAssignProcedure(hri, false)));
+      waitOnFuture(submitProcedure(am.createAssignProcedure(hri)));
       fail("unexpected assign completion");
     } catch (RetriesExhaustedException e) {
       // expected exception
-      LOG.info("REGION STATE " + am.getRegionStates().getRegionNode(hri));
+      LOG.info("REGION STATE " + am.getRegionStates().getRegionStateNode(hri));
       LOG.info("expected exception from assign operation: " + e.getMessage(), e);
       assertEquals(true, am.getRegionStates().getRegionState(hri).isFailedOpen());
     }
@@ -376,14 +347,14 @@ public class TestAssignmentManager {
   @Test
   public void testAssignAnAssignedRegion() throws Exception {
     final TableName tableName = TableName.valueOf("testAssignAnAssignedRegion");
-    final HRegionInfo hri = createRegionInfo(tableName, 1);
+    final RegionInfo hri = createRegionInfo(tableName, 1);
 
     // collect AM metrics before test
     collectAssignmentManagerMetrics();
 
     rsDispatcher.setMockRsExecutor(new GoodRsExecutor());
 
-    final Future<byte[]> futureA = submitProcedure(am.createAssignProcedure(hri, false));
+    final Future<byte[]> futureA = submitProcedure(am.createAssignProcedure(hri));
 
     // wait first assign
     waitOnFuture(futureA);
@@ -391,7 +362,7 @@ public class TestAssignmentManager {
     // Second should be a noop. We should recognize region is already OPEN internally
     // and skip out doing nothing.
     // wait second assign
-    final Future<byte[]> futureB = submitProcedure(am.createAssignProcedure(hri, false));
+    final Future<byte[]> futureB = submitProcedure(am.createAssignProcedure(hri));
     waitOnFuture(futureB);
     am.getRegionStates().isRegionInState(hri, State.OPEN);
     // TODO: What else can we do to ensure just a noop.
@@ -406,7 +377,7 @@ public class TestAssignmentManager {
   @Test
   public void testUnassignAnUnassignedRegion() throws Exception {
     final TableName tableName = TableName.valueOf("testUnassignAnUnassignedRegion");
-    final HRegionInfo hri = createRegionInfo(tableName, 1);
+    final RegionInfo hri = createRegionInfo(tableName, 1);
 
     // collect AM metrics before test
     collectAssignmentManagerMetrics();
@@ -414,7 +385,7 @@ public class TestAssignmentManager {
     rsDispatcher.setMockRsExecutor(new GoodRsExecutor());
 
     // assign the region first
-    waitOnFuture(submitProcedure(am.createAssignProcedure(hri, false)));
+    waitOnFuture(submitProcedure(am.createAssignProcedure(hri)));
 
     final Future<byte[]> futureA = submitProcedure(am.createUnassignProcedure(hri, null, false));
 
@@ -439,6 +410,34 @@ public class TestAssignmentManager {
     assertEquals(unassignFailedCount, unassignProcMetrics.getFailedCounter().getCount());
   }
 
+  /**
+   * It is possible that when AM send assign meta request to a RS successfully,
+   * but RS can not send back any response, which cause master startup hangs forever
+   */
+  @Test
+  public void testAssignMetaAndCrashBeforeResponse() throws Exception {
+    tearDown();
+    // See setUp(), start HBase until set up meta
+    UTIL = new HBaseTestingUtility();
+    this.executor = Executors.newSingleThreadScheduledExecutor();
+    setupConfiguration(UTIL.getConfiguration());
+    master = new MockMasterServices(UTIL.getConfiguration(), this.regionsToRegionServers);
+    rsDispatcher = new MockRSProcedureDispatcher(master);
+    master.start(NSERVERS, rsDispatcher);
+    am = master.getAssignmentManager();
+
+    // Assign meta
+    master.setServerCrashProcessingEnabled(false);
+    rsDispatcher.setMockRsExecutor(new HangThenRSRestartExecutor());
+    am.assign(RegionInfoBuilder.FIRST_META_REGIONINFO);
+    assertEquals(true, am.isMetaInitialized());
+
+    // set it back as default, see setUpMeta()
+    master.setServerCrashProcessingEnabled(true);
+    am.wakeMetaLoadedEvent();
+    am.setFailoverCleanupDone(true);
+  }
+
   private Future<byte[]> submitProcedure(final Procedure proc) {
     return ProcedureSyncWait.submitProcedure(master.getMasterProcedureExecutor(), proc);
   }
@@ -448,6 +447,12 @@ public class TestAssignmentManager {
       return future.get(5, TimeUnit.SECONDS);
     } catch (ExecutionException e) {
       LOG.info("ExecutionException", e);
+      Exception ee = (Exception)e.getCause();
+      if (ee instanceof InterruptedIOException) {
+        for (Procedure p: this.master.getMasterProcedureExecutor().getProcedures()) {
+          LOG.info(p.toStringDetails());
+        }
+      }
       throw (Exception)e.getCause();
     }
   }
@@ -482,26 +487,31 @@ public class TestAssignmentManager {
   }
 
   private AssignProcedure createAndSubmitAssign(TableName tableName, int regionId) {
-    HRegionInfo hri = createRegionInfo(tableName, regionId);
-    AssignProcedure proc = am.createAssignProcedure(hri, false);
+    RegionInfo hri = createRegionInfo(tableName, regionId);
+    AssignProcedure proc = am.createAssignProcedure(hri);
     master.getMasterProcedureExecutor().submitProcedure(proc);
     return proc;
   }
 
   private UnassignProcedure createAndSubmitUnassign(TableName tableName, int regionId) {
-    HRegionInfo hri = createRegionInfo(tableName, regionId);
+    RegionInfo hri = createRegionInfo(tableName, regionId);
     UnassignProcedure proc = am.createUnassignProcedure(hri, null, false);
     master.getMasterProcedureExecutor().submitProcedure(proc);
     return proc;
   }
 
-  private HRegionInfo createRegionInfo(final TableName tableName, final long regionId) {
-    return new HRegionInfo(tableName,
-      Bytes.toBytes(regionId), Bytes.toBytes(regionId + 1), false, 0);
+  private RegionInfo createRegionInfo(final TableName tableName, final long regionId) {
+    return RegionInfoBuilder.newBuilder(tableName)
+        .setStartKey(Bytes.toBytes(regionId))
+        .setEndKey(Bytes.toBytes(regionId + 1))
+        .setSplit(false)
+        .setRegionId(0)
+        .build();
   }
 
   private void sendTransitionReport(final ServerName serverName,
-      final RegionInfo regionInfo, final TransitionCode state) throws IOException {
+      final org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.RegionInfo regionInfo,
+      final TransitionCode state) throws IOException {
     ReportRegionStateTransitionRequest.Builder req =
       ReportRegionStateTransitionRequest.newBuilder();
     req.setServer(ProtobufUtil.toServerName(serverName));
@@ -517,29 +527,28 @@ public class TestAssignmentManager {
     this.am.submitServerCrash(serverName, false/*No WALs here*/);
   }
 
+  private void doRestart(final ServerName serverName) {
+    try {
+      this.master.restartRegionServer(serverName);
+    } catch (IOException e) {
+      LOG.warn("Can not restart RS with new startcode");
+    }
+  }
+
   private class NoopRsExecutor implements MockRSExecutor {
+    @Override
     public ExecuteProceduresResponse sendRequest(ServerName server,
         ExecuteProceduresRequest request) throws IOException {
-      ExecuteProceduresResponse.Builder builder = ExecuteProceduresResponse.newBuilder();
       if (request.getOpenRegionCount() > 0) {
-        for (OpenRegionRequest req: request.getOpenRegionList()) {
-          OpenRegionResponse.Builder resp = OpenRegionResponse.newBuilder();
-          for (RegionOpenInfo openReq: req.getOpenInfoList()) {
-            RegionOpeningState state = execOpenRegion(server, openReq);
-            if (state != null) {
-              resp.addOpeningState(state);
-            }
+        for (OpenRegionRequest req : request.getOpenRegionList()) {
+          for (RegionOpenInfo openReq : req.getOpenInfoList()) {
+            execOpenRegion(server, openReq);
           }
-          builder.addOpenRegion(resp.build());
         }
       }
       if (request.getCloseRegionCount() > 0) {
-        for (CloseRegionRequest req: request.getCloseRegionList()) {
-          CloseRegionResponse resp = execCloseRegion(server,
-              req.getRegion().getValue().toByteArray());
-          if (resp != null) {
-            builder.addCloseRegion(resp);
-          }
+        for (CloseRegionRequest req : request.getCloseRegionList()) {
+          execCloseRegion(server, req.getRegion().getValue().toByteArray());
         }
       }
       return ExecuteProceduresResponse.newBuilder().build();
@@ -568,7 +577,7 @@ public class TestAssignmentManager {
         regions = new ConcurrentSkipListSet<byte[]>(Bytes.BYTES_COMPARATOR);
         regionsToRegionServers.put(server, regions);
       }
-      HRegionInfo hri = HRegionInfo.convert(openReq.getRegion());
+      RegionInfo hri = ProtobufUtil.toRegionInfo(openReq.getRegion());
       if (regions.contains(hri.getRegionName())) {
         throw new UnsupportedOperationException(hri.getRegionNameAsString());
       }
@@ -579,13 +588,14 @@ public class TestAssignmentManager {
     @Override
     protected CloseRegionResponse execCloseRegion(ServerName server, byte[] regionName)
         throws IOException {
-      HRegionInfo hri = am.getRegionInfo(regionName);
-      sendTransitionReport(server, HRegionInfo.convert(hri), TransitionCode.CLOSED);
+      RegionInfo hri = am.getRegionInfo(regionName);
+      sendTransitionReport(server, ProtobufUtil.toRegionInfo(hri), TransitionCode.CLOSED);
       return CloseRegionResponse.newBuilder().setClosed(true).build();
     }
   }
 
   private static class ServerNotYetRunningRsExecutor implements MockRSExecutor {
+    @Override
     public ExecuteProceduresResponse sendRequest(ServerName server, ExecuteProceduresRequest req)
         throws IOException {
       throw new ServerNotRunningYetException("wait on server startup");
@@ -599,6 +609,7 @@ public class TestAssignmentManager {
       this.exception = exception;
     }
 
+    @Override
     public ExecuteProceduresResponse sendRequest(ServerName server, ExecuteProceduresRequest req)
         throws IOException {
       throw exception;
@@ -618,6 +629,7 @@ public class TestAssignmentManager {
       this.maxSocketTimeoutRetries = maxSocketTimeoutRetries;
     }
 
+    @Override
     public ExecuteProceduresResponse sendRequest(ServerName server, ExecuteProceduresRequest req)
         throws IOException {
       // SocketTimeoutException should be a temporary problem
@@ -668,6 +680,37 @@ public class TestAssignmentManager {
     }
   }
 
+  /**
+   * Takes open request and then returns nothing so acts like a RS that went zombie.
+   * No response (so proc is stuck/suspended on the Master and won't wake up.).
+   * Different with HangThenRSCrashExecutor,  HangThenRSCrashExecutor will create
+   * ServerCrashProcedure to handle the server crash. However, this HangThenRSRestartExecutor
+   * will restart RS directly, situation for RS crashed when SCP is not enabled.
+   */
+  private class HangThenRSRestartExecutor extends GoodRsExecutor {
+    private int invocations;
+
+    @Override
+    protected RegionOpeningState execOpenRegion(final ServerName server, RegionOpenInfo openReq)
+        throws IOException {
+      if (this.invocations++ > 0) {
+        // Return w/o problem the second time through here.
+        return super.execOpenRegion(server, openReq);
+      }
+      // The procedure on master will just hang forever because nothing comes back
+      // from the RS in this case.
+      LOG.info("Return null response from serverName=" + server + "; means STUCK...TODO timeout");
+      executor.schedule(new Runnable() {
+        @Override
+        public void run() {
+          LOG.info("Restarting RS of " + server);
+          doRestart(server);
+        }
+      }, 1, TimeUnit.SECONDS);
+      return null;
+    }
+  }
+
   private class HangOnCloseThenRSCrashExecutor extends GoodRsExecutor {
     public static final int TYPES_OF_FAILURE = 6;
     private int invocations;
@@ -699,6 +742,7 @@ public class TestAssignmentManager {
   private class RandRsExecutor extends NoopRsExecutor {
     private final Random rand = new Random();
 
+    @Override
     public ExecuteProceduresResponse sendRequest(ServerName server, ExecuteProceduresRequest req)
         throws IOException {
       switch (rand.nextInt(5)) {
@@ -745,8 +789,8 @@ public class TestAssignmentManager {
       CloseRegionResponse.Builder resp = CloseRegionResponse.newBuilder();
       boolean closed = rand.nextBoolean();
       if (closed) {
-        HRegionInfo hri = am.getRegionInfo(regionName);
-        sendTransitionReport(server, HRegionInfo.convert(hri), TransitionCode.CLOSED);
+        RegionInfo hri = am.getRegionInfo(regionName);
+        sendTransitionReport(server, ProtobufUtil.toRegionInfo(hri), TransitionCode.CLOSED);
       }
       resp.setClosed(closed);
       return resp.build();
@@ -770,8 +814,8 @@ public class TestAssignmentManager {
     }
 
     @Override
-    protected void remoteDispatch(ServerName serverName, Set<RemoteProcedure> operations) {
-      submitTask(new MockRemoteCall(serverName, operations));
+    protected void remoteDispatch(ServerName serverName, Set<RemoteProcedure> remoteProcedures) {
+      submitTask(new MockRemoteCall(serverName, remoteProcedures));
     }
 
     private class MockRemoteCall extends ExecuteProceduresRemoteCall {
@@ -786,10 +830,6 @@ public class TestAssignmentManager {
         return mockRsExec.sendRequest(serverName, request);
       }
     }
-  }
-
-  private class GoodSplitExecutor extends NoopRsExecutor {
-
   }
 
   private void collectAssignmentManagerMetrics() {

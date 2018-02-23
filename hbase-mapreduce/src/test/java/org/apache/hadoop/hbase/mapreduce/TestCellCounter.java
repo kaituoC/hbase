@@ -15,14 +15,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.mapreduce;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
+import java.io.*;
 import org.apache.commons.io.IOUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.LocalFileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.TableName;
@@ -35,19 +40,19 @@ import org.apache.hadoop.hbase.util.LauncherSecurityManager;
 import org.apache.hadoop.util.ToolRunner;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
 
-import java.io.*;
-
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
-
 @Category({MapReduceTests.class, LargeTests.class})
 public class TestCellCounter {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestCellCounter.class);
+
   private static final HBaseTestingUtility UTIL = new HBaseTestingUtility();
   private static final byte[] ROW1 = Bytes.toBytesBinary("\\x01row1");
   private static final byte[] ROW2 = Bytes.toBytesBinary("\\x01row2");
@@ -81,7 +86,7 @@ public class TestCellCounter {
    * Test CellCounter all data should print to output
    *
    */
-  @Test (timeout=300000)
+  @Test
   public void testCellCounter() throws Exception {
     final TableName sourceTable = TableName.valueOf(name.getMethodName());
     byte[][] families = { FAMILY_A, FAMILY_B };
@@ -119,7 +124,7 @@ public class TestCellCounter {
   /**
    * Test CellCounter all data should print to output
    */
-  @Test(timeout = 300000)
+  @Test
   public void testCellCounterPrefix() throws Exception {
     final TableName sourceTable = TableName.valueOf(name.getMethodName());
     byte[][] families = { FAMILY_A, FAMILY_B };
@@ -157,7 +162,7 @@ public class TestCellCounter {
   /**
    * Test CellCounter with time range all data should print to output
    */
-  @Test (timeout=300000)
+  @Test
   public void testCellCounterStartTimeRange() throws Exception {
     final TableName sourceTable = TableName.valueOf(name.getMethodName());
     byte[][] families = { FAMILY_A, FAMILY_B };
@@ -198,7 +203,7 @@ public class TestCellCounter {
   /**
    * Test CellCounter with time range all data should print to output
    */
-  @Test (timeout=300000)
+  @Test
   public void testCellCounteEndTimeRange() throws Exception {
     final TableName sourceTable = TableName.valueOf(name.getMethodName());
     byte[][] families = { FAMILY_A, FAMILY_B };
@@ -238,7 +243,7 @@ public class TestCellCounter {
   /**
    * Test CellCounter with time range all data should print to output
    */
-  @Test (timeout=300000)
+  @Test
   public void testCellCounteOutOfTimeRange() throws Exception {
     final TableName sourceTable = TableName.valueOf(name.getMethodName());
     byte[][] families = { FAMILY_A, FAMILY_B };
@@ -283,7 +288,7 @@ public class TestCellCounter {
   /**
    * Test main method of CellCounter
    */
-  @Test (timeout=300000)
+  @Test
   public void testCellCounterMain() throws Exception {
 
     PrintStream oldPrintStream = System.err;
@@ -315,7 +320,7 @@ public class TestCellCounter {
   /**
    * Test CellCounter for complete table all data should print to output
    */
-  @Test(timeout = 600000)
+  @Test
   public void testCellCounterForCompleteTable() throws Exception {
     final TableName sourceTable = TableName.valueOf(name.getMethodName());
     String outputPath = OUTPUT_DIR + sourceTable;

@@ -34,25 +34,24 @@ import java.net.URL;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
-import org.apache.hadoop.hbase.HRegionInfo;
+import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeepDeletedCells;
 import org.apache.hadoop.hbase.KeyValue;
+import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
@@ -63,15 +62,16 @@ import org.apache.hadoop.hbase.filter.Filter;
 import org.apache.hadoop.hbase.filter.FilterBase;
 import org.apache.hadoop.hbase.filter.PrefixFilter;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
-import org.apache.hadoop.hbase.mapreduce.Import.KeyValueImporter;
+import org.apache.hadoop.hbase.mapreduce.Import.CellImporter;
 import org.apache.hadoop.hbase.regionserver.wal.WALActionsListener;
-import org.apache.hadoop.hbase.wal.WALEdit;
-import org.apache.hadoop.hbase.wal.WAL;
-import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.VerySlowMapReduceTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.LauncherSecurityManager;
+import org.apache.hadoop.hbase.util.MapReduceExtendedCell;
+import org.apache.hadoop.hbase.wal.WAL;
+import org.apache.hadoop.hbase.wal.WALEdit;
+import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.hadoop.mapreduce.Mapper.Context;
 import org.apache.hadoop.util.GenericOptionsParser;
 import org.apache.hadoop.util.ToolRunner;
@@ -80,12 +80,15 @@ import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Tests the table import and table export MR job functionality
@@ -93,7 +96,11 @@ import org.mockito.stubbing.Answer;
 @Category({VerySlowMapReduceTests.class, MediumTests.class})
 public class TestImportExport {
 
-  private static final Log LOG = LogFactory.getLog(TestImportExport.class);
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestImportExport.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestImportExport.class);
   protected static final HBaseTestingUtility UTIL = new HBaseTestingUtility();
   private static final byte[] ROW1 = Bytes.toBytesBinary("\\x32row1");
   private static final byte[] ROW2 = Bytes.toBytesBinary("\\x32row2");
@@ -183,7 +190,7 @@ public class TestImportExport {
    */
   @Test
   public void testSimpleCase() throws Throwable {
-    try (Table t = UTIL.createTable(TableName.valueOf(name.getMethodName()), FAMILYA, 3);) {
+    try (Table t = UTIL.createTable(TableName.valueOf(name.getMethodName()), FAMILYA, 3)) {
       Put p = new Put(ROW1);
       p.addColumn(FAMILYA, QUAL, now, QUAL);
       p.addColumn(FAMILYA, QUAL, now + 1, QUAL);
@@ -201,37 +208,37 @@ public class TestImportExport {
       t.put(p);
     }
 
-      String[] args = new String[] {
-          // Only export row1 & row2.
-          "-D" + TableInputFormat.SCAN_ROW_START + "=\\x32row1",
-          "-D" + TableInputFormat.SCAN_ROW_STOP + "=\\x32row3",
-          name.getMethodName(),
-          FQ_OUTPUT_DIR,
-          "1000", // max number of key versions per key to export
+    String[] args = new String[] {
+      // Only export row1 & row2.
+      "-D" + TableInputFormat.SCAN_ROW_START + "=\\x32row1",
+      "-D" + TableInputFormat.SCAN_ROW_STOP + "=\\x32row3",
+      name.getMethodName(),
+      FQ_OUTPUT_DIR,
+      "1000", // max number of key versions per key to export
+    };
+    assertTrue(runExport(args));
+
+    final String IMPORT_TABLE = name.getMethodName() + "import";
+    try (Table t = UTIL.createTable(TableName.valueOf(IMPORT_TABLE), FAMILYB, 3)) {
+      args = new String[] {
+        "-D" + Import.CF_RENAME_PROP + "="+FAMILYA_STRING+":"+FAMILYB_STRING,
+        IMPORT_TABLE,
+        FQ_OUTPUT_DIR
       };
-      assertTrue(runExport(args));
+      assertTrue(runImport(args));
 
-      final String IMPORT_TABLE = name.getMethodName() + "import";
-      try (Table t = UTIL.createTable(TableName.valueOf(IMPORT_TABLE), FAMILYB, 3);) {
-        args = new String[] {
-            "-D" + Import.CF_RENAME_PROP + "="+FAMILYA_STRING+":"+FAMILYB_STRING,
-            IMPORT_TABLE,
-            FQ_OUTPUT_DIR
-        };
-        assertTrue(runImport(args));
-
-        Get g = new Get(ROW1);
-        g.setMaxVersions();
-        Result r = t.get(g);
-        assertEquals(3, r.size());
-        g = new Get(ROW2);
-        g.setMaxVersions();
-        r = t.get(g);
-        assertEquals(3, r.size());
-        g = new Get(ROW3);
-        r = t.get(g);
-        assertEquals(0, r.size());
-      }
+      Get g = new Get(ROW1);
+      g.setMaxVersions();
+      Result r = t.get(g);
+      assertEquals(3, r.size());
+      g = new Get(ROW2);
+      g.setMaxVersions();
+      r = t.get(g);
+      assertEquals(3, r.size());
+      g = new Get(ROW3);
+      r = t.get(g);
+      assertEquals(0, r.size());
+    }
   }
 
   /**
@@ -265,7 +272,7 @@ public class TestImportExport {
     FileSystem fs = FileSystem.get(UTIL.getConfiguration());
     fs.copyFromLocalFile(importPath, new Path(FQ_OUTPUT_DIR + Path.SEPARATOR + name));
     String IMPORT_TABLE = name;
-    try (Table t = UTIL.createTable(TableName.valueOf(IMPORT_TABLE), Bytes.toBytes("f1"), 3);) {
+    try (Table t = UTIL.createTable(TableName.valueOf(IMPORT_TABLE), Bytes.toBytes("f1"), 3)) {
       String[] args = new String[] {
               "-Dhbase.import.version=0.94" ,
               IMPORT_TABLE, FQ_OUTPUT_DIR
@@ -295,8 +302,7 @@ public class TestImportExport {
               .build())
             .build();
     UTIL.getAdmin().createTable(desc);
-    try (Table t = UTIL.getConnection().getTable(desc.getTableName());) {
-
+    try (Table t = UTIL.getConnection().getTable(desc.getTableName())) {
       Put p = new Put(ROW1);
       p.addColumn(FAMILYA, QUAL, now, QUAL);
       p.addColumn(FAMILYA, QUAL, now + 1, QUAL);
@@ -327,8 +333,7 @@ public class TestImportExport {
               .build())
             .build();
     UTIL.getAdmin().createTable(desc);
-    try (Table t = UTIL.getConnection().getTable(desc.getTableName());) {
-
+    try (Table t = UTIL.getConnection().getTable(desc.getTableName())) {
       Put p = new Put(ROW1);
       p.addColumn(FAMILYA, QUAL, now, QUAL);
       p.addColumn(FAMILYA, QUAL, now + 1, QUAL);
@@ -361,7 +366,7 @@ public class TestImportExport {
               .build())
             .build();
     UTIL.getAdmin().createTable(desc);
-    try (Table t = UTIL.getConnection().getTable(desc.getTableName());) {
+    try (Table t = UTIL.getConnection().getTable(desc.getTableName())) {
       args = new String[] {
           IMPORT_TABLE,
           FQ_OUTPUT_DIR
@@ -374,7 +379,7 @@ public class TestImportExport {
       ResultScanner scanner = t.getScanner(s);
       Result r = scanner.next();
       Cell[] res = r.rawCells();
-      assertTrue(CellUtil.isDeleteFamily(res[0]));
+      assertTrue(PrivateCellUtil.isDeleteFamily(res[0]));
       assertEquals(now+4, res[1].getTimestamp());
       assertEquals(now+3, res[2].getTimestamp());
       assertTrue(CellUtil.isDelete(res[3]));
@@ -664,7 +669,7 @@ public class TestImportExport {
   @SuppressWarnings({ "unchecked", "rawtypes" })
   @Test
   public void testKeyValueImporter() throws Throwable {
-    KeyValueImporter importer = new KeyValueImporter();
+    CellImporter importer = new CellImporter();
     Configuration configuration = new Configuration();
     Context ctx = mock(Context.class);
     when(ctx.getConfiguration()).thenReturn(configuration);
@@ -673,13 +678,13 @@ public class TestImportExport {
 
       @Override
       public Void answer(InvocationOnMock invocation) throws Throwable {
-        ImmutableBytesWritable writer = (ImmutableBytesWritable) invocation.getArguments()[0];
-        KeyValue key = (KeyValue) invocation.getArguments()[1];
+        ImmutableBytesWritable writer = (ImmutableBytesWritable) invocation.getArgument(0);
+        MapReduceExtendedCell key = (MapReduceExtendedCell) invocation.getArgument(1);
         assertEquals("Key", Bytes.toString(writer.get()));
         assertEquals("row", Bytes.toString(CellUtil.cloneRow(key)));
         return null;
       }
-    }).when(ctx).write(any(ImmutableBytesWritable.class), any(KeyValue.class));
+    }).when(ctx).write(any(), any());
 
     importer.setup(ctx);
     Result value = mock(Result.class);
@@ -715,8 +720,7 @@ public class TestImportExport {
   public void testDurability() throws Throwable {
     // Create an export table.
     String exportTableName = name.getMethodName() + "export";
-    try (Table exportTable = UTIL.createTable(TableName.valueOf(exportTableName), FAMILYA, 3);) {
-
+    try (Table exportTable = UTIL.createTable(TableName.valueOf(exportTableName), FAMILYA, 3)) {
       // Insert some data
       Put put = new Put(ROW1);
       put.addColumn(FAMILYA, QUAL, now, QUAL);
@@ -739,8 +743,8 @@ public class TestImportExport {
       Table importTable = UTIL.createTable(TableName.valueOf(importTableName), FAMILYA, 3);
 
       // Register the wal listener for the import table
-      HRegionInfo region = UTIL.getHBaseCluster().getRegionServerThreads().get(0).getRegionServer()
-          .getOnlineRegions(importTable.getName()).get(0).getRegionInfo();
+      RegionInfo region = UTIL.getHBaseCluster().getRegionServerThreads().get(0).getRegionServer()
+          .getRegions(importTable.getName()).get(0).getRegionInfo();
       TableWALActionListener walListener = new TableWALActionListener(region);
       WAL wal = UTIL.getMiniHBaseCluster().getRegionServer(0).getWAL(region);
       wal.registerWALActionsListener(walListener);
@@ -759,7 +763,7 @@ public class TestImportExport {
       importTableName = name.getMethodName() + "import2";
       importTable = UTIL.createTable(TableName.valueOf(importTableName), FAMILYA, 3);
       region = UTIL.getHBaseCluster().getRegionServerThreads().get(0).getRegionServer()
-          .getOnlineRegions(importTable.getName()).get(0).getRegionInfo();
+          .getRegions(importTable.getName()).get(0).getRegionInfo();
       wal = UTIL.getMiniHBaseCluster().getRegionServer(0).getWAL(region);
       walListener = new TableWALActionListener(region);
       wal.registerWALActionsListener(walListener);
@@ -773,21 +777,21 @@ public class TestImportExport {
   }
 
   /**
-   * This listens to the {@link #visitLogEntryBeforeWrite(HRegionInfo, WALKey, WALEdit)} to
+   * This listens to the {@link #visitLogEntryBeforeWrite(RegionInfo, WALKey, WALEdit)} to
    * identify that an entry is written to the Write Ahead Log for the given table.
    */
-  private static class TableWALActionListener extends WALActionsListener.Base {
+  private static class TableWALActionListener implements WALActionsListener {
 
-    private HRegionInfo regionInfo;
+    private RegionInfo regionInfo;
     private boolean isVisited = false;
 
-    public TableWALActionListener(HRegionInfo region) {
+    public TableWALActionListener(RegionInfo region) {
       this.regionInfo = region;
     }
 
     @Override
     public void visitLogEntryBeforeWrite(WALKey logKey, WALEdit logEdit) {
-      if (logKey.getTablename().getNameAsString().equalsIgnoreCase(
+      if (logKey.getTableName().getNameAsString().equalsIgnoreCase(
           this.regionInfo.getTable().getNameAsString()) && (!logEdit.isMetaEdit())) {
         isVisited = true;
       }

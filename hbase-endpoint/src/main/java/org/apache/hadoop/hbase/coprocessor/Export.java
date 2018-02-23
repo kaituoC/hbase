@@ -18,33 +18,28 @@
  */
 package org.apache.hadoop.hbase.coprocessor;
 
-import com.google.protobuf.RpcCallback;
-import com.google.protobuf.RpcController;
-import com.google.protobuf.Service;
 import java.io.Closeable;
 import java.io.IOException;
 import java.security.PrivilegedExceptionAction;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+
+import org.apache.commons.lang3.ArrayUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.Coprocessor;
 import org.apache.hadoop.hbase.CoprocessorEnvironment;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.yetus.audience.InterfaceStability;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.Table;
@@ -58,14 +53,13 @@ import org.apache.hadoop.hbase.mapreduce.ResultSerialization;
 import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.protobuf.generated.ClientProtos.DelegationToken;
 import org.apache.hadoop.hbase.protobuf.generated.ExportProtos;
+import org.apache.hadoop.hbase.regionserver.HRegion;
 import org.apache.hadoop.hbase.regionserver.InternalScanner;
 import org.apache.hadoop.hbase.regionserver.Region;
 import org.apache.hadoop.hbase.regionserver.RegionScanner;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.security.UserProvider;
 import org.apache.hadoop.hbase.security.token.FsDelegationToken;
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-import org.apache.hadoop.hbase.util.ArrayUtils;
 import org.apache.hadoop.hbase.util.ByteStringer;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Triple;
@@ -77,6 +71,15 @@ import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.util.GenericOptionsParser;
 import org.apache.hadoop.util.ReflectionUtils;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.yetus.audience.InterfaceStability;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+
+import com.google.protobuf.RpcCallback;
+import com.google.protobuf.RpcController;
+import com.google.protobuf.Service;
 
 /**
  * Export an HBase table. Writes content to sequence files up in HDFS. Use
@@ -87,10 +90,9 @@ import org.apache.hadoop.util.ReflectionUtils;
  */
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.COPROC)
 @InterfaceStability.Evolving
-public class Export extends ExportProtos.ExportService
-        implements Coprocessor, CoprocessorService {
+public class Export extends ExportProtos.ExportService implements RegionCoprocessor {
 
-  private static final Log LOG = LogFactory.getLog(Export.class);
+  private static final Logger LOG = LoggerFactory.getLogger(Export.class);
   private static final Class<? extends CompressionCodec> DEFAULT_CODEC = DefaultCodec.class;
   private static final SequenceFile.CompressionType DEFAULT_TYPE = SequenceFile.CompressionType.RECORD;
   private RegionCoprocessorEnvironment env = null;
@@ -105,7 +107,7 @@ public class Export extends ExportProtos.ExportService
   static Map<byte[], Response> run(final Configuration conf, final String[] args) throws Throwable {
     String[] otherArgs = new GenericOptionsParser(conf, args).getRemainingArgs();
     if (!ExportUtils.isValidArguements(args)) {
-      ExportUtils.usage("Wrong number of arguments: " + ArrayUtils.length(otherArgs));
+      ExportUtils.usage("Wrong number of arguments: " + ArrayUtils.getLength(otherArgs));
       return null;
     }
     Triple<TableName, Scan, Path> arguments = ExportUtils.getArgumentsFromCommandLine(conf, otherArgs);
@@ -180,7 +182,7 @@ public class Export extends ExportProtos.ExportService
   }
 
   private static SequenceFile.Writer.Option getOutputPath(final Configuration conf,
-          final HRegionInfo info, final ExportProtos.ExportRequest request) throws IOException {
+          final RegionInfo info, final ExportProtos.ExportRequest request) throws IOException {
     Path file = new Path(request.getOutputPath(), "export-" + info.getEncodedName());
     FileSystem fs = file.getFileSystem(conf);
     if (fs.exists(file)) {
@@ -190,7 +192,7 @@ public class Export extends ExportProtos.ExportService
   }
 
   private static List<SequenceFile.Writer.Option> getWriterOptions(final Configuration conf,
-          final HRegionInfo info, final ExportProtos.ExportRequest request) throws IOException {
+          final RegionInfo info, final ExportProtos.ExportRequest request) throws IOException {
     List<SequenceFile.Writer.Option> rval = new LinkedList<>();
     rval.add(SequenceFile.Writer.keyClass(ImmutableBytesWritable.class));
     rval.add(SequenceFile.Writer.valueClass(Result.class));
@@ -312,8 +314,8 @@ public class Export extends ExportProtos.ExportService
   }
 
   @Override
-  public Service getService() {
-    return this;
+  public Iterable<Service> getServices() {
+    return Collections.singleton(this);
   }
 
   @Override
@@ -338,11 +340,11 @@ public class Export extends ExportProtos.ExportService
       done.run(response);
     } catch (IOException e) {
       CoprocessorRpcUtils.setControllerException(controller, e);
-      LOG.error(e);
+      LOG.error(e.toString(), e);
     }
   }
 
-  private Scan validateKey(final HRegionInfo region, final ExportProtos.ExportRequest request) throws IOException {
+  private Scan validateKey(final RegionInfo region, final ExportProtos.ExportRequest request) throws IOException {
     Scan scan = ProtobufUtil.toScan(request.getScan());
     byte[] regionStartKey = region.getStartKey();
     byte[] originStartKey = scan.getStartRow();
@@ -376,10 +378,10 @@ public class Export extends ExportProtos.ExportService
 
   private static class ScanCoprocessor {
 
-    private final Region region;
+    private final HRegion region;
 
     ScanCoprocessor(final Region region) {
-      this.region = region;
+      this.region = (HRegion) region;
     }
 
     RegionScanner checkScannerOpen(final Scan scan) throws IOException {
@@ -387,10 +389,8 @@ public class Export extends ExportProtos.ExportService
       if (region.getCoprocessorHost() == null) {
         scanner = region.getScanner(scan);
       } else {
-        scanner = region.getCoprocessorHost().preScannerOpen(scan);
-        if (scanner == null) {
-          scanner = region.getScanner(scan);
-        }
+        region.getCoprocessorHost().preScannerOpen(scan);
+        scanner = region.getScanner(scan);
         scanner = region.getCoprocessorHost().postScannerOpen(scan, scanner);
       }
       if (scanner == null) {
@@ -407,9 +407,7 @@ public class Export extends ExportProtos.ExportService
         s.close();
         return;
       }
-      if (region.getCoprocessorHost().preScannerClose(s)) {
-        return;
-      }
+      region.getCoprocessorHost().preScannerClose(s);
       try {
         s.close();
       } finally {
@@ -452,10 +450,7 @@ public class Export extends ExportProtos.ExportService
     }
 
     private static User getActiveUser(final UserProvider userProvider, final Token userToken) throws IOException {
-      User user = RpcServer.getRequestUser();
-      if (user == null) {
-        user = userProvider.getCurrent();
-      }
+      User user = RpcServer.getRequestUser().orElse(userProvider.getCurrent());
       if (user == null && userToken != null) {
         LOG.warn("No found of user credentials, but a token was got from user request");
       } else if (user != null && userToken != null) {

@@ -24,8 +24,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.Path;
@@ -33,15 +31,16 @@ import org.apache.hadoop.hbase.Abortable;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.backup.impl.BackupSystemTable;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.master.cleaner.BaseHFileCleanerDelegate;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-import org.apache.hadoop.hbase.shaded.com.google.common.base.Predicate;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Iterables;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.collect.Iterables;
 
 /**
  * Implementation of a file cleaner that checks if an hfile is still referenced by backup before
@@ -49,7 +48,7 @@ import org.apache.hadoop.hbase.shaded.com.google.common.collect.Iterables;
  */
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.CONFIG)
 public class BackupHFileCleaner extends BaseHFileCleanerDelegate implements Abortable {
-  private static final Log LOG = LogFactory.getLog(BackupHFileCleaner.class);
+  private static final Logger LOG = LoggerFactory.getLogger(BackupHFileCleaner.class);
   private boolean stopped = false;
   private boolean aborted;
   private Configuration conf;
@@ -61,9 +60,12 @@ public class BackupHFileCleaner extends BaseHFileCleanerDelegate implements Abor
   private List<TableName> fullyBackedUpTables = null;
 
   private Set<String> getFilenameFromBulkLoad(Map<byte[], List<Path>>[] maps) {
-    Set<String> filenames = new HashSet<String>();
+    Set<String> filenames = new HashSet<>();
     for (Map<byte[], List<Path>> map : maps) {
-      if (map == null) continue;
+      if (map == null) {
+        continue;
+      }
+
       for (List<Path> paths : map.values()) {
         for (Path p : paths) {
           filenames.add(p.getName());
@@ -98,7 +100,10 @@ public class BackupHFileCleaner extends BaseHFileCleanerDelegate implements Abor
     // obtain the Set of TableName's which have been fully backed up
     // so that we filter BulkLoad to be returned from server
     if (checkForFullyBackedUpTables) {
-      if (connection == null) return files;
+      if (connection == null) {
+        return files;
+      }
+
       try (BackupSystemTable tbl = new BackupSystemTable(connection)) {
         fullyBackedUpTables = tbl.getTablesForBackupType(BackupType.FULL);
       } catch (IOException ioe) {
@@ -114,17 +119,14 @@ public class BackupHFileCleaner extends BaseHFileCleanerDelegate implements Abor
       LOG.error("Failed to read hfile references, skipping checking deletable files", ioe);
       return Collections.emptyList();
     }
-    Iterable<FileStatus> deletables = Iterables.filter(files, new Predicate<FileStatus>() {
-      @Override
-      public boolean apply(FileStatus file) {
-        // If the file is recent, be conservative and wait for one more scan of backup:system table
-        if (file.getModificationTime() > secondPrevReadFromBackupTbl) {
-          return false;
-        }
-        String hfile = file.getPath().getName();
-        boolean foundHFileRef = hfileRefs.contains(hfile);
-        return !foundHFileRef;
+    Iterable<FileStatus> deletables = Iterables.filter(files, file -> {
+      // If the file is recent, be conservative and wait for one more scan of backup:system table
+      if (file.getModificationTime() > secondPrevReadFromBackupTbl) {
+        return false;
       }
+      String hfile = file.getPath().getName();
+      boolean foundHFileRef = hfileRefs.contains(hfile);
+      return !foundHFileRef;
     });
     return deletables;
   }

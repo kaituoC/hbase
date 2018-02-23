@@ -35,16 +35,19 @@ public abstract class HasThread implements Runnable {
   
   public HasThread() {
     this.thread = new Thread(this);
+    this.thread.setDaemon(true);
   }
 
   public HasThread(String name) {
     this.thread = new Thread(this, name);
+    this.thread.setDaemon(true);
   }
   
   public Thread getThread() {
     return thread;
   }
-  
+
+  @Override
   public abstract void run();
   
   //// Begin delegation to Thread

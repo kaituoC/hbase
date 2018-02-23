@@ -31,9 +31,10 @@ import org.apache.hadoop.hbase.master.procedure.CreateNamespaceProcedure;
 import org.apache.hadoop.hbase.master.procedure.DeleteNamespaceProcedure;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.master.procedure.ModifyNamespaceProcedure;
+import org.apache.hadoop.hbase.master.procedure.ProcedurePrepareLatch;
 import org.apache.hadoop.hbase.procedure2.Procedure;
 import org.apache.hadoop.hbase.procedure2.ProcedureExecutor;
-import org.apache.hadoop.hbase.shaded.com.google.common.util.concurrent.AbstractService;
+import org.apache.hbase.thirdparty.com.google.common.util.concurrent.AbstractService;
 import org.apache.hadoop.hbase.util.NonceKey;
 
 @InterfaceAudience.Private
@@ -69,6 +70,10 @@ class ClusterSchemaServiceImpl extends AbstractService implements ClusterSchemaS
   protected void doStop() {
     // This is no stop for the table manager.
     notifyStopped();
+    TableNamespaceManager tnsm = getTableNamespaceManager();
+    if (tnsm != null) {
+      tnsm.stop("Stopping");
+    }
   }
 
   @Override
@@ -84,26 +89,27 @@ class ClusterSchemaServiceImpl extends AbstractService implements ClusterSchemaS
   }
 
   @Override
-  public long createNamespace(NamespaceDescriptor namespaceDescriptor, final NonceKey nonceKey)
+  public long createNamespace(NamespaceDescriptor namespaceDescriptor, final NonceKey nonceKey,
+      final ProcedurePrepareLatch latch)
       throws IOException {
     return submitProcedure(new CreateNamespaceProcedure(
-      this.masterServices.getMasterProcedureExecutor().getEnvironment(), namespaceDescriptor),
+      this.masterServices.getMasterProcedureExecutor().getEnvironment(), namespaceDescriptor, latch),
         nonceKey);
   }
 
   @Override
-  public long modifyNamespace(NamespaceDescriptor namespaceDescriptor, final NonceKey nonceKey)
-      throws IOException {
+  public long modifyNamespace(NamespaceDescriptor namespaceDescriptor, final NonceKey nonceKey,
+      final ProcedurePrepareLatch latch) throws IOException {
     return submitProcedure(new ModifyNamespaceProcedure(
-      this.masterServices.getMasterProcedureExecutor().getEnvironment(), namespaceDescriptor),
+      this.masterServices.getMasterProcedureExecutor().getEnvironment(), namespaceDescriptor, latch),
         nonceKey);
   }
 
   @Override
-  public long deleteNamespace(String name, final NonceKey nonceKey)
+  public long deleteNamespace(String name, final NonceKey nonceKey, final ProcedurePrepareLatch latch)
       throws IOException {
     return submitProcedure(new DeleteNamespaceProcedure(
-      this.masterServices.getMasterProcedureExecutor().getEnvironment(), name),
+      this.masterServices.getMasterProcedureExecutor().getEnvironment(), name, latch),
       nonceKey);
   }
 

@@ -23,13 +23,13 @@ import java.util.List;
 import java.util.TreeSet;
 
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.PrivateCellUtil;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.exceptions.DeserializationException;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.FilterProtos;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.base.Preconditions;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.InvalidProtocolBufferException;
+import org.apache.hbase.thirdparty.com.google.common.base.Preconditions;
+import org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException;
 
 /**
  * Filter that returns only cells whose timestamp (version) is
@@ -108,11 +108,17 @@ public class TimestampsFilter extends FilterBase {
     return false;
   }
 
+  @Deprecated
   @Override
-  public ReturnCode filterKeyValue(Cell v) {
-    if (this.timestamps.contains(v.getTimestamp())) {
+  public ReturnCode filterKeyValue(final Cell c) {
+    return filterCell(c);
+  }
+
+  @Override
+  public ReturnCode filterCell(final Cell c) {
+    if (this.timestamps.contains(c.getTimestamp())) {
       return ReturnCode.INCLUDE;
-    } else if (v.getTimestamp() < minTimeStamp) {
+    } else if (c.getTimestamp() < minTimeStamp) {
       // The remaining versions of this column are guaranteed
       // to be lesser than all of the other values.
       return ReturnCode.NEXT_COL;
@@ -129,6 +135,7 @@ public class TimestampsFilter extends FilterBase {
    *
    * @throws IOException This will never happen.
    */
+  @Override
   public Cell getNextCellHint(Cell currentCell) throws IOException {
     if (!canHint) {
       return null;
@@ -140,18 +147,18 @@ public class TimestampsFilter extends FilterBase {
       // This should only happen if the current column's
       // timestamp is below the last one in the list.
       //
-      // It should never happen as the filterKeyValue should return NEXT_COL
+      // It should never happen as the filterCell should return NEXT_COL
       // but it's always better to be extra safe and protect against future
       // behavioral changes.
 
-      return CellUtil.createLastOnRowCol(currentCell);
+      return PrivateCellUtil.createLastOnRowCol(currentCell);
     }
 
     // Since we know the nextTimestampObject isn't null here there must still be
     // timestamps that can be included. Cast the Long to a long and return the
     // a cell with the current row/cf/col and the next found timestamp.
     long nextTimestamp = nextTimestampObject;
-    return CellUtil.createFirstOnRowColTS(currentCell, nextTimestamp);
+    return PrivateCellUtil.createFirstOnRowColTS(currentCell, nextTimestamp);
   }
 
   public static Filter createFilterFromArguments(ArrayList<byte []> filterArguments) {
@@ -166,6 +173,7 @@ public class TimestampsFilter extends FilterBase {
   /**
    * @return The filter serialized using pb
    */
+  @Override
   public byte[] toByteArray() {
     FilterProtos.TimestampsFilter.Builder builder =
         FilterProtos.TimestampsFilter.newBuilder();
@@ -193,10 +201,11 @@ public class TimestampsFilter extends FilterBase {
   }
 
   /**
-   * @param other
+   * @param o the other filter to compare with
    * @return true if and only if the fields of the filter that are serialized
    * are equal to the corresponding fields in other.  Used for testing.
    */
+  @Override
   boolean areSerializedFieldsEqual(Filter o) {
     if (o == this) return true;
     if (!(o instanceof TimestampsFilter)) return false;

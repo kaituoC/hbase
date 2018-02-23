@@ -101,6 +101,10 @@ module Hbase
 
     define_test "flush should work" do
       command(:flush, 'hbase:meta')
+      servers = admin.list_liveservers
+      servers.each do |s|
+        command(:flush, s.toString)
+      end
     end
 
     #-------------------------------------------------------------------------------
@@ -202,13 +206,11 @@ module Hbase
       command(:create, @create_test_name,
             { NAME => 'a',
               CACHE_BLOOMS_ON_WRITE => 'TRUE',
-              CACHE_DATA_IN_L1 => 'TRUE',
               CACHE_INDEX_ON_WRITE => 'TRUE',
               EVICT_BLOCKS_ON_CLOSE => 'TRUE',
               COMPRESSION_COMPACT => 'GZ'})
       assert_equal(['a:'], table(@create_test_name).get_all_columns.sort)
       assert_match(/CACHE_BLOOMS_ON_WRITE/, admin.describe(@create_test_name))
-      assert_match(/CACHE_DATA_IN_L1/, admin.describe(@create_test_name))
       assert_match(/CACHE_INDEX_ON_WRITE/, admin.describe(@create_test_name))
       assert_match(/EVICT_BLOCKS_ON_CLOSE/, admin.describe(@create_test_name))
       assert_match(/GZ/, admin.describe(@create_test_name))
@@ -517,17 +519,54 @@ module Hbase
       assert_not_equal(nil, table)
       table.close
     end
+  end
 
-    define_test "Get replication status" do
-      replication_status("replication", "both")
+  # Tests for the `status` shell command
+  class StatusTest < Test::Unit::TestCase
+    include TestHelpers
+
+    def setup
+      setup_hbase
+      # Create test table if it does not exist
+      @test_name = 'hbase_shell_tests_table'
+      drop_test_table(@test_name)
+      create_test_table(@test_name)
     end
 
-    define_test "Get replication source metrics information" do
-      replication_status("replication", "source")
+    def teardown
+      shutdown
     end
 
-    define_test "Get replication sink metrics information" do
-      replication_status("replication", "sink")
+    define_test 'Get replication status' do
+      output = capture_stdout { replication_status('replication', 'both') }
+      puts "Status output:\n#{output}"
+      assert output.include? 'SOURCE'
+      assert output.include? 'SINK'
+    end
+
+    define_test 'Get replication source metrics information' do
+      output = capture_stdout { replication_status('replication', 'source') }
+      puts "Status output:\n#{output}"
+      assert output.include? 'SOURCE'
+    end
+
+    define_test 'Get replication sink metrics information' do
+      output = capture_stdout { replication_status('replication', 'sink') }
+      puts "Status output:\n#{output}"
+      assert output.include? 'SINK'
+    end
+
+    define_test 'Get simple status' do
+      output = capture_stdout { admin.status('simple', '') }
+      puts "Status output:\n#{output}"
+      assert output.include? 'active master'
+    end
+
+    define_test 'Get detailed status' do
+      output = capture_stdout { admin.status('detailed', '') }
+      puts "Status output:\n#{output}"
+      # Some text which isn't in the simple output
+      assert output.include? 'regionsInTransition'
     end
   end
 

@@ -23,9 +23,7 @@ import static org.junit.Assert.fail;
 
 import java.io.IOException;
 import java.util.Iterator;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HConstants;
@@ -42,8 +40,6 @@ import org.apache.hadoop.hbase.master.HMaster;
 import org.apache.hadoop.hbase.master.ServerManager;
 import org.apache.hadoop.hbase.master.snapshot.SnapshotManager;
 import org.apache.hadoop.hbase.net.Address;
-import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.After;
@@ -51,16 +47,25 @@ import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
-import org.junit.Ignore;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Sets;
+import org.apache.hbase.thirdparty.com.google.common.collect.Sets;
 
-@Ignore // TODO: Fix after HBASE-14614 goes in.
+import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos;
+
 @Category({MediumTests.class})
 public class TestRSGroups extends TestRSGroupsBase {
-  protected static final Log LOG = LogFactory.getLog(TestRSGroups.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestRSGroups.class);
+
+  protected static final Logger LOG = LoggerFactory.getLogger(TestRSGroups.class);
   private static HMaster master;
   private static boolean INIT = false;
   private static RSGroupAdminEndpoint rsGroupAdminEndpoint;
@@ -76,10 +81,10 @@ public class TestRSGroups extends TestRSGroupsBase {
         RSGroupBasedLoadBalancer.class.getName());
     TEST_UTIL.getConfiguration().set(CoprocessorHost.MASTER_COPROCESSOR_CONF_KEY,
         RSGroupAdminEndpoint.class.getName());
-    TEST_UTIL.startMiniCluster(NUM_SLAVES_BASE);
-    TEST_UTIL.getConfiguration().set(
+    TEST_UTIL.startMiniCluster(NUM_SLAVES_BASE - 1);
+    TEST_UTIL.getConfiguration().setInt(
         ServerManager.WAIT_ON_REGIONSERVERS_MINTOSTART,
-        ""+NUM_SLAVES_BASE);
+        NUM_SLAVES_BASE - 1);
     TEST_UTIL.getConfiguration().setBoolean(SnapshotManager.HBASE_SNAPSHOT_ENABLED, true);
 
     admin = TEST_UTIL.getAdmin();
@@ -97,8 +102,8 @@ public class TestRSGroups extends TestRSGroupsBase {
     admin.setBalancerRunning(false,true);
     rsGroupAdmin = new VerifyingRSGroupAdminClient(
         new RSGroupAdminClient(TEST_UTIL.getConnection()), TEST_UTIL.getConfiguration());
-    rsGroupAdminEndpoint =
-        master.getMasterCoprocessorHost().findCoprocessors(RSGroupAdminEndpoint.class).get(0);
+    rsGroupAdminEndpoint = (RSGroupAdminEndpoint)
+        master.getMasterCoprocessorHost().findCoprocessor(RSGroupAdminEndpoint.class.getName());
   }
 
   @AfterClass
@@ -149,7 +154,7 @@ public class TestRSGroups extends TestRSGroupsBase {
     });
   }
 
-  @Ignore @Test
+  @Test
   public void testBasicStartUp() throws IOException {
     RSGroupInfo defaultInfo = rsGroupAdmin.getRSGroupInfo(RSGroupInfo.DEFAULT_GROUP);
     assertEquals(4, defaultInfo.getServers().size());
@@ -159,7 +164,7 @@ public class TestRSGroups extends TestRSGroupsBase {
     assertEquals(3, count);
   }
 
-  @Ignore @Test
+  @Test
   public void testNamespaceCreateAndAssign() throws Exception {
     LOG.info("testNamespaceCreateAndAssign");
     String nsName = tablePrefix+"_foo";
@@ -185,10 +190,10 @@ public class TestRSGroups extends TestRSGroupsBase {
     Assert.assertEquals(1, ProtobufUtil.getOnlineRegions(rs).size());
   }
 
-  @Ignore @Test
+  @Test
   public void testDefaultNamespaceCreateAndAssign() throws Exception {
     LOG.info("testDefaultNamespaceCreateAndAssign");
-    final byte[] tableName = Bytes.toBytes(tablePrefix + "_testCreateAndAssign");
+    String tableName = tablePrefix + "_testCreateAndAssign";
     admin.modifyNamespace(NamespaceDescriptor.create("default")
         .addConfiguration(RSGroupInfo.NAMESPACE_DESC_PROP_GROUP, "default").build());
     final HTableDescriptor desc = new HTableDescriptor(TableName.valueOf(tableName));
@@ -203,7 +208,7 @@ public class TestRSGroups extends TestRSGroupsBase {
     });
   }
 
-  @Ignore @Test
+  @Test
   public void testNamespaceConstraint() throws Exception {
     String nsName = tablePrefix+"_foo";
     String groupName = tablePrefix+"_foo";
@@ -238,7 +243,7 @@ public class TestRSGroups extends TestRSGroupsBase {
     }
   }
 
-  @Ignore @Test
+  @Test
   public void testGroupInfoMultiAccessing() throws Exception {
     RSGroupInfoManager manager = rsGroupAdminEndpoint.getGroupInfoManager();
     RSGroupInfo defaultGroup = manager.getRSGroup("default");
@@ -249,7 +254,7 @@ public class TestRSGroups extends TestRSGroupsBase {
     it.next();
   }
 
-  @Ignore @Test
+  @Test
   public void testMisplacedRegions() throws Exception {
     final TableName tableName = TableName.valueOf(tablePrefix+"_testMisplacedRegions");
     LOG.info("testMisplacedRegions");
@@ -277,7 +282,7 @@ public class TestRSGroups extends TestRSGroupsBase {
     });
   }
 
-  @Ignore @Test
+  @Test
   public void testCloneSnapshot() throws Exception {
     byte[] FAMILY = Bytes.toBytes("test");
     String snapshotName = tableName.getNameAsString() + "_snap";

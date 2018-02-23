@@ -21,21 +21,23 @@ package org.apache.hadoop.hbase.regionserver.handler;
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.hadoop.hbase.HRegionInfo;
+import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.Server;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.executor.EventHandler;
 import org.apache.hadoop.hbase.executor.EventType;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProtos.RegionStateTransition.TransitionCode;
 import org.apache.hadoop.hbase.regionserver.HRegion;
 import org.apache.hadoop.hbase.regionserver.Region;
 import org.apache.hadoop.hbase.regionserver.RegionServerAccounting;
 import org.apache.hadoop.hbase.regionserver.RegionServerServices;
 import org.apache.hadoop.hbase.regionserver.RegionServerServices.PostOpenDeployContext;
+import org.apache.hadoop.hbase.regionserver.RegionServerServices.RegionStateTransitionContext;
 import org.apache.hadoop.hbase.util.CancelableProgressable;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProtos.RegionStateTransition.TransitionCode;
 /**
  * Handles opening of a region on a region server.
  * <p>
@@ -43,22 +45,22 @@ import org.apache.hadoop.hbase.util.CancelableProgressable;
  */
 @InterfaceAudience.Private
 public class OpenRegionHandler extends EventHandler {
-  private static final Log LOG = LogFactory.getLog(OpenRegionHandler.class);
+  private static final Logger LOG = LoggerFactory.getLogger(OpenRegionHandler.class);
 
   protected final RegionServerServices rsServices;
 
-  private final HRegionInfo regionInfo;
+  private final RegionInfo regionInfo;
   private final TableDescriptor htd;
   private final long masterSystemTime;
 
   public OpenRegionHandler(final Server server,
-      final RegionServerServices rsServices, HRegionInfo regionInfo,
+      final RegionServerServices rsServices, RegionInfo regionInfo,
       TableDescriptor htd, long masterSystemTime) {
     this(server, rsServices, regionInfo, htd, masterSystemTime, EventType.M_RS_OPEN_REGION);
   }
 
   protected OpenRegionHandler(final Server server,
-                              final RegionServerServices rsServices, final HRegionInfo regionInfo,
+                              final RegionServerServices rsServices, final RegionInfo regionInfo,
                               final TableDescriptor htd, long masterSystemTime, EventType eventType) {
     super(server, eventType);
     this.rsServices = rsServices;
@@ -67,7 +69,7 @@ public class OpenRegionHandler extends EventHandler {
     this.masterSystemTime = masterSystemTime;
   }
 
-  public HRegionInfo getRegionInfo() {
+  public RegionInfo getRegionInfo() {
     return regionInfo;
   }
 
@@ -88,7 +90,7 @@ public class OpenRegionHandler extends EventHandler {
       // 2) The region is now marked as online while we're suppose to open. This would be a bug.
 
       // Check that this region is not already online
-      if (this.rsServices.getFromOnlineRegions(encodedName) != null) {
+      if (this.rsServices.getRegion(encodedName) != null) {
         LOG.error("Region " + encodedName +
             " was already online when we started processing the opening. " +
             "Marking this new attempt as failed");
@@ -118,8 +120,8 @@ public class OpenRegionHandler extends EventHandler {
         return;
       }
 
-      // Successful region open, and add it to OnlineRegions
-      this.rsServices.addToOnlineRegions(region);
+      // Successful region open, and add it to MutableOnlineRegions
+      this.rsServices.addRegion(region);
       openSuccessful = true;
 
       // Done!  Successful region open
@@ -159,7 +161,8 @@ public class OpenRegionHandler extends EventHandler {
         cleanupFailedOpen(region);
       }
     } finally {
-      rsServices.reportRegionStateTransition(TransitionCode.FAILED_OPEN, regionInfo);
+      rsServices.reportRegionStateTransition(new RegionStateTransitionContext(
+          TransitionCode.FAILED_OPEN, HConstants.NO_SEQNUM, -1, regionInfo));
     }
   }
 
@@ -313,13 +316,13 @@ public class OpenRegionHandler extends EventHandler {
 
   void cleanupFailedOpen(final HRegion region) throws IOException {
     if (region != null) {
-      this.rsServices.removeFromOnlineRegions(region, null);
+      this.rsServices.removeRegion(region, null);
       region.close();
     }
   }
 
   private static boolean isRegionStillOpening(
-      HRegionInfo regionInfo, RegionServerServices rsServices) {
+      RegionInfo regionInfo, RegionServerServices rsServices) {
     byte[] encodedName = regionInfo.getEncodedNameAsBytes();
     Boolean action = rsServices.getRegionsInTransitionInRS().get(encodedName);
     return Boolean.TRUE.equals(action); // true means opening for RIT

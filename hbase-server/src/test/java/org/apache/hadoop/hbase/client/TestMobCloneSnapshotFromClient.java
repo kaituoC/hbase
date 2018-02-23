@@ -21,23 +21,27 @@ import static org.junit.Assert.assertEquals;
 
 import java.io.IOException;
 import java.io.InterruptedIOException;
-
+import java.util.Optional;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.coprocessor.ObserverContext;
+import org.apache.hadoop.hbase.coprocessor.RegionCoprocessor;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.coprocessor.RegionObserver;
 import org.apache.hadoop.hbase.master.cleaner.TimeToLiveHFileCleaner;
 import org.apache.hadoop.hbase.mob.MobConstants;
+import org.apache.hadoop.hbase.regionserver.FlushLifeCycleTracker;
 import org.apache.hadoop.hbase.snapshot.MobSnapshotTestingUtils;
 import org.apache.hadoop.hbase.snapshot.SnapshotTestingUtils;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
@@ -48,6 +52,10 @@ import org.junit.rules.TestName;
  */
 @Category({LargeTests.class, ClientTests.class})
 public class TestMobCloneSnapshotFromClient extends TestCloneSnapshotFromClient {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestMobCloneSnapshotFromClient.class);
 
   private static boolean delayFlush = false;
 
@@ -137,9 +145,16 @@ public class TestMobCloneSnapshotFromClient extends TestCloneSnapshotFromClient 
   /**
    * This coprocessor is used to delay the flush.
    */
-  public static class DelayFlushCoprocessor implements RegionObserver {
+  public static class DelayFlushCoprocessor implements RegionCoprocessor, RegionObserver {
+
     @Override
-    public void preFlush(ObserverContext<RegionCoprocessorEnvironment> e) throws IOException {
+    public Optional<RegionObserver> getRegionObserver() {
+      return Optional.of(this);
+    }
+
+    @Override
+    public void preFlush(ObserverContext<RegionCoprocessorEnvironment> e,
+        FlushLifeCycleTracker tracker) throws IOException {
       if (delayFlush) {
         try {
           if (Bytes.compareTo(e.getEnvironment().getRegionInfo().getStartKey(),

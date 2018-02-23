@@ -17,8 +17,7 @@
  */
 package org.apache.hadoop.hbase.replication.regionserver;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import java.io.IOException;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FileSystem;
@@ -31,24 +30,24 @@ import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.Server;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.client.ClusterConnection;
+import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.zookeeper.MetaTableLocator;
-import org.apache.hadoop.hbase.zookeeper.ZooKeeperWatcher;
+import org.apache.hadoop.hbase.zookeeper.ZKWatcher;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
 
 /**
- * In a scenario of Replication based Disaster/Recovery, when hbase
- * Master-Cluster crashes, this tool is used to sync-up the delta from Master to
- * Slave using the info from ZooKeeper. The tool will run on Master-Cluser, and
- * assume ZK, Filesystem and NetWork still available after hbase crashes
+ * In a scenario of Replication based Disaster/Recovery, when hbase Master-Cluster crashes, this
+ * tool is used to sync-up the delta from Master to Slave using the info from ZooKeeper. The tool
+ * will run on Master-Cluser, and assume ZK, Filesystem and NetWork still available after hbase
+ * crashes
  *
+ * <pre>
  * hbase org.apache.hadoop.hbase.replication.regionserver.ReplicationSyncUp
+ * </pre>
  */
-
 public class ReplicationSyncUp extends Configured implements Tool {
-
-  private static final Log LOG = LogFactory.getLog(ReplicationSyncUp.class.getName());
 
   private static Configuration conf;
 
@@ -77,7 +76,7 @@ public class ReplicationSyncUp extends Configured implements Tool {
     ReplicationSourceManager manager;
     FileSystem fs;
     Path oldLogDir, logDir, walRootDir;
-    ZooKeeperWatcher zkw;
+    ZKWatcher zkw;
 
     Abortable abortable = new Abortable() {
       @Override
@@ -91,7 +90,7 @@ public class ReplicationSyncUp extends Configured implements Tool {
     };
 
     zkw =
-        new ZooKeeperWatcher(conf, "syncupReplication" + System.currentTimeMillis(), abortable,
+        new ZKWatcher(conf, "syncupReplication" + System.currentTimeMillis(), abortable,
             true);
 
     walRootDir = FSUtils.getWALRootDir(conf);
@@ -100,32 +99,34 @@ public class ReplicationSyncUp extends Configured implements Tool {
     logDir = new Path(walRootDir, HConstants.HREGION_LOGDIR_NAME);
 
     System.out.println("Start Replication Server start");
-    replication = new Replication(new DummyServer(zkw), fs, logDir, oldLogDir);
+    replication = new Replication();
+    replication.initialize(new DummyServer(zkw), fs, logDir, oldLogDir, null);
     manager = replication.getReplicationManager();
-    manager.init();
+    manager.init().get();
 
     try {
-      int numberOfOldSource = 1; // default wait once
-      while (numberOfOldSource > 0) {
+      while (manager.activeFailoverTaskCount() > 0) {
         Thread.sleep(SLEEP_TIME);
-        numberOfOldSource = manager.getOldSources().size();
       }
+      while (manager.getOldSources().size() > 0) {
+        Thread.sleep(SLEEP_TIME);
+      }
+      manager.join();
     } catch (InterruptedException e) {
       System.err.println("didn't wait long enough:" + e);
       return (-1);
+    } finally {
+      zkw.close();
     }
 
-    manager.join();
-    zkw.close();
-
-    return (0);
+    return 0;
   }
 
   static class DummyServer implements Server {
     String hostname;
-    ZooKeeperWatcher zkw;
+    ZKWatcher zkw;
 
-    DummyServer(ZooKeeperWatcher zkw) {
+    DummyServer(ZKWatcher zkw) {
       // an unique name in case the first run fails
       hostname = System.currentTimeMillis() + ".SyncUpTool.replication.org";
       this.zkw = zkw;
@@ -141,7 +142,7 @@ public class ReplicationSyncUp extends Configured implements Tool {
     }
 
     @Override
-    public ZooKeeperWatcher getZooKeeper() {
+    public ZKWatcher getZooKeeper() {
       return zkw;
     }
 
@@ -191,6 +192,21 @@ public class ReplicationSyncUp extends Configured implements Tool {
     @Override
     public ClusterConnection getClusterConnection() {
       // TODO Auto-generated method stub
+      return null;
+    }
+
+    @Override
+    public FileSystem getFileSystem() {
+      return null;
+    }
+
+    @Override
+    public boolean isStopping() {
+      return false;
+    }
+
+    @Override
+    public Connection createConnection(Configuration conf) throws IOException {
       return null;
     }
   }

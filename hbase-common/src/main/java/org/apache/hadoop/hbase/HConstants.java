@@ -28,8 +28,8 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 
 import org.apache.commons.lang3.ArrayUtils;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.yetus.audience.InterfaceAudience;
 
 /**
  * HConstants holds a bunch of HBase-related constants
@@ -90,7 +90,7 @@ public final class HConstants {
     SUCCESS,
     BAD_FAMILY,
     SANITY_CHECK_FAILURE,
-    FAILURE;
+    FAILURE
   }
 
   /** long constant for zero */
@@ -266,8 +266,19 @@ public final class HConstants {
   /** Parameter name for how often we should try to write a version file, before failing */
   public static final int DEFAULT_VERSION_FILE_WRITE_ATTEMPTS = 3;
 
-  /** Parameter name for how often a region should should perform a major compaction */
+  /** Parameter name and default value for how often a region should perform a major compaction */
   public static final String MAJOR_COMPACTION_PERIOD = "hbase.hregion.majorcompaction";
+  public static final long   DEFAULT_MAJOR_COMPACTION_PERIOD = 1000 * 60 * 60 * 24 * 7; // 7 days
+
+  /**
+   * Parameter name and default value for major compaction jitter.
+   * Used as a multiplier applied to {@link HConstants#MAJOR_COMPACTION_PERIOD}
+   * to cause compaction to occur a given amount of time either side of
+   * {@link HConstants#MAJOR_COMPACTION_PERIOD}.
+   * Default to 0.5 so jitter has us fall evenly either side of when the compaction should run.
+   */
+  public static final String MAJOR_COMPACTION_JITTER = "hbase.hregion.majorcompaction.jitter";
+  public static final float  DEFAULT_MAJOR_COMPACTION_JITTER = 0.50F;
 
   /** Parameter name for the maximum batch of KVs to be used in flushes and compactions */
   public static final String COMPACTION_KV_MAX = "hbase.hstore.compaction.kv.max";
@@ -549,8 +560,27 @@ public final class HConstants {
 
   /**
    * Timestamp to use when we want to refer to the latest cell.
-   * This is the timestamp sent by clients when no timestamp is specified on
-   * commit.
+   *
+   * On client side, this is the timestamp set by default when no timestamp is specified,
+   * to refer to the latest.
+   * On server side, this acts as a notation.
+   * (1) For a cell of Put, which has this notation,
+   *     its timestamp will be replaced with server's current time.
+   * (2) For a cell of Delete, which has this notation,
+   *     A. If the cell is of {@link KeyValue.Type#Delete}, HBase issues a Get operation firstly.
+   *        a. When the count of cell it gets is less than the count of cell to delete,
+   *           the timestamp of Delete cell will be replaced with server's current time.
+   *        b. When the count of cell it gets is equal to the count of cell to delete,
+   *           the timestamp of Delete cell will be replaced with the latest timestamp of cell it
+   *           gets.
+   *       (c. It is invalid and an exception will be thrown,
+   *           if the count of cell it gets is greater than the count of cell to delete,
+   *           as the max version of Get is set to the count of cell to delete.)
+   *     B. If the cell is of other Delete types, like {@link KeyValue.Type#DeleteFamilyVersion},
+   *        {@link KeyValue.Type#DeleteColumn}, or {@link KeyValue.Type#DeleteFamily},
+   *        the timestamp of Delete cell will be replaced with server's current time.
+   *
+   * So that is why it is named as "latest" but assigned as the max value of Long.
    */
   public static final long LATEST_TIMESTAMP = Long.MAX_VALUE;
 
@@ -559,7 +589,7 @@ public final class HConstants {
    * Special! Used in fake Cells only. Should never be the timestamp on an actual Cell returned to
    * a client.
    * @deprecated Should not be public since hbase-1.3.0. For internal use only. Move internal to
-   * Scanners flagged as special timestamp value never to be returned as timestamp on a Cell.
+   *   Scanners flagged as special timestamp value never to be returned as timestamp on a Cell.
    */
   @Deprecated
   public static final long OLDEST_TIMESTAMP = Long.MIN_VALUE;
@@ -757,7 +787,12 @@ public final class HConstants {
   /**
    * Default value of {@link #HBASE_CLIENT_RETRIES_NUMBER}.
    */
-  public static final int DEFAULT_HBASE_CLIENT_RETRIES_NUMBER = 35;
+  public static final int DEFAULT_HBASE_CLIENT_RETRIES_NUMBER = 15;
+
+  public static final String HBASE_CLIENT_SERVERSIDE_RETRIES_MULTIPLIER =
+      "hbase.client.serverside.retries.multiplier";
+
+  public static final int DEFAULT_HBASE_CLIENT_SERVERSIDE_RETRIES_MULTIPLIER = 3;
 
   /**
    * Parameter name to set the default scanner caching for all clients.
@@ -976,13 +1011,6 @@ public final class HConstants {
 
   public static final String LOCALHOST_IP = "127.0.0.1";
 
-  /** Conf key that enables unflushed WAL edits directly being replayed to region servers */
-  public static final String DISTRIBUTED_LOG_REPLAY_KEY = "hbase.master.distributed.log.replay";
-  public static final boolean DEFAULT_DISTRIBUTED_LOG_REPLAY_CONFIG = false;
-  public static final String DISALLOW_WRITES_IN_RECOVERING =
-      "hbase.regionserver.disallow.writes.when.recovering";
-  public static final boolean DEFAULT_DISALLOW_WRITES_IN_RECOVERING_CONFIG = false;
-
   public static final String REGION_SERVER_HANDLER_COUNT = "hbase.regionserver.handler.count";
   public static final int DEFAULT_REGION_SERVER_HANDLER_COUNT = 30;
 
@@ -1142,6 +1170,18 @@ public final class HConstants {
   public static final String STATUS_MULTICAST_PORT = "hbase.status.multicast.address.port";
   public static final int DEFAULT_STATUS_MULTICAST_PORT = 16100;
 
+  /**
+   * The network interface name to use for the multicast messages.
+   */
+  public static final String STATUS_MULTICAST_NI_NAME = "hbase.status.multicast.ni.name";
+
+  /**
+   * The address to use for binding the local socket for sending multicast. Defaults to 0.0.0.0.
+   */
+  public static final String STATUS_MULTICAST_PUBLISHER_BIND_ADDRESS =
+    "hbase.status.multicast.publisher.bind.address.ip";
+  public static final String DEFAULT_STATUS_MULTICAST_PUBLISHER_BIND_ADDRESS = "0.0.0.0";
+
   public static final long NO_NONCE = 0;
 
   /** Default cipher for encryption */
@@ -1190,11 +1230,12 @@ public final class HConstants {
   public static final String REPLICATION_SOURCE_MAXTHREADS_KEY =
       "hbase.replication.source.maxthreads";
 
-  public static final int REPLICATION_SOURCE_MAXTHREADS_DEFAULT = 10;
+  /** Drop edits for tables that been deleted from the replication source and target */
+  public static final String REPLICATION_DROP_ON_DELETED_TABLE_KEY =
+      "hbase.replication.drop.on.deleted.table";
 
-  /** Config for pluggable consensus provider */
-  public static final String HBASE_COORDINATED_STATE_MANAGER_CLASS =
-    "hbase.coordinated.state.manager.class";
+  /** Maximum number of threads used by the replication source for shipping edits to the sinks */
+  public static final int REPLICATION_SOURCE_MAXTHREADS_DEFAULT = 10;
 
   /** Configuration key for SplitLog manager timeout */
   public static final String HBASE_SPLITLOG_MANAGER_TIMEOUT = "hbase.splitlog.manager.timeout";
@@ -1281,7 +1322,7 @@ public final class HConstants {
 
   public static final String HBASE_CANARY_WRITE_TABLE_CHECK_PERIOD_KEY =
       "hbase.canary.write.table.check.period";
-  
+
   public static final String HBASE_CANARY_READ_RAW_SCAN_KEY = "hbase.canary.read.raw.enabled";
 
   /**

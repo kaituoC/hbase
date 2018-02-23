@@ -25,20 +25,19 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantLock;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.Server;
-import org.apache.hadoop.hbase.regionserver.wal.FSHLog;
+import org.apache.hadoop.hbase.regionserver.wal.AbstractFSWAL;
 import org.apache.hadoop.hbase.regionserver.wal.FailedLogCloseException;
-import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.regionserver.wal.WALActionsListener;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.HasThread;
+import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.ipc.RemoteException;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 /**
  * Runs periodically to determine if the WAL should be rolled.
@@ -52,7 +51,7 @@ import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTe
 @InterfaceAudience.Private
 @VisibleForTesting
 public class LogRoller extends HasThread implements Closeable {
-  private static final Log LOG = LogFactory.getLog(LogRoller.class);
+  private static final Logger LOG = LoggerFactory.getLogger(LogRoller.class);
   private final ReentrantLock rollLock = new ReentrantLock();
   private final AtomicBoolean rollLog = new AtomicBoolean(false);
   private final ConcurrentHashMap<WAL, Boolean> walNeedsRoll = new ConcurrentHashMap<>();
@@ -69,7 +68,7 @@ public class LogRoller extends HasThread implements Closeable {
 
   public void addWAL(final WAL wal) {
     if (null == walNeedsRoll.putIfAbsent(wal, Boolean.FALSE)) {
-      wal.registerWALActionsListener(new WALActionsListener.Base() {
+      wal.registerWALActionsListener(new WALActionsListener() {
         @Override
         public void logRollRequested(boolean lowReplicas) {
           walNeedsRoll.put(wal, Boolean.TRUE);
@@ -122,18 +121,32 @@ public class LogRoller extends HasThread implements Closeable {
     try {
       for (Entry<WAL, Boolean> entry : walNeedsRoll.entrySet()) {
         WAL wal = entry.getKey();
-        boolean neeRollAlready = entry.getValue();
-        if(wal instanceof FSHLog && !neeRollAlready) {
-          FSHLog hlog = (FSHLog)wal;
-          if ((now - hlog.getLastTimeCheckLowReplication())
-              > this.checkLowReplicationInterval) {
-            hlog.checkLogRoll();
-          }
+        boolean needRollAlready = entry.getValue();
+        if (needRollAlready || !(wal instanceof AbstractFSWAL)) {
+          continue;
         }
+        ((AbstractFSWAL<?>) wal).checkLogLowReplication(checkLowReplicationInterval);
       }
     } catch (Throwable e) {
       LOG.warn("Failed checking low replication", e);
     }
+  }
+
+  private void abort(String reason, Throwable cause) {
+    // close all WALs before calling abort on RS.
+    // This is because AsyncFSWAL replies on us for rolling a new writer to make progress, and if we
+    // failed, AsyncFSWAL may be stuck, so we need to close it to let the upper layer know that it
+    // is already broken.
+    for (WAL wal : walNeedsRoll.keySet()) {
+      // shutdown rather than close here since we are going to abort the RS and the wals need to be
+      // split when recovery
+      try {
+        wal.shutdown();
+      } catch (IOException e) {
+        LOG.warn("Failed to shutdown wal", e);
+      }
+    }
+    server.abort(reason, cause);
   }
 
   @Override
@@ -157,10 +170,8 @@ public class LogRoller extends HasThread implements Closeable {
           continue;
         }
         // Time for periodic roll
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("Wal roll period " + this.rollperiod + "ms elapsed");
-        }
-      } else if (LOG.isDebugEnabled()) {
+        LOG.debug("Wal roll period {} ms elapsed", this.rollperiod);
+      } else {
         LOG.debug("WAL roll requested");
       }
       rollLock.lock(); // FindBugs UL_UNRELEASED_LOCK_EXCEPTION_PATH
@@ -174,20 +185,22 @@ public class LogRoller extends HasThread implements Closeable {
               entry.getValue().booleanValue());
           walNeedsRoll.put(wal, Boolean.FALSE);
           if (regionsToFlush != null) {
-            for (byte [] r: regionsToFlush) scheduleFlush(r);
+            for (byte[] r : regionsToFlush) {
+              scheduleFlush(r);
+            }
           }
         }
       } catch (FailedLogCloseException e) {
-        server.abort("Failed log close in log roller", e);
+        abort("Failed log close in log roller", e);
       } catch (java.net.ConnectException e) {
-        server.abort("Failed log close in log roller", e);
+        abort("Failed log close in log roller", e);
       } catch (IOException ex) {
         // Abort if we get here.  We probably won't recover an IOE. HBASE-1132
-        server.abort("IOE in log roller",
+        abort("IOE in log roller",
           ex instanceof RemoteException ? ((RemoteException) ex).unwrapRemoteException() : ex);
       } catch (Exception ex) {
         LOG.error("Log rolling failed", ex);
-        server.abort("Log rolling failed", ex);
+        abort("Log rolling failed", ex);
       } finally {
         try {
           rollLog.set(false);
@@ -204,20 +217,19 @@ public class LogRoller extends HasThread implements Closeable {
    */
   private void scheduleFlush(final byte [] encodedRegionName) {
     boolean scheduled = false;
-    Region r = this.services.getFromOnlineRegions(Bytes.toString(encodedRegionName));
+    HRegion r = (HRegion) this.services.getRegion(Bytes.toString(encodedRegionName));
     FlushRequester requester = null;
     if (r != null) {
       requester = this.services.getFlushRequester();
       if (requester != null) {
         // force flushing all stores to clean old logs
-        requester.requestFlush(r, true);
+        requester.requestFlush(r, true, FlushLifeCycleTracker.DUMMY);
         scheduled = true;
       }
     }
     if (!scheduled) {
-      LOG.warn("Failed to schedule flush of " +
-        Bytes.toString(encodedRegionName) + ", region=" + r + ", requester=" +
-        requester);
+      LOG.warn("Failed to schedule flush of {}, region={}, requester={}",
+        Bytes.toString(encodedRegionName), r, requester);
     }
   }
 

@@ -15,8 +15,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.regionserver;
+
+import static org.apache.hadoop.hbase.regionserver.Store.PRIORITY_USER;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -26,8 +27,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FSDataOutputStream;
@@ -37,8 +36,7 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
 import org.apache.hadoop.hbase.HDFSBlocksDistribution;
-import org.apache.hadoop.hbase.HRegionInfo;
-import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.TableDescriptor;
 import org.apache.hadoop.hbase.mapreduce.JobUtil;
 import org.apache.hadoop.hbase.mapreduce.TableMapReduceUtil;
@@ -62,6 +60,9 @@ import org.apache.hadoop.mapreduce.lib.output.NullOutputFormat;
 import org.apache.hadoop.util.LineReader;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /*
  * The CompactionTool allows to execute a compaction specifying a:
@@ -73,20 +74,18 @@ import org.apache.hadoop.util.ToolRunner;
  */
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.TOOLS)
 public class CompactionTool extends Configured implements Tool {
-  private static final Log LOG = LogFactory.getLog(CompactionTool.class);
+  private static final Logger LOG = LoggerFactory.getLogger(CompactionTool.class);
 
   private final static String CONF_TMP_DIR = "hbase.tmp.dir";
   private final static String CONF_COMPACT_ONCE = "hbase.compactiontool.compact.once";
   private final static String CONF_COMPACT_MAJOR = "hbase.compactiontool.compact.major";
   private final static String CONF_DELETE_COMPACTED = "hbase.compactiontool.delete";
-  private final static String CONF_COMPLETE_COMPACTION = "hbase.hstore.compaction.complete";
 
   /**
    * Class responsible to execute the Compaction on the specified path.
    * The path can be a table, region or family directory.
    */
   private static class CompactionWorker {
-    private final boolean keepCompactedFiles;
     private final boolean deleteCompacted;
     private final Configuration conf;
     private final FileSystem fs;
@@ -94,7 +93,6 @@ public class CompactionTool extends Configured implements Tool {
 
     public CompactionWorker(final FileSystem fs, final Configuration conf) {
       this.conf = conf;
-      this.keepCompactedFiles = !conf.getBoolean(CONF_COMPLETE_COMPACTION, true);
       this.deleteCompacted = conf.getBoolean(CONF_DELETE_COMPACTED, false);
       this.tmpDir = new Path(conf.get(CONF_TMP_DIR));
       this.fs = fs;
@@ -112,7 +110,7 @@ public class CompactionTool extends Configured implements Tool {
         Path regionDir = path.getParent();
         Path tableDir = regionDir.getParent();
         TableDescriptor htd = FSTableDescriptors.getTableDescriptorFromFs(fs, tableDir);
-        HRegionInfo hri = HRegionFileSystem.loadRegionInfoFileContent(fs, regionDir);
+        RegionInfo hri = HRegionFileSystem.loadRegionInfoFileContent(fs, regionDir);
         compactStoreFiles(tableDir, htd, hri,
             path.getName(), compactOnce, major);
       } else if (isRegionDir(fs, path)) {
@@ -138,7 +136,7 @@ public class CompactionTool extends Configured implements Tool {
     private void compactRegion(final Path tableDir, final TableDescriptor htd,
         final Path regionDir, final boolean compactOnce, final boolean major)
         throws IOException {
-      HRegionInfo hri = HRegionFileSystem.loadRegionInfoFileContent(fs, regionDir);
+      RegionInfo hri = HRegionFileSystem.loadRegionInfoFileContent(fs, regionDir);
       for (Path familyDir: FSUtils.getFamilyDirs(fs, regionDir)) {
         compactStoreFiles(tableDir, htd, hri, familyDir.getName(), compactOnce, major);
       }
@@ -150,7 +148,7 @@ public class CompactionTool extends Configured implements Tool {
      * no more compactions are needed. Uses the Configuration settings provided.
      */
     private void compactStoreFiles(final Path tableDir, final TableDescriptor htd,
-        final HRegionInfo hri, final String familyName, final boolean compactOnce,
+        final RegionInfo hri, final String familyName, final boolean compactOnce,
         final boolean major) throws IOException {
       HStore store = getStore(conf, fs, tableDir, htd, hri, familyName, tmpDir);
       LOG.info("Compact table=" + htd.getTableName() +
@@ -161,15 +159,15 @@ public class CompactionTool extends Configured implements Tool {
       }
       do {
         Optional<CompactionContext> compaction =
-            store.requestCompaction(Store.PRIORITY_USER, CompactionLifeCycleTracker.DUMMY, null);
+            store.requestCompaction(PRIORITY_USER, CompactionLifeCycleTracker.DUMMY, null);
         if (!compaction.isPresent()) {
           break;
         }
-        List<StoreFile> storeFiles =
-            store.compact(compaction.get(), NoLimitThroughputController.INSTANCE);
+        List<HStoreFile> storeFiles =
+            store.compact(compaction.get(), NoLimitThroughputController.INSTANCE, null);
         if (storeFiles != null && !storeFiles.isEmpty()) {
-          if (keepCompactedFiles && deleteCompacted) {
-            for (StoreFile storeFile: storeFiles) {
+          if (deleteCompacted) {
+            for (HStoreFile storeFile: storeFiles) {
               fs.delete(storeFile.getPath(), false);
             }
           }
@@ -182,7 +180,7 @@ public class CompactionTool extends Configured implements Tool {
      * the store dir to compact as source.
      */
     private static HStore getStore(final Configuration conf, final FileSystem fs,
-        final Path tableDir, final TableDescriptor htd, final HRegionInfo hri,
+        final Path tableDir, final TableDescriptor htd, final RegionInfo hri,
         final String familyName, final Path tempDir) throws IOException {
       HRegionFileSystem regionFs = new HRegionFileSystem(conf, fs, tableDir, hri) {
         @Override
@@ -457,16 +455,15 @@ public class CompactionTool extends Configured implements Tool {
     System.err.println();
     System.err.println("Note: -D properties will be applied to the conf used. ");
     System.err.println("For example: ");
-    System.err.println(" To preserve input files, pass -D"+CONF_COMPLETE_COMPACTION+"=false");
     System.err.println(" To stop delete of compacted file, pass -D"+CONF_DELETE_COMPACTED+"=false");
     System.err.println(" To set tmp dir, pass -D"+CONF_TMP_DIR+"=ALTERNATE_DIR");
     System.err.println();
     System.err.println("Examples:");
     System.err.println(" To compact the full 'TestTable' using MapReduce:");
-    System.err.println(" $ hbase " + this.getClass().getName() + " -mapred hdfs:///hbase/data/default/TestTable");
+    System.err.println(" $ hbase " + this.getClass().getName() + " -mapred hdfs://hbase/data/default/TestTable");
     System.err.println();
     System.err.println(" To compact column family 'x' of the table 'TestTable' region 'abc':");
-    System.err.println(" $ hbase " + this.getClass().getName() + " hdfs:///hbase/data/default/TestTable/abc/x");
+    System.err.println(" $ hbase " + this.getClass().getName() + " hdfs://hbase/data/default/TestTable/abc/x");
   }
 
   public static void main(String[] args) throws Exception {

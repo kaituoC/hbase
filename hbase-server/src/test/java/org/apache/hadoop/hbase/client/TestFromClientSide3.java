@@ -1,6 +1,4 @@
 /**
- * Copyright The Apache Software Foundation
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -19,76 +17,86 @@
  */
 package org.apache.hadoop.hbase.client;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 import java.util.Random;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.Coprocessor;
-import org.apache.hadoop.hbase.coprocessor.ObserverContext;
-import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
-import org.apache.hadoop.hbase.coprocessor.RegionObserver;
-import org.apache.hadoop.hbase.regionserver.HRegionServer;
-import org.apache.hadoop.hbase.regionserver.MiniBatchOperationInProgress;
-import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.regionserver.Region;
-import org.apache.hadoop.hbase.regionserver.RegionScanner;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionLocation;
 import org.apache.hadoop.hbase.HTableDescriptor;
+import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.coprocessor.MultiRowMutationEndpoint;
+import org.apache.hadoop.hbase.coprocessor.ObserverContext;
+import org.apache.hadoop.hbase.coprocessor.RegionCoprocessor;
+import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
+import org.apache.hadoop.hbase.coprocessor.RegionObserver;
 import org.apache.hadoop.hbase.ipc.CoprocessorRpcUtils;
 import org.apache.hadoop.hbase.ipc.ServerRpcController;
 import org.apache.hadoop.hbase.protobuf.generated.MultiRowMutationProtos;
 import org.apache.hadoop.hbase.regionserver.HRegion;
-import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos;
+import org.apache.hadoop.hbase.regionserver.HRegionServer;
+import org.apache.hadoop.hbase.regionserver.MiniBatchOperationInProgress;
+import org.apache.hadoop.hbase.regionserver.RegionScanner;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.Pair;
 import org.junit.After;
 import org.junit.AfterClass;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.fail;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos;
 
 @Category({LargeTests.class, ClientTests.class})
 public class TestFromClientSide3 {
-  private static final Log LOG = LogFactory.getLog(TestFromClientSide3.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestFromClientSide3.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestFromClientSide3.class);
   private final static HBaseTestingUtility TEST_UTIL
     = new HBaseTestingUtility();
   private static byte[] FAMILY = Bytes.toBytes("testFamily");
   private static Random random = new Random();
   private static int SLAVES = 3;
-  private static byte [] ROW = Bytes.toBytes("testRow");
+  private static final byte[] ROW = Bytes.toBytes("testRow");
   private static final byte[] ANOTHERROW = Bytes.toBytes("anotherrow");
-  private static byte [] QUALIFIER = Bytes.toBytes("testQualifier");
-  private static byte [] VALUE = Bytes.toBytes("testValue");
-  private final static byte[] COL_QUAL = Bytes.toBytes("f1");
-  private final static byte[] VAL_BYTES = Bytes.toBytes("v1");
-  private final static byte[] ROW_BYTES = Bytes.toBytes("r1");
+  private static final byte[] QUALIFIER = Bytes.toBytes("testQualifier");
+  private static final byte[] VALUE = Bytes.toBytes("testValue");
+  private static final byte[] COL_QUAL = Bytes.toBytes("f1");
+  private static final byte[] VAL_BYTES = Bytes.toBytes("v1");
+  private static final byte[] ROW_BYTES = Bytes.toBytes("r1");
 
   @Rule
   public TestName name = new TestName();
@@ -261,7 +269,7 @@ public class TestFromClientSide3 {
   }
 
   // override the config settings at the CF level and ensure priority
-  @Test(timeout = 60000)
+  @Test
   public void testAdvancedConfigOverride() throws Exception {
     /*
      * Overall idea: (1) create 3 store files and issue a compaction. config's
@@ -360,7 +368,7 @@ public class TestFromClientSide3 {
             break;
           }
         } catch (Exception e) {
-          LOG.debug("Waiting for region to come online: " + regionName);
+          LOG.debug("Waiting for region to come online: " + Bytes.toString(regionName));
         }
         Thread.sleep(40);
       }
@@ -410,6 +418,33 @@ public class TestFromClientSide3 {
     }
   }
 
+  // Test Table.batch with large amount of mutations against the same key.
+  // It used to trigger read lock's "Maximum lock count exceeded" Error.
+  @Test
+  public void testHTableWithLargeBatch() throws Exception {
+    Table table = TEST_UTIL.createTable(TableName.valueOf(name.getMethodName()),
+        new byte[][] { FAMILY });
+    int sixtyFourK = 64 * 1024;
+    try {
+      List actions = new ArrayList();
+      Object[] results = new Object[(sixtyFourK + 1) * 2];
+
+      for (int i = 0; i < sixtyFourK + 1; i ++) {
+        Put put1 = new Put(ROW);
+        put1.addColumn(FAMILY, QUALIFIER, VALUE);
+        actions.add(put1);
+
+        Put put2 = new Put(ANOTHERROW);
+        put2.addColumn(FAMILY, QUALIFIER, VALUE);
+        actions.add(put2);
+      }
+
+      table.batch(actions, results);
+    } finally {
+      table.close();
+    }
+  }
+
   @Test
   public void testBatchWithRowMutation() throws Exception {
     LOG.info("Starting testBatchWithRowMutation");
@@ -418,10 +453,9 @@ public class TestFromClientSide3 {
       byte [][] QUALIFIERS = new byte [][] {
         Bytes.toBytes("a"), Bytes.toBytes("b")
       };
-      RowMutations arm = new RowMutations(ROW);
-      Put p = new Put(ROW);
-      p.addColumn(FAMILY, QUALIFIERS[0], VALUE);
-      arm.add(p);
+
+      RowMutations arm = RowMutations.of(Collections.singletonList(
+        new Put(ROW).addColumn(FAMILY, QUALIFIERS[0], VALUE)));
       Object[] batchResult = new Object[1];
       t.batch(Arrays.asList(arm), batchResult);
 
@@ -429,13 +463,9 @@ public class TestFromClientSide3 {
       Result r = t.get(g);
       assertEquals(0, Bytes.compareTo(VALUE, r.getValue(FAMILY, QUALIFIERS[0])));
 
-      arm = new RowMutations(ROW);
-      p = new Put(ROW);
-      p.addColumn(FAMILY, QUALIFIERS[1], VALUE);
-      arm.add(p);
-      Delete d = new Delete(ROW);
-      d.addColumns(FAMILY, QUALIFIERS[0]);
-      arm.add(d);
+      arm = RowMutations.of(Arrays.asList(
+        new Put(ROW).addColumn(FAMILY, QUALIFIERS[1], VALUE),
+        new Delete(ROW).addColumns(FAMILY, QUALIFIERS[0])));
       t.batch(Arrays.asList(arm), batchResult);
       r = t.get(g);
       assertEquals(0, Bytes.compareTo(VALUE, r.getValue(FAMILY, QUALIFIERS[1])));
@@ -443,10 +473,8 @@ public class TestFromClientSide3 {
 
       // Test that we get the correct remote exception for RowMutations from batch()
       try {
-        arm = new RowMutations(ROW);
-        p = new Put(ROW);
-        p.addColumn(new byte[]{'b', 'o', 'g', 'u', 's'}, QUALIFIERS[0], VALUE);
-        arm.add(p);
+        arm = RowMutations.of(Collections.singletonList(
+          new Put(ROW).addColumn(new byte[]{'b', 'o', 'g', 'u', 's'}, QUALIFIERS[0], VALUE)));
         t.batch(Arrays.asList(arm), batchResult);
         fail("Expected RetriesExhaustedWithDetailsException with NoSuchColumnFamilyException");
       } catch(RetriesExhaustedWithDetailsException e) {
@@ -469,14 +497,15 @@ public class TestFromClientSide3 {
     Get get = new Get(ROW);
 
     boolean exist = table.exists(get);
-    assertEquals(exist, false);
+    assertFalse(exist);
 
     table.put(put);
 
     exist = table.exists(get);
-    assertEquals(exist, true);
+    assertTrue(exist);
   }
 
+  @Test
   public void testHTableExistsMethodSingleRegionMultipleGets() throws Exception {
     Table table = TEST_UTIL.createTable(TableName.valueOf(
         name.getMethodName()), new byte[][] { FAMILY });
@@ -487,13 +516,11 @@ public class TestFromClientSide3 {
 
     List<Get> gets = new ArrayList<>();
     gets.add(new Get(ROW));
-    gets.add(null);
     gets.add(new Get(ANOTHERROW));
 
-    boolean[] results = table.existsAll(gets);
-    assertEquals(results[0], true);
-    assertEquals(results[1], false);
-    assertEquals(results[2], false);
+    boolean[] results = table.exists(gets);
+    assertTrue(results[0]);
+    assertFalse(results[1]);
   }
 
   @Test
@@ -562,12 +589,12 @@ public class TestFromClientSide3 {
     Get get = new Get(ROW);
 
     boolean exist = table.exists(get);
-    assertEquals(exist, false);
+    assertFalse(exist);
 
     table.put(put);
 
     exist = table.exists(get);
-    assertEquals(exist, true);
+    assertTrue(exist);
   }
 
   @Test
@@ -587,10 +614,10 @@ public class TestFromClientSide3 {
 
     LOG.info("Calling exists");
     boolean[] results = table.existsAll(gets);
-    assertEquals(results[0], false);
-    assertEquals(results[1], false);
-    assertEquals(results[2], true);
-    assertEquals(results[3], false);
+    assertFalse(results[0]);
+    assertFalse(results[1]);
+    assertTrue(results[2]);
+    assertFalse(results[3]);
 
     // Test with the first region.
     put = new Put(new byte[] { 0x00 });
@@ -601,8 +628,8 @@ public class TestFromClientSide3 {
     gets.add(new Get(new byte[] { 0x00 }));
     gets.add(new Get(new byte[] { 0x00, 0x00 }));
     results = table.existsAll(gets);
-    assertEquals(results[0], true);
-    assertEquals(results[1], false);
+    assertTrue(results[0]);
+    assertFalse(results[1]);
 
     // Test with the last region
     put = new Put(new byte[] { (byte) 0xff, (byte) 0xff });
@@ -614,9 +641,9 @@ public class TestFromClientSide3 {
     gets.add(new Get(new byte[] { (byte) 0xff, (byte) 0xff }));
     gets.add(new Get(new byte[] { (byte) 0xff, (byte) 0xff, (byte) 0xff }));
     results = table.existsAll(gets);
-    assertEquals(results[0], false);
-    assertEquals(results[1], true);
-    assertEquals(results[2], false);
+    assertFalse(results[0]);
+    assertTrue(results[1]);
+    assertFalse(results[2]);
   }
 
   @Test
@@ -654,7 +681,7 @@ public class TestFromClientSide3 {
     assertTrue(con.hasCellBlockSupport());
   }
 
-  @Test(timeout = 60000)
+  @Test
   public void testPutWithPreBatchMutate() throws Exception {
     final TableName tableName = TableName.valueOf(name.getMethodName());
     testPreBatchMutate(tableName, () -> {
@@ -669,7 +696,7 @@ public class TestFromClientSide3 {
     });
   }
 
-  @Test(timeout = 60000)
+  @Test
   public void testRowMutationsWithPreBatchMutate() throws Exception {
     final TableName tableName = TableName.valueOf(name.getMethodName());
     testPreBatchMutate(tableName, () -> {
@@ -688,7 +715,7 @@ public class TestFromClientSide3 {
 
   private void testPreBatchMutate(TableName tableName, Runnable rn)throws Exception {
     HTableDescriptor desc = new HTableDescriptor(tableName);
-    desc.addCoprocessor(WatiingForScanObserver.class.getName());
+    desc.addCoprocessor(WaitingForScanObserver.class.getName());
     desc.addFamily(new HColumnDescriptor(FAMILY));
     TEST_UTIL.getAdmin().createTable(desc);
     ExecutorService service = Executors.newFixedThreadPool(2);
@@ -716,11 +743,11 @@ public class TestFromClientSide3 {
     TEST_UTIL.deleteTable(tableName);
   }
 
-  @Test(timeout = 30000)
+  @Test
   public void testLockLeakWithDelta() throws Exception, Throwable {
     final TableName tableName = TableName.valueOf(name.getMethodName());
     HTableDescriptor desc = new HTableDescriptor(tableName);
-    desc.addCoprocessor(WatiingForMultiMutationsObserver.class.getName());
+    desc.addCoprocessor(WaitingForMultiMutationsObserver.class.getName());
     desc.setConfiguration("hbase.rowlock.wait.duration", String.valueOf(5000));
     desc.addFamily(new HColumnDescriptor(FAMILY));
     TEST_UTIL.getAdmin().createTable(desc);
@@ -735,7 +762,7 @@ public class TestFromClientSide3 {
         try (Table table = con.getTable(tableName)) {
           Put put = new Put(ROW);
           put.addColumn(FAMILY, QUALIFIER, VALUE);
-          // the put will be blocked by WatiingForMultiMutationsObserver.
+          // the put will be blocked by WaitingForMultiMutationsObserver.
           table.put(put);
         } catch (IOException ex) {
           throw new RuntimeException(ex);
@@ -748,12 +775,12 @@ public class TestFromClientSide3 {
         try (Table table = con.getTable(tableName)) {
           table.append(append);
           fail("The APPEND should fail because the target lock is blocked by previous put");
-        } catch (Throwable ex) {
+        } catch (Exception ex) {
         }
       });
       appendService.shutdown();
       appendService.awaitTermination(Long.MAX_VALUE, TimeUnit.DAYS);
-      WatiingForMultiMutationsObserver observer = find(tableName, WatiingForMultiMutationsObserver.class);
+      WaitingForMultiMutationsObserver observer = find(tableName, WaitingForMultiMutationsObserver.class);
       observer.latch.countDown();
       putService.shutdown();
       putService.awaitTermination(Long.MAX_VALUE, TimeUnit.DAYS);
@@ -769,12 +796,12 @@ public class TestFromClientSide3 {
     assertEquals(0, readLockCount);
   }
 
-  @Test(timeout = 30000)
+  @Test
   public void testMultiRowMutations() throws Exception, Throwable {
     final TableName tableName = TableName.valueOf(name.getMethodName());
     HTableDescriptor desc = new HTableDescriptor(tableName);
     desc.addCoprocessor(MultiRowMutationEndpoint.class.getName());
-    desc.addCoprocessor(WatiingForMultiMutationsObserver.class.getName());
+    desc.addCoprocessor(WaitingForMultiMutationsObserver.class.getName());
     desc.setConfiguration("hbase.rowlock.wait.duration", String.valueOf(5000));
     desc.addFamily(new HColumnDescriptor(FAMILY));
     TEST_UTIL.getAdmin().createTable(desc);
@@ -793,7 +820,7 @@ public class TestFromClientSide3 {
         try (Table table = con.getTable(tableName)) {
           Put put0 = new Put(rowLocked);
           put0.addColumn(FAMILY, QUALIFIER, value0);
-          // the put will be blocked by WatiingForMultiMutationsObserver.
+          // the put will be blocked by WaitingForMultiMutationsObserver.
           table.put(put0);
         } catch (IOException ex) {
           throw new RuntimeException(ex);
@@ -801,6 +828,7 @@ public class TestFromClientSide3 {
       });
       ExecutorService cpService = Executors.newSingleThreadExecutor();
       cpService.execute(() -> {
+        boolean threw;
         Put put1 = new Put(row);
         Put put2 = new Put(rowLocked);
         put1.addColumn(FAMILY, QUALIFIER, value1);
@@ -822,15 +850,18 @@ public class TestFromClientSide3 {
               exe.mutateRows(controller, request, rpcCallback);
               return rpcCallback.get();
             });
-          fail("This cp should fail because the target lock is blocked by previous put");
+          threw = false;
         } catch (Throwable ex) {
-          // TODO!!!! Is this right? It catches everything including the above fail
-          // if it happens (which it seems too....)
+          threw = true;
+        }
+        if (!threw) {
+          // Can't call fail() earlier because the catch would eat it.
+          fail("This cp should fail because the target lock is blocked by previous put");
         }
       });
       cpService.shutdown();
       cpService.awaitTermination(Long.MAX_VALUE, TimeUnit.DAYS);
-      WatiingForMultiMutationsObserver observer = find(tableName, WatiingForMultiMutationsObserver.class);
+      WaitingForMultiMutationsObserver observer = find(tableName, WaitingForMultiMutationsObserver.class);
       observer.latch.countDown();
       putService.shutdown();
       putService.awaitTermination(Long.MAX_VALUE, TimeUnit.DAYS);
@@ -958,25 +989,32 @@ public class TestFromClientSide3 {
     HRegion region = (HRegion) find(tableName);
     assertEquals(0, region.getLockedRows().size());
   }
-  private static Region find(final TableName tableName)
+  private static HRegion find(final TableName tableName)
       throws IOException, InterruptedException {
     HRegionServer rs = TEST_UTIL.getRSForFirstRegionInTable(tableName);
-    List<Region> regions = rs.getOnlineRegions(tableName);
+    List<HRegion> regions = rs.getRegions(tableName);
     assertEquals(1, regions.size());
     return regions.get(0);
   }
 
   private static <T extends RegionObserver> T find(final TableName tableName,
           Class<T> clz) throws IOException, InterruptedException {
-    Region region = find(tableName);
+    HRegion region = find(tableName);
     Coprocessor cp = region.getCoprocessorHost().findCoprocessor(clz.getName());
     assertTrue("The cp instance should be " + clz.getName()
             + ", current instance is " + cp.getClass().getName(), clz.isInstance(cp));
     return clz.cast(cp);
   }
 
-  public static class WatiingForMultiMutationsObserver implements RegionObserver {
+  public static class WaitingForMultiMutationsObserver
+      implements RegionCoprocessor, RegionObserver {
     final CountDownLatch latch = new CountDownLatch(1);
+
+    @Override
+    public Optional<RegionObserver> getRegionObserver() {
+      return Optional.of(this);
+    }
+
     @Override
     public void postBatchMutate(final ObserverContext<RegionCoprocessorEnvironment> c,
             final MiniBatchOperationInProgress<Mutation> miniBatchOp) throws IOException {
@@ -988,8 +1026,14 @@ public class TestFromClientSide3 {
     }
   }
 
-  public static class WatiingForScanObserver implements RegionObserver {
+  public static class WaitingForScanObserver implements RegionCoprocessor, RegionObserver {
     private final CountDownLatch latch = new CountDownLatch(1);
+
+    @Override
+    public Optional<RegionObserver> getRegionObserver() {
+      return Optional.of(this);
+    }
+
     @Override
     public void postBatchMutate(final ObserverContext<RegionCoprocessorEnvironment> c,
             final MiniBatchOperationInProgress<Mutation> miniBatchOp) throws IOException {

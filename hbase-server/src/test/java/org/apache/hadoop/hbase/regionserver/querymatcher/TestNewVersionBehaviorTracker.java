@@ -1,5 +1,4 @@
-/*
- *
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,31 +17,39 @@
  */
 package org.apache.hadoop.hbase.regionserver.querymatcher;
 
-import java.io.IOException;
+import static org.junit.Assert.assertEquals;
 
+import java.io.IOException;
+import org.apache.hadoop.hbase.CellComparator;
+import org.apache.hadoop.hbase.CellComparatorImpl;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.regionserver.querymatcher.DeleteTracker.DeleteResult;
 import org.apache.hadoop.hbase.regionserver.querymatcher.ScanQueryMatcher.MatchCode;
 import org.apache.hadoop.hbase.testclassification.RegionServerTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
-import static org.junit.Assert.assertEquals;
-
 @Category({ RegionServerTests.class, SmallTests.class })
 public class TestNewVersionBehaviorTracker {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestNewVersionBehaviorTracker.class);
 
   private final byte[] col1 = Bytes.toBytes("col1");
   private final byte[] col2 = Bytes.toBytes("col2");
   private final byte[] row = Bytes.toBytes("row");
   private final byte[] family = Bytes.toBytes("family");
   private final byte[] value = Bytes.toBytes("value");
-
+  private final CellComparator comparator = CellComparatorImpl.COMPARATOR;
   @Test
   public void testMaxVersionMask() {
-    NewVersionBehaviorTracker tracker = new NewVersionBehaviorTracker(null, 1, 3, 3, 10000);
+    NewVersionBehaviorTracker tracker =
+        new NewVersionBehaviorTracker(null, comparator, 1, 3, 3, 10000);
 
     KeyValue keyValue = new KeyValue(row, family, col1, 20000, KeyValue.Type.Put, value);
     keyValue.setTimestamp(20000);
@@ -81,7 +88,8 @@ public class TestNewVersionBehaviorTracker {
 
   @Test
   public void testVersionsDelete() {
-    NewVersionBehaviorTracker tracker = new NewVersionBehaviorTracker(null, 1, 3, 3, 10000);
+    NewVersionBehaviorTracker tracker =
+        new NewVersionBehaviorTracker(null, comparator, 1, 3, 3, 10000);
     KeyValue put = new KeyValue(row, family, col1, 20000, KeyValue.Type.Put, value);
     KeyValue delete = new KeyValue(row, family, col1, 20000, KeyValue.Type.DeleteColumn, value);
     delete.setSequenceId(1000);
@@ -109,7 +117,8 @@ public class TestNewVersionBehaviorTracker {
 
   @Test
   public void testVersionDelete() {
-    NewVersionBehaviorTracker tracker = new NewVersionBehaviorTracker(null, 1, 3, 3, 10000);
+    NewVersionBehaviorTracker tracker =
+        new NewVersionBehaviorTracker(null, comparator, 1, 3, 3, 10000);
     KeyValue put = new KeyValue(row, family, col1, 20000, KeyValue.Type.Put, value);
     KeyValue delete = new KeyValue(row, family, col1, 20000, KeyValue.Type.Delete, value);
     delete.setSequenceId(1000);
@@ -143,7 +152,8 @@ public class TestNewVersionBehaviorTracker {
 
   @Test
   public void testFamilyVersionsDelete() {
-    NewVersionBehaviorTracker tracker = new NewVersionBehaviorTracker(null, 1, 3, 3, 10000);
+    NewVersionBehaviorTracker tracker =
+        new NewVersionBehaviorTracker(null, comparator, 1, 3, 3, 10000);
 
     KeyValue delete = new KeyValue(row, family, null, 20000, KeyValue.Type.DeleteFamily, value);
     delete.setSequenceId(1000);
@@ -169,7 +179,8 @@ public class TestNewVersionBehaviorTracker {
 
   @Test
   public void testFamilyVersionDelete() {
-    NewVersionBehaviorTracker tracker = new NewVersionBehaviorTracker(null, 1, 3, 3, 10000);
+    NewVersionBehaviorTracker tracker =
+        new NewVersionBehaviorTracker(null, comparator, 1, 3, 3, 10000);
 
     KeyValue delete = new KeyValue(row, family, null, 20000, KeyValue.Type.DeleteFamilyVersion,
         value);
@@ -202,7 +213,8 @@ public class TestNewVersionBehaviorTracker {
 
   @Test
   public void testMinVersionsAndTTL() throws IOException {
-    NewVersionBehaviorTracker tracker = new NewVersionBehaviorTracker(null, 1, 3, 3, 30000);
+    NewVersionBehaviorTracker tracker =
+        new NewVersionBehaviorTracker(null, comparator, 1, 3, 3, 30000);
 
     KeyValue keyValue = new KeyValue(row, family, col1, 20000, KeyValue.Type.Put, value);
     keyValue.setTimestamp(20000);

@@ -1,4 +1,4 @@
-/*
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -39,20 +39,18 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FSDataOutputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.CellComparator;
+import org.apache.hadoop.hbase.ArrayBackedTag;
+import org.apache.hadoop.hbase.CellComparatorImpl;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.Tag;
-import org.apache.hadoop.hbase.ArrayBackedTag;
 import org.apache.hadoop.hbase.fs.HFileSystem;
 import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.io.compress.Compression.Algorithm;
@@ -69,21 +67,29 @@ import org.apache.hadoop.hbase.util.ClassSize;
 import org.apache.hadoop.io.WritableUtils;
 import org.apache.hadoop.io.compress.Compressor;
 import org.junit.Before;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameters;
 import org.mockito.Mockito;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category({IOTests.class, MediumTests.class})
 @RunWith(Parameterized.class)
 public class TestHFileBlock {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestHFileBlock.class);
+
   // change this value to activate more logs
   private static final boolean detailedLogging = false;
   private static final boolean[] BOOLEAN_VALUES = new boolean[] { false, true };
 
-  private static final Log LOG = LogFactory.getLog(TestHFileBlock.class);
+  private static final Logger LOG = LoggerFactory.getLogger(TestHFileBlock.class);
 
   static final Compression.Algorithm[] COMPRESSION_ALGORITHMS = { NONE, GZ };
 
@@ -124,7 +130,7 @@ public class TestHFileBlock {
   static int writeTestKeyValues(HFileBlock.Writer hbw, int seed, boolean includesMemstoreTS,
       boolean useTag) throws IOException {
     List<KeyValue> keyValues = new ArrayList<>();
-    Random randomizer = new Random(42l + seed); // just any fixed number
+    Random randomizer = new Random(42L + seed); // just any fixed number
 
     // generate keyValues
     for (int i = 0; i < NUM_KEYVALUES; ++i) {
@@ -175,7 +181,7 @@ public class TestHFileBlock {
 
     // sort it and write to stream
     int totalSize = 0;
-    Collections.sort(keyValues, CellComparator.COMPARATOR);
+    Collections.sort(keyValues, CellComparatorImpl.COMPARATOR);
 
     for (KeyValue kv : keyValues) {
       totalSize += kv.getLength();
@@ -418,7 +424,7 @@ public class TestHFileBlock {
                 .build();
           HFileBlock.FSReaderImpl hbr = new HFileBlock.FSReaderImpl(is, totalSize, meta);
           hbr.setDataBlockEncoder(dataBlockEncoder);
-          hbr.setIncludesMemstoreTS(includesMemstoreTS);
+          hbr.setIncludesMemStoreTS(includesMemstoreTS);
           HFileBlock blockFromHFile, blockUnpacked;
           int pos = 0;
           for (int blockId = 0; blockId < numBlocks; ++blockId) {

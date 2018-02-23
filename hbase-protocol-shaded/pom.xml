@@ -38,6 +38,14 @@
     <internal.protobuf.version>3.3.0</internal.protobuf.version>
   </properties>
   <build>
+    <resources>
+      <resource>
+        <directory>src/main/</directory>
+        <includes>
+          <include>**/*.proto</include>
+        </includes>
+      </resource>
+    </resources>
     <plugins>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -50,7 +58,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-source-plugin</artifactId>
-		  </plugin> 
+		  </plugin>
       <plugin>
         <!--Make it so assembly:single does nothing in here-->
         <artifactId>maven-assembly-plugin</artifactId>
@@ -100,30 +108,39 @@
            we run mvn install. There is probably a better way of avoiding the
            double interpolation but this is it for now.
         -->
-      <plugin> 
-        <groupId>com.google.code.maven-replacer-plugin</groupId> 
-        <artifactId>replacer</artifactId> 
-        <version>1.5.3</version> 
-        <executions> 
-          <execution> 
+      <plugin>
+        <groupId>com.google.code.maven-replacer-plugin</groupId>
+        <artifactId>replacer</artifactId>
+        <version>1.5.3</version>
+        <executions>
+          <execution>
             <phase>generate-sources</phase>
-            <goals> 
+            <goals>
               <goal>replace</goal>
-            </goals> 
-          </execution> 
-        </executions> 
-        <configuration> 
-          <basedir>${basedir}/target/generated-sources/</basedir>  
-            <includes>  
-                <include>**/*.java</include>  
-            </includes>  
+            </goals>
+          </execution>
+        </executions>
+        <configuration>
+          <basedir>${basedir}/target/generated-sources/</basedir>
+            <includes>
+                <include>**/*.java</include>
+            </includes>
             <replacements>
               <replacement>
-                <token>([^\.])com.google.protobuf</token> 
-                <value>$1org.apache.hadoop.hbase.shaded.com.google.protobuf</value> 
+                <token>([^\.])com.google.protobuf</token>
+                <value>$1org.apache.hbase.thirdparty.com.google.protobuf</value>
+              </replacement>
+              <replacement>
+                <token>(public)(\W+static)?(\W+final)?(\W+class)</token>
+                <value>@javax.annotation.Generated("proto") $1$2$3$4</value>
+              </replacement>
+              <!-- replacer doesn't support anchoring or negative lookbehind -->
+              <replacement>
+                <token>(@javax.annotation.Generated\("proto"\) ){2}</token>
+                <value>$1</value>
               </replacement>
             </replacements>
-        </configuration> 
+        </configuration>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
@@ -160,6 +177,7 @@
                   <exclude>junit:junit</exclude>
                   <exclude>log4j:log4j</exclude>
                   <exclude>commons-logging:commons-logging</exclude>
+                  <exclude>org.slf4j:slf4j-api</exclude>
                   <exclude>org.apache.yetus:audience-annotations</exclude>
                   <exclude>com.github.stephenc.fingbugs:*</exclude>
                   <exclude></exclude>
@@ -168,6 +186,13 @@
             </configuration>
           </execution>
         </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-checkstyle-plugin</artifactId>
+        <configuration>
+          <failOnViolation>true</failOnViolation>
+        </configuration>
       </plugin>
     </plugins>
     <pluginManagement>
@@ -229,6 +254,10 @@
       <groupId>junit</groupId>
       <artifactId>junit</artifactId>
       <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.htrace</groupId>
+      <artifactId>htrace-core4</artifactId>
     </dependency>
   </dependencies>
   <profiles>

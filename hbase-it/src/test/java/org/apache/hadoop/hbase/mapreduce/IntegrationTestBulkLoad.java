@@ -27,22 +27,19 @@ import java.util.ArrayList;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
-
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.lang3.RandomStringUtils;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
-import org.apache.hadoop.hbase.ClusterStatus.Option;
+import org.apache.hadoop.hbase.ClusterMetrics.Option;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
-import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.IntegrationTestBase;
 import org.apache.hadoop.hbase.IntegrationTestingUtility;
 import org.apache.hadoop.hbase.KeyValue;
@@ -55,12 +52,14 @@ import org.apache.hadoop.hbase.client.RegionLocator;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.Table;
+import org.apache.hadoop.hbase.client.TableDescriptor;
+import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.coprocessor.ObserverContext;
+import org.apache.hadoop.hbase.coprocessor.RegionCoprocessor;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.coprocessor.RegionObserver;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.hbase.regionserver.InternalScanner;
-import org.apache.hadoop.hbase.regionserver.RegionScanner;
 import org.apache.hadoop.hbase.testclassification.IntegrationTests;
 import org.apache.hadoop.hbase.tool.LoadIncrementalHFiles;
 import org.apache.hadoop.hbase.util.Bytes;
@@ -86,9 +85,10 @@ import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ToolRunner;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.base.Joiner;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Sets;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.apache.hbase.thirdparty.com.google.common.base.Joiner;
+import org.apache.hbase.thirdparty.com.google.common.collect.Sets;
 
 /**
  * Test Bulk Load and MR on a distributed cluster.
@@ -126,7 +126,7 @@ import org.apache.hadoop.hbase.shaded.com.google.common.collect.Sets;
 @Category(IntegrationTests.class)
 public class IntegrationTestBulkLoad extends IntegrationTestBase {
 
-  private static final Log LOG = LogFactory.getLog(IntegrationTestBulkLoad.class);
+  private static final Logger LOG = LoggerFactory.getLogger(IntegrationTestBulkLoad.class);
 
   private static final byte[] CHAIN_FAM = Bytes.toBytes("L");
   private static final byte[] SORT_FAM  = Bytes.toBytes("S");
@@ -155,19 +155,24 @@ public class IntegrationTestBulkLoad extends IntegrationTestBase {
   private boolean load = false;
   private boolean check = false;
 
-  public static class SlowMeCoproScanOperations implements RegionObserver {
+  public static class SlowMeCoproScanOperations implements RegionCoprocessor, RegionObserver {
     static final AtomicLong sleepTime = new AtomicLong(2000);
     Random r = new Random();
     AtomicLong countOfNext = new AtomicLong(0);
     AtomicLong countOfOpen = new AtomicLong(0);
     public SlowMeCoproScanOperations() {}
+
     @Override
-    public RegionScanner preScannerOpen(final ObserverContext<RegionCoprocessorEnvironment> e,
-        final Scan scan, final RegionScanner s) throws IOException {
+    public Optional<RegionObserver> getRegionObserver() {
+      return Optional.of(this);
+    }
+
+    @Override
+    public void preScannerOpen(final ObserverContext<RegionCoprocessorEnvironment> e,
+        final Scan scan) throws IOException {
       if (countOfOpen.incrementAndGet() == 2) { //slowdown openScanner randomly
         slowdownCode(e);
       }
-      return s;
     }
 
     @Override
@@ -190,7 +195,7 @@ public class IntegrationTestBulkLoad extends IntegrationTestBase {
             Thread.sleep(sleepTime.get());
           }
         } catch (InterruptedException e1) {
-          LOG.error(e1);
+          LOG.error(e1.toString(), e1);
         }
       }
     }
@@ -205,9 +210,10 @@ public class IntegrationTestBulkLoad extends IntegrationTestBase {
 
     TableName t = getTablename();
     Admin admin = util.getAdmin();
-    HTableDescriptor desc = admin.getTableDescriptor(t);
-    desc.addCoprocessor(SlowMeCoproScanOperations.class.getName());
-    HBaseTestingUtility.modifyTableSync(admin, desc);
+    TableDescriptor desc = admin.getDescriptor(t);
+    TableDescriptorBuilder builder = TableDescriptorBuilder.newBuilder(desc);
+    builder.addCoprocessor(SlowMeCoproScanOperations.class.getName());
+    HBaseTestingUtility.modifyTableSync(admin, builder.build());
   }
 
   @Test
@@ -750,8 +756,8 @@ public class IntegrationTestBulkLoad extends IntegrationTestBase {
     if (util.isDistributedCluster()) {
       util.getConfiguration().setIfUnset(NUM_MAPS_KEY,
           Integer.toString(util.getAdmin()
-                               .getClusterStatus(EnumSet.of(Option.LIVE_SERVERS))
-                               .getServersSize() * 10)
+                               .getClusterMetrics(EnumSet.of(Option.LIVE_SERVERS))
+                               .getLiveServerMetrics().size() * 10)
       );
       util.getConfiguration().setIfUnset(NUM_IMPORT_ROUNDS_KEY, "5");
     } else {

@@ -23,11 +23,12 @@ import static org.junit.Assert.fail;
 
 import java.io.IOException;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.CategoryBasedTimeout;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HConstants;
@@ -46,21 +47,21 @@ import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
-import org.junit.rules.TestRule;
 
 /**
  * Test restore snapshots from the client
  */
 @Category({LargeTests.class, ClientTests.class})
 public class TestRestoreSnapshotFromClient {
-  @Rule public final TestRule timeout = CategoryBasedTimeout.builder()
-      .withTimeout(this.getClass())
-      .withLookingForStuckThread(true)
-      .build();
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestRestoreSnapshotFromClient.class);
 
   protected final static HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
 
@@ -68,13 +69,13 @@ public class TestRestoreSnapshotFromClient {
   protected final byte[] TEST_FAMILY2 = Bytes.toBytes("cf2");
 
   protected TableName tableName;
-  private byte[] emptySnapshot;
-  private byte[] snapshotName0;
-  private byte[] snapshotName1;
-  private byte[] snapshotName2;
-  private int snapshot0Rows;
-  private int snapshot1Rows;
-  private Admin admin;
+  protected byte[] emptySnapshot;
+  protected byte[] snapshotName0;
+  protected byte[] snapshotName1;
+  protected byte[] snapshotName2;
+  protected int snapshot0Rows;
+  protected int snapshot1Rows;
+  protected Admin admin;
 
   @Rule
   public TestName name = new TestName();
@@ -205,7 +206,7 @@ public class TestRestoreSnapshotFromClient {
     HTableDescriptor htd = admin.getTableDescriptor(tableName);
     assertEquals(2, htd.getFamilies().size());
     SnapshotTestingUtils.loadData(TEST_UTIL, tableName, 500, TEST_FAMILY2);
-    long snapshot2Rows = snapshot1Rows + 500;
+    long snapshot2Rows = snapshot1Rows + 500L;
     assertEquals(snapshot2Rows, countRows(table));
     assertEquals(500, countRows(table, TEST_FAMILY2));
     Set<String> fsFamilies = getFamiliesFromFS(tableName);
@@ -295,6 +296,25 @@ public class TestRestoreSnapshotFromClient {
     }
   }
 
+  @Test
+  public void testRestoreSnapshotAfterSplittingRegions() throws IOException, InterruptedException {
+    List<RegionInfo> regionInfos = admin.getRegions(tableName);
+    RegionReplicaUtil.removeNonDefaultRegions(regionInfos);
+
+    // Split the first region
+    splitRegion(regionInfos.get(0));
+
+    // Take a snapshot
+    admin.snapshot(snapshotName1, tableName);
+
+    // Restore the snapshot
+    admin.disableTable(tableName);
+    admin.restoreSnapshot(snapshotName1);
+    admin.enableTable(tableName);
+
+    verifyRowCount(TEST_UTIL, tableName, snapshot1Rows);
+  }
+
   // ==========================================================================
   //  Helpers
   // ==========================================================================
@@ -321,5 +341,10 @@ public class TestRestoreSnapshotFromClient {
 
   protected int countRows(final Table table, final byte[]... families) throws IOException {
     return TEST_UTIL.countRows(table, families);
+  }
+
+  protected void splitRegion(final RegionInfo regionInfo) throws IOException {
+    byte[][] splitPoints = Bytes.split(regionInfo.getStartKey(), regionInfo.getEndKey(), 1);
+    admin.split(regionInfo.getTable(), splitPoints[1]);
   }
 }

@@ -23,9 +23,11 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.hadoop.hbase.HRegionInfo;
-import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.wal.WAL;
+import org.apache.yetus.audience.InterfaceAudience;
+
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 /**
  * Services a Store needs from a Region.
@@ -63,11 +65,11 @@ public class RegionServicesForStores {
     region.unblockUpdates();
   }
 
-  public void addMemstoreSize(MemstoreSize size) {
-    region.addAndGetMemstoreSize(size);
+  public void addMemStoreSize(MemStoreSize size) {
+    region.incMemStoreSize(size);
   }
 
-  public HRegionInfo getRegionInfo() {
+  public RegionInfo getRegionInfo() {
     return region.getRegionInfo();
   }
 
@@ -77,16 +79,16 @@ public class RegionServicesForStores {
 
   public ThreadPoolExecutor getInMemoryCompactionPool() { return INMEMORY_COMPACTION_POOL; }
 
-  public long getMemstoreFlushSize() {
-    return region.getMemstoreFlushSize();
+  public long getMemStoreFlushSize() {
+    return region.getMemStoreFlushSize();
   }
 
   public int getNumStores() {
     return region.getTableDescriptor().getColumnFamilyCount();
   }
 
-  // methods for tests
-  long getMemstoreSize() {
-    return region.getMemstoreSize();
+  @VisibleForTesting
+  long getMemStoreSize() {
+    return region.getMemStoreDataSize();
   }
 }

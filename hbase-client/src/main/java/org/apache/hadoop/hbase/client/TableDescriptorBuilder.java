@@ -33,25 +33,26 @@ import java.util.TreeSet;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.stream.Stream;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Coprocessor;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.exceptions.DeserializationException;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * @since 2.0.0
  */
 @InterfaceAudience.Public
 public class TableDescriptorBuilder {
-  public static final Log LOG = LogFactory.getLog(TableDescriptorBuilder.class);
+  public static final Logger LOG = LoggerFactory.getLogger(TableDescriptorBuilder.class);
   @InterfaceAudience.Private
   public static final String SPLIT_POLICY = "SPLIT_POLICY";
   private static final Bytes SPLIT_POLICY_KEY = new Bytes(Bytes.toBytes(SPLIT_POLICY));
@@ -217,6 +218,9 @@ public class TableDescriptorBuilder {
   /**
    * Table descriptor for namespace table
    */
+  // TODO We used to set CacheDataInL1 for NS table. When we have BucketCache in file mode, now the
+  // NS data goes to File mode BC only. Test how that affect the system. If too much, we have to
+  // rethink about adding back the setCacheDataInL1 for NS table.
   public static final TableDescriptor NAMESPACE_TABLEDESC
     = TableDescriptorBuilder.newBuilder(TableName.NAMESPACE_TABLE_NAME)
                             .addColumnFamily(ColumnFamilyDescriptorBuilder.newBuilder(NAMESPACE_FAMILY_INFO_BYTES)
@@ -225,9 +229,6 @@ public class TableDescriptorBuilder {
                               .setInMemory(true)
                               .setBlocksize(8 * 1024)
                               .setScope(HConstants.REPLICATION_SCOPE_LOCAL)
-                              // Enable cache of data blocks in L1 if more than one caching tier deployed:
-                              // e.g. if using CombinedBlockCache (BucketCache).
-                              .setCacheDataInL1(true)
                               .build())
                             .build();
   private final ModifyableTableDescriptor desc;
@@ -379,8 +380,8 @@ public class TableDescriptorBuilder {
     return this;
   }
 
-  public TableDescriptorBuilder setRegionMemstoreReplication(boolean memstoreReplication) {
-    desc.setRegionMemstoreReplication(memstoreReplication);
+  public TableDescriptorBuilder setRegionMemStoreReplication(boolean memstoreReplication) {
+    desc.setRegionMemStoreReplication(memstoreReplication);
     return this;
   }
 
@@ -406,6 +407,24 @@ public class TableDescriptorBuilder {
 
   public TableDescriptorBuilder setValue(final byte[] key, final byte[] value) {
     desc.setValue(key, value);
+    return this;
+  }
+
+  /**
+   * Sets replication scope all & only the columns already in the builder. Columns added later won't
+   * be backfilled with replication scope.
+   * @param scope replication scope
+   * @return a TableDescriptorBuilder
+   */
+  public TableDescriptorBuilder setReplicationScope(int scope) {
+    Map<byte[], ColumnFamilyDescriptor> newFamilies = new TreeMap<>(Bytes.BYTES_RAWCOMPARATOR);
+    newFamilies.putAll(desc.families);
+    newFamilies
+        .forEach((cf, cfDesc) -> {
+          desc.removeColumnFamily(cf);
+          desc.addColumnFamily(ColumnFamilyDescriptorBuilder.newBuilder(cfDesc).setScope(scope)
+              .build());
+        });
     return this;
   }
 
@@ -1067,7 +1086,7 @@ public class TableDescriptorBuilder {
      * @return true if the read-replicas memstore replication is enabled.
      */
     @Override
-    public boolean hasRegionMemstoreReplication() {
+    public boolean hasRegionMemStoreReplication() {
       return getOrDefault(REGION_MEMSTORE_REPLICATION_KEY, Boolean::valueOf, DEFAULT_REGION_MEMSTORE_REPLICATION);
     }
 
@@ -1081,7 +1100,7 @@ public class TableDescriptorBuilder {
      * have new data only when the primary flushes the memstore.
      * @return the modifyable TD
      */
-    public ModifyableTableDescriptor setRegionMemstoreReplication(boolean memstoreReplication) {
+    public ModifyableTableDescriptor setRegionMemStoreReplication(boolean memstoreReplication) {
       setValue(REGION_MEMSTORE_REPLICATION_KEY, Boolean.toString(memstoreReplication));
       // If the memstore replication is setup, we do not have to wait for observing a flush event
       // from primary before starting to serve reads, because gaps from replication is not applicable

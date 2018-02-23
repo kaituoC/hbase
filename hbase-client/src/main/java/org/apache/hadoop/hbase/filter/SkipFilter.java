@@ -26,7 +26,7 @@ import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.exceptions.DeserializationException;
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.FilterProtos;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.InvalidProtocolBufferException;
+import org.apache.hbase.thirdparty.com.google.protobuf.InvalidProtocolBufferException;
 
 /**
  * A wrapper filter that filters an entire row if any of the Cell checks do
@@ -78,11 +78,17 @@ public class SkipFilter extends FilterBase {
     return false;
   }
 
+  @Deprecated
   @Override
-  public ReturnCode filterKeyValue(Cell v) throws IOException {
-    ReturnCode c = filter.filterKeyValue(v);
-    changeFR(c != ReturnCode.INCLUDE);
-    return c;
+  public ReturnCode filterKeyValue(final Cell c) throws IOException {
+    return filterCell(c);
+  }
+
+  @Override
+  public ReturnCode filterCell(final Cell c) throws IOException {
+    ReturnCode rc = filter.filterCell(c);
+    changeFR(rc != ReturnCode.INCLUDE);
+    return rc;
   }
 
   @Override
@@ -90,10 +96,12 @@ public class SkipFilter extends FilterBase {
     return filter.transformCell(v);
   }
 
+  @Override
   public boolean filterRow() {
     return filterRow;
   }
     
+  @Override
   public boolean hasFilterRow() {
     return true;
   }
@@ -101,6 +109,7 @@ public class SkipFilter extends FilterBase {
   /**
    * @return The filter serialized using pb
    */
+  @Override
   public byte[] toByteArray() throws IOException {
     FilterProtos.SkipFilter.Builder builder =
       FilterProtos.SkipFilter.newBuilder();
@@ -130,10 +139,11 @@ public class SkipFilter extends FilterBase {
   }
 
   /**
-   * @param other
+   * @param o the other filter to compare with
    * @return true if and only if the fields of the filter that are serialized
    * are equal to the corresponding fields in other.  Used for testing.
    */
+  @Override
   boolean areSerializedFieldsEqual(Filter o) {
     if (o == this) return true;
     if (!(o instanceof SkipFilter)) return false;
@@ -142,6 +152,7 @@ public class SkipFilter extends FilterBase {
     return getFilter().areSerializedFieldsEqual(other.getFilter());
   }
 
+  @Override
   public boolean isFamilyEssential(byte[] name) throws IOException {
     return filter.isFamilyEssential(name);
   }

@@ -1,12 +1,13 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to you under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -28,17 +29,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.concurrent.atomic.AtomicLong;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Append;
@@ -48,6 +46,7 @@ import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Increment;
 import org.apache.hadoop.hbase.client.Mutation;
 import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.RpcRetryingCaller;
@@ -68,17 +67,25 @@ import org.apache.hadoop.util.StringUtils;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * End-to-end test class for filesystem space quotas.
  */
 @Category(LargeTests.class)
 public class TestSpaceQuotas {
-  private static final Log LOG = LogFactory.getLog(TestSpaceQuotas.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestSpaceQuotas.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestSpaceQuotas.class);
   private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   // Global for all tests in the class
   private static final AtomicLong COUNTER = new AtomicLong(0);
@@ -232,7 +239,7 @@ public class TestSpaceQuotas {
     }
   }
 
-  @Test(timeout=120000)
+  @Test
   public void testNoBulkLoadsWithNoWrites() throws Exception {
     Put p = new Put(Bytes.toBytes("to_reject"));
     p.addColumn(
@@ -252,7 +259,7 @@ public class TestSpaceQuotas {
     }
   }
 
-  @Test(timeout=120000)
+  @Test
   public void testAtomicBulkLoadUnderQuota() throws Exception {
     // Need to verify that if the batch of hfiles cannot be loaded, none are loaded.
     TableName tn = helper.createTableWithRegions(10);
@@ -265,7 +272,7 @@ public class TestSpaceQuotas {
     HRegionServer rs = TEST_UTIL.getMiniHBaseCluster().getRegionServer(0);
     RegionServerSpaceQuotaManager spaceQuotaManager = rs.getRegionServerSpaceQuotaManager();
     Map<TableName,SpaceQuotaSnapshot> snapshots = spaceQuotaManager.copyQuotaSnapshots();
-    Map<HRegionInfo,Long> regionSizes = getReportedSizesForTable(tn);
+    Map<RegionInfo,Long> regionSizes = getReportedSizesForTable(tn);
     while (true) {
       SpaceQuotaSnapshot snapshot = snapshots.get(tn);
       if (snapshot != null && snapshot.getLimit() > 0) {
@@ -323,7 +330,7 @@ public class TestSpaceQuotas {
     }
   }
 
-  @Test(timeout=120000)
+  @Test
   public void testTableQuotaOverridesNamespaceQuota() throws Exception {
     final SpaceViolationPolicy policy = SpaceViolationPolicy.NO_INSERTS;
     final TableName tn = helper.createTableWithRegions(10);
@@ -348,11 +355,11 @@ public class TestSpaceQuotas {
     verifyViolation(policy, tn, p);
   }
 
-  private Map<HRegionInfo,Long> getReportedSizesForTable(TableName tn) {
+  private Map<RegionInfo,Long> getReportedSizesForTable(TableName tn) {
     HMaster master = TEST_UTIL.getMiniHBaseCluster().getMaster();
     MasterQuotaManager quotaManager = master.getMasterQuotaManager();
-    Map<HRegionInfo,Long> filteredRegionSizes = new HashMap<>();
-    for (Entry<HRegionInfo,Long> entry : quotaManager.snapshotRegionSizes().entrySet()) {
+    Map<RegionInfo,Long> filteredRegionSizes = new HashMap<>();
+    for (Entry<RegionInfo,Long> entry : quotaManager.snapshotRegionSizes().entrySet()) {
       if (entry.getKey().getTable().equals(tn)) {
         filteredRegionSizes.put(entry.getKey(), entry.getValue());
       }

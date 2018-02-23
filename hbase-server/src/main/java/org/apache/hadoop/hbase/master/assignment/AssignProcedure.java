@@ -1,4 +1,4 @@
-/**
+/*
  *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -20,12 +20,11 @@
 package org.apache.hadoop.hbase.master.assignment;
 
 import java.io.IOException;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.hbase.HRegionInfo;
+import java.util.Comparator;
+
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.RetriesExhaustedException;
 import org.apache.hadoop.hbase.client.TableState;
 import org.apache.hadoop.hbase.exceptions.UnexpectedStateException;
@@ -38,6 +37,9 @@ import org.apache.hadoop.hbase.procedure2.ProcedureMetrics;
 import org.apache.hadoop.hbase.procedure2.ProcedureStateSerializer;
 import org.apache.hadoop.hbase.procedure2.ProcedureSuspendedException;
 import org.apache.hadoop.hbase.procedure2.RemoteProcedureDispatcher.RemoteOperation;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.AssignRegionStateData;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.RegionTransitionState;
@@ -69,8 +71,11 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProto
  */
 @InterfaceAudience.Private
 public class AssignProcedure extends RegionTransitionProcedure {
-  private static final Log LOG = LogFactory.getLog(AssignProcedure.class);
+  private static final Logger LOG = LoggerFactory.getLogger(AssignProcedure.class);
 
+  /**
+   * Set to true when we need recalibrate -- choose a new target -- because original assign failed.
+   */
   private boolean forceNewPlan = false;
 
   /**
@@ -82,24 +87,24 @@ public class AssignProcedure extends RegionTransitionProcedure {
    */
   protected volatile ServerName targetServer;
 
+  /**
+   * Comparator that will sort AssignProcedures so meta assigns come first, then system table
+   * assigns and finally user space assigns.
+   */
+  public static final CompareAssignProcedure COMPARATOR = new CompareAssignProcedure();
+
   public AssignProcedure() {
     // Required by the Procedure framework to create the procedure on replay
     super();
   }
 
-  public AssignProcedure(final HRegionInfo regionInfo) {
-    this(regionInfo, false);
-  }
-
-  public AssignProcedure(final HRegionInfo regionInfo, final boolean forceNewPlan) {
+  public AssignProcedure(final RegionInfo regionInfo) {
     super(regionInfo);
-    this.forceNewPlan = forceNewPlan;
     this.targetServer = null;
   }
 
-  public AssignProcedure(final HRegionInfo regionInfo, final ServerName destinationServer) {
+  public AssignProcedure(final RegionInfo regionInfo, final ServerName destinationServer) {
     super(regionInfo);
-    this.forceNewPlan = false;
     this.targetServer = destinationServer;
   }
 
@@ -123,7 +128,7 @@ public class AssignProcedure extends RegionTransitionProcedure {
       throws IOException {
     final AssignRegionStateData.Builder state = AssignRegionStateData.newBuilder()
         .setTransitionState(getTransitionState())
-        .setRegionInfo(HRegionInfo.convert(getRegionInfo()));
+        .setRegionInfo(ProtobufUtil.toRegionInfo(getRegionInfo()));
     if (forceNewPlan) {
       state.setForceNewPlan(true);
     }
@@ -138,7 +143,7 @@ public class AssignProcedure extends RegionTransitionProcedure {
       throws IOException {
     final AssignRegionStateData state = serializer.deserialize(AssignRegionStateData.class);
     setTransitionState(state.getTransitionState());
-    setRegionInfo(HRegionInfo.convert(state.getRegionInfo()));
+    setRegionInfo(ProtobufUtil.toRegionInfo(state.getRegionInfo()));
     forceNewPlan = state.getForceNewPlan();
     if (state.hasTargetServer()) {
       this.targetServer = ProtobufUtil.toServerName(state.getTargetServer());
@@ -153,7 +158,7 @@ public class AssignProcedure extends RegionTransitionProcedure {
       LOG.info("Assigned, not reassigning; " + this + "; " + regionNode.toShortString());
       return false;
     }
-    // Don't assign if table is in disabling of disabled state.
+    // Don't assign if table is in disabling or disabled state.
     TableStateManager tsm = env.getMasterServices().getTableStateManager();
     TableName tn = regionNode.getRegionInfo().getTable();
     if (tsm.isTableState(tn, TableState.State.DISABLING, TableState.State.DISABLED)) {
@@ -161,7 +166,7 @@ public class AssignProcedure extends RegionTransitionProcedure {
       return false;
     }
     // If the region is SPLIT, we can't assign it. But state might be CLOSED, rather than
-    // SPLIT which is what a region gets set to when Unassigned as part of SPLIT. FIX.
+    // SPLIT which is what a region gets set to when unassigned as part of SPLIT. FIX.
     if (regionNode.isInState(State.SPLIT) ||
         (regionNode.getRegionInfo().isOffline() && regionNode.getRegionInfo().isSplit())) {
       LOG.info("SPLIT, cannot be assigned; " + this + "; " + regionNode +
@@ -196,6 +201,10 @@ public class AssignProcedure extends RegionTransitionProcedure {
           // Try and keep the location we had before we offlined.
           retain = true;
           regionNode.setRegionLocation(lastRegionLocation);
+        } else if (regionNode.getLastHost() != null) {
+          retain = true;
+          LOG.info("Setting lastHost as the region location " + regionNode.getLastHost());
+          regionNode.setRegionLocation(regionNode.getLastHost());
         }
       }
     }
@@ -346,7 +355,7 @@ public class AssignProcedure extends RegionTransitionProcedure {
   @Override
   public ServerName getServer(final MasterProcedureEnv env) {
     RegionStateNode node =
-        env.getAssignmentManager().getRegionStates().getRegionNode(this.getRegionInfo());
+        env.getAssignmentManager().getRegionStates().getRegionStateNode(this.getRegionInfo());
     if (node == null) return null;
     return node.getRegionLocation();
   }
@@ -354,5 +363,33 @@ public class AssignProcedure extends RegionTransitionProcedure {
   @Override
   protected ProcedureMetrics getProcedureMetrics(MasterProcedureEnv env) {
     return env.getAssignmentManager().getAssignmentManagerMetrics().getAssignProcMetrics();
+  }
+
+  /**
+   * Sort AssignProcedures such that meta and system assigns come first before user-space assigns.
+   * Have to do it this way w/ distinct Comparator because Procedure is already Comparable on
+   * 'Env'(?).
+   */
+  public static class CompareAssignProcedure implements Comparator<AssignProcedure> {
+    @Override
+    public int compare(AssignProcedure left, AssignProcedure right) {
+      if (left.getRegionInfo().isMetaRegion()) {
+        if (right.getRegionInfo().isMetaRegion()) {
+          return RegionInfo.COMPARATOR.compare(left.getRegionInfo(), right.getRegionInfo());
+        }
+        return -1;
+      } else if (right.getRegionInfo().isMetaRegion()) {
+        return +1;
+      }
+      if (left.getRegionInfo().getTable().isSystemTable()) {
+        if (right.getRegionInfo().getTable().isSystemTable()) {
+          return RegionInfo.COMPARATOR.compare(left.getRegionInfo(), right.getRegionInfo());
+        }
+        return -1;
+      } else if (right.getRegionInfo().getTable().isSystemTable()) {
+        return +1;
+      }
+      return RegionInfo.COMPARATOR.compare(left.getRegionInfo(), right.getRegionInfo());
+    }
   }
 }

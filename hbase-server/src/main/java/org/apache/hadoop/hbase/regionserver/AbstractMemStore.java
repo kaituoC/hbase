@@ -1,4 +1,4 @@
-/**
+/*
  *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -18,18 +18,18 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 import java.io.IOException;
 import java.util.List;
 import java.util.NavigableSet;
 import java.util.SortedSet;
 
-import org.apache.commons.logging.Log;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
 import org.apache.hadoop.hbase.exceptions.UnexpectedStateException;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ClassSize;
@@ -54,7 +54,7 @@ public abstract class AbstractMemStore implements MemStore {
   // Used to track when to flush
   private volatile long timeOfOldestEdit;
 
-  public final static long FIXED_OVERHEAD = ClassSize.OBJECT
+  public final static long FIXED_OVERHEAD = (long) ClassSize.OBJECT
           + (4 * ClassSize.REFERENCE)
           + (2 * Bytes.SIZEOF_LONG); // snapshotId, timeOfOldestEdit
 
@@ -96,15 +96,15 @@ public abstract class AbstractMemStore implements MemStore {
   public abstract void updateLowestUnflushedSequenceIdInWAL(boolean onlyIfMoreRecent);
 
   @Override
-  public void add(Iterable<Cell> cells, MemstoreSize memstoreSize) {
+  public void add(Iterable<Cell> cells, MemStoreSizing memstoreSizing) {
     for (Cell cell : cells) {
-      add(cell, memstoreSize);
+      add(cell, memstoreSizing);
     }
   }
 
   @Override
-  public void add(Cell cell, MemstoreSize memstoreSize) {
-    Cell toAdd = maybeCloneWithAllocator(cell);
+  public void add(Cell cell, MemStoreSizing memstoreSizing) {
+    Cell toAdd = maybeCloneWithAllocator(cell, false);
     boolean mslabUsed = (toAdd != cell);
     // This cell data is backed by the same byte[] where we read request in RPC(See HBASE-15180). By
     // default MSLAB is ON and we might have copied cell to MSLAB area. If not we must do below deep
@@ -118,7 +118,7 @@ public abstract class AbstractMemStore implements MemStore {
     if (!mslabUsed) {
       toAdd = deepCopyIfNeeded(toAdd);
     }
-    internalAdd(toAdd, mslabUsed, memstoreSize);
+    internalAdd(toAdd, mslabUsed, memstoreSizing);
   }
 
   private static Cell deepCopyIfNeeded(Cell cell) {
@@ -129,9 +129,9 @@ public abstract class AbstractMemStore implements MemStore {
   }
 
   @Override
-  public void upsert(Iterable<Cell> cells, long readpoint, MemstoreSize memstoreSize) {
+  public void upsert(Iterable<Cell> cells, long readpoint, MemStoreSizing memstoreSizing) {
     for (Cell cell : cells) {
-      upsert(cell, readpoint, memstoreSize);
+      upsert(cell, readpoint, memstoreSizing);
     }
   }
 
@@ -166,13 +166,19 @@ public abstract class AbstractMemStore implements MemStore {
   }
 
   @Override
-  public MemstoreSize getSnapshotSize() {
-    return new MemstoreSize(this.snapshot.keySize(), this.snapshot.heapSize());
+  public MemStoreSize getSnapshotSize() {
+    return getSnapshotSizing();
+  }
+
+  MemStoreSizing getSnapshotSizing() {
+    return new MemStoreSizing(this.snapshot.keySize(),
+        this.snapshot.heapSize(),
+        this.snapshot.offHeapSize());
   }
 
   @Override
   public String toString() {
-    StringBuffer buf = new StringBuffer();
+    StringBuilder buf = new StringBuilder();
     int i = 1;
     try {
       for (Segment segment : getSegments()) {
@@ -189,7 +195,7 @@ public abstract class AbstractMemStore implements MemStore {
     return conf;
   }
 
-  protected void dump(Log log) {
+  protected void dump(Logger log) {
     active.dump(log);
     snapshot.dump(log);
   }
@@ -210,7 +216,7 @@ public abstract class AbstractMemStore implements MemStore {
    * @param readpoint readpoint below which we can safely remove duplicate KVs
    * @param memstoreSize
    */
-  private void upsert(Cell cell, long readpoint, MemstoreSize memstoreSize) {
+  private void upsert(Cell cell, long readpoint, MemStoreSizing memstoreSizing) {
     // Add the Cell to the MemStore
     // Use the internalAdd method here since we (a) already have a lock
     // and (b) cannot safely use the MSLAB here without potentially
@@ -221,7 +227,7 @@ public abstract class AbstractMemStore implements MemStore {
     // must do below deep copy. Or else we will keep referring to the bigger chunk of memory and
     // prevent it from getting GCed.
     cell = deepCopyIfNeeded(cell);
-    this.active.upsert(cell, readpoint, memstoreSize);
+    this.active.upsert(cell, readpoint, memstoreSizing);
     setOldestEditTimeToNow();
     checkActiveSize();
   }
@@ -264,8 +270,21 @@ public abstract class AbstractMemStore implements MemStore {
     return result;
   }
 
-  private Cell maybeCloneWithAllocator(Cell cell) {
-    return active.maybeCloneWithAllocator(cell);
+  /**
+   * If the segment has a memory allocator the cell is being cloned to this space, and returned;
+   * Otherwise the given cell is returned
+   *
+   * When a cell's size is too big (bigger than maxAlloc), it is not allocated on MSLAB.
+   * Since the process of flattening to CellChunkMap assumes that all cells are allocated on MSLAB,
+   * during this process, the input parameter forceCloneOfBigCell is set to 'true'
+   * and the cell is copied into MSLAB.
+   *
+   * @param cell the cell to clone
+   * @param forceCloneOfBigCell true only during the process of flattening to CellChunkMap.
+   * @return either the given cell or its clone
+   */
+  private Cell maybeCloneWithAllocator(Cell cell, boolean forceCloneOfBigCell) {
+    return active.maybeCloneWithAllocator(cell, forceCloneOfBigCell);
   }
 
   /*
@@ -277,8 +296,8 @@ public abstract class AbstractMemStore implements MemStore {
    * @param mslabUsed whether using MSLAB
    * @param memstoreSize
    */
-  private void internalAdd(final Cell toAdd, final boolean mslabUsed, MemstoreSize memstoreSize) {
-    active.add(toAdd, mslabUsed, memstoreSize);
+  private void internalAdd(final Cell toAdd, final boolean mslabUsed, MemStoreSizing memstoreSizing) {
+    active.add(toAdd, mslabUsed, memstoreSizing);
     setOldestEditTimeToNow();
     checkActiveSize();
   }

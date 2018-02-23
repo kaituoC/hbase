@@ -25,26 +25,31 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
-
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
-import org.apache.hadoop.hbase.HColumnDescriptor;
-import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.Scan;
+import org.apache.hadoop.hbase.client.TableDescriptorBuilder;
 import org.apache.hadoop.hbase.regionserver.HRegion.RegionScannerImpl;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.RegionServerTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
 @Category({ RegionServerTests.class, MediumTests.class })
 public class TestSwitchToStreamRead {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestSwitchToStreamRead.class);
 
   private static final HBaseTestingUtility UTIL = new HBaseTestingUtility();
 
@@ -67,7 +72,10 @@ public class TestSwitchToStreamRead {
     }
     VALUE_PREFIX = sb.append("-").toString();
     REGION = UTIL.createLocalHRegion(
-      new HTableDescriptor(TABLE_NAME).addFamily(new HColumnDescriptor(FAMILY).setBlocksize(1024)),
+      TableDescriptorBuilder.newBuilder(TABLE_NAME)
+          .addColumnFamily(
+            ColumnFamilyDescriptorBuilder.newBuilder(FAMILY).setBlocksize(1024).build())
+          .build(),
       null, null);
     for (int i = 0; i < 900; i++) {
       REGION
@@ -88,8 +96,8 @@ public class TestSwitchToStreamRead {
 
   @Test
   public void test() throws IOException {
-    try (RegionScanner scanner = REGION.getScanner(new Scan())) {
-      StoreScanner storeScanner = (StoreScanner) ((RegionScannerImpl) scanner)
+    try (RegionScannerImpl scanner = REGION.getScanner(new Scan())) {
+      StoreScanner storeScanner = (StoreScanner) (scanner)
           .getStoreHeapForTesting().getCurrentForTesting();
       for (KeyValueScanner kvs : storeScanner.getAllScannersForTesting()) {
         if (kvs instanceof StoreFileScanner) {
@@ -122,7 +130,7 @@ public class TestSwitchToStreamRead {
       }
     }
     // make sure all scanners are closed.
-    for (StoreFile sf : REGION.getStore(FAMILY).getStorefiles()) {
+    for (HStoreFile sf : REGION.getStore(FAMILY).getStorefiles()) {
       assertFalse(sf.isReferencedInReads());
     }
   }

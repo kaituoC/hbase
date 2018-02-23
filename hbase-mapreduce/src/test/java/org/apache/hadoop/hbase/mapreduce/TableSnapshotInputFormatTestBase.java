@@ -18,13 +18,14 @@
 
 package org.apache.hadoop.hbase.mapreduce;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import static org.junit.Assert.assertFalse;
+
+import java.io.IOException;
+import java.util.Arrays;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.CategoryBasedTimeout;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellScanner;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
@@ -41,19 +42,12 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.util.HFileArchiveUtil;
 import org.junit.Assert;
-import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
-
-import static org.junit.Assert.assertFalse;
-
-import java.io.IOException;
-import java.util.Arrays;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public abstract class TableSnapshotInputFormatTestBase {
-  private static final Log LOG = LogFactory.getLog(TableSnapshotInputFormatTestBase.class);
-  @Rule public final TestRule timeout = CategoryBasedTimeout.builder().
-      withTimeout(this.getClass()).withLookingForStuckThread(true).build();
+  private static final Logger LOG = LoggerFactory.getLogger(TableSnapshotInputFormatTestBase.class);
   protected final HBaseTestingUtility UTIL = new HBaseTestingUtility();
   protected static final int NUM_REGION_SERVERS = 2;
   protected static final byte[][] FAMILIES = {Bytes.toBytes("f1"), Bytes.toBytes("f2")};
@@ -78,10 +72,11 @@ public abstract class TableSnapshotInputFormatTestBase {
   }
 
   protected abstract void testWithMockedMapReduce(HBaseTestingUtility util, String snapshotName,
-    int numRegions, int expectedNumSplits) throws Exception;
+    int numRegions, int numSplitsPerRegion, int expectedNumSplits, boolean setLocalityEnabledTo)
+    throws Exception;
 
   protected abstract void testWithMapReduceImpl(HBaseTestingUtility util, TableName tableName,
-    String snapshotName, Path tableDir, int numRegions, int expectedNumSplits,
+    String snapshotName, Path tableDir, int numRegions, int numSplitsPerRegion, int expectedNumSplits,
     boolean shutdownCluster) throws Exception;
 
   protected abstract byte[] getStartRow();
@@ -90,28 +85,33 @@ public abstract class TableSnapshotInputFormatTestBase {
 
   @Test
   public void testWithMockedMapReduceSingleRegion() throws Exception {
-    testWithMockedMapReduce(UTIL, "testWithMockedMapReduceSingleRegion", 1, 1);
+    testWithMockedMapReduce(UTIL, "testWithMockedMapReduceSingleRegion", 1, 1, 1, true);
   }
 
   @Test
   public void testWithMockedMapReduceMultiRegion() throws Exception {
-    testWithMockedMapReduce(UTIL, "testWithMockedMapReduceMultiRegion", 10, 8);
+    testWithMockedMapReduce(UTIL, "testWithMockedMapReduceMultiRegion", 10, 1, 8, false);
   }
 
   @Test
   public void testWithMapReduceSingleRegion() throws Exception {
-    testWithMapReduce(UTIL, "testWithMapReduceSingleRegion", 1, 1, false);
+    testWithMapReduce(UTIL, "testWithMapReduceSingleRegion", 1, 1, 1, false);
   }
 
   @Test
   public void testWithMapReduceMultiRegion() throws Exception {
-    testWithMapReduce(UTIL, "testWithMapReduceMultiRegion", 10, 8, false);
+    testWithMapReduce(UTIL, "testWithMapReduceMultiRegion", 10, 1, 8, false);
+  }
+
+  @Test
+  public void testWithMapReduceMultipleMappersPerRegion() throws Exception {
+    testWithMapReduce(UTIL, "testWithMapReduceMultiRegion", 10, 5, 50, false);
   }
 
   @Test
   // run the MR job while HBase is offline
   public void testWithMapReduceAndOfflineHBaseMultiRegion() throws Exception {
-    testWithMapReduce(UTIL, "testWithMapReduceAndOfflineHBaseMultiRegion", 10, 8, true);
+    testWithMapReduce(UTIL, "testWithMapReduceAndOfflineHBaseMultiRegion", 10, 1, 8, true);
   }
 
   // Test that snapshot restore does not create back references in the HBase root dir.
@@ -159,13 +159,13 @@ public abstract class TableSnapshotInputFormatTestBase {
       String snapshotName, Path tmpTableDir) throws Exception;
 
   protected void testWithMapReduce(HBaseTestingUtility util, String snapshotName,
-      int numRegions, int expectedNumSplits, boolean shutdownCluster) throws Exception {
+      int numRegions, int numSplitsPerRegion, int expectedNumSplits, boolean shutdownCluster) throws Exception {
     setupCluster();
     try {
       Path tableDir = util.getDataTestDirOnTestFS(snapshotName);
       TableName tableName = TableName.valueOf("testWithMapReduce");
       testWithMapReduceImpl(util, tableName, snapshotName, tableDir, numRegions,
-        expectedNumSplits, shutdownCluster);
+              numSplitsPerRegion, expectedNumSplits, shutdownCluster);
     } finally {
       tearDownCluster();
     }

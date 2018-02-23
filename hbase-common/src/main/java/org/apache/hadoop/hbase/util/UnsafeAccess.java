@@ -23,10 +23,10 @@ import java.nio.ByteOrder;
 import java.security.AccessController;
 import java.security.PrivilegedAction;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.yetus.audience.InterfaceStability;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import sun.misc.Unsafe;
 import sun.nio.ch.DirectBuffer;
@@ -35,7 +35,7 @@ import sun.nio.ch.DirectBuffer;
 @InterfaceStability.Evolving
 public final class UnsafeAccess {
 
-  private static final Log LOG = LogFactory.getLog(UnsafeAccess.class);
+  private static final Logger LOG = LoggerFactory.getLogger(UnsafeAccess.class);
 
   static final Unsafe theUnsafe;
 
@@ -381,7 +381,7 @@ public final class UnsafeAccess {
     if (src.isDirect()) {
       srcAddress = srcOffset + ((DirectBuffer) src).address();
     } else {
-      srcAddress = srcOffset +  src.arrayOffset() + BYTE_ARRAY_BASE_OFFSET;
+      srcAddress = (long) srcOffset +  src.arrayOffset() + BYTE_ARRAY_BASE_OFFSET;
       srcBase = src.array();
     }
     if (dest.isDirect()) {

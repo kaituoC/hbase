@@ -17,7 +17,7 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 import java.util.Random;
 
@@ -72,7 +72,7 @@ public class ConstantSizeRegionSplitPolicy extends RegionSplitPolicy {
     boolean force = region.shouldForceSplit();
     boolean foundABigStore = false;
 
-    for (Store store : region.getStores()) {
+    for (HStore store : region.getStores()) {
       // If any of the stores are unable to split (eg they contain reference files)
       // then don't split
       if ((!store.canSplit())) {

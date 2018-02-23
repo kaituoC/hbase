@@ -17,32 +17,38 @@
  */
 package org.apache.hadoop.hbase.util;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.lang.management.GarbageCollectorMXBean;
 import java.lang.management.ManagementFactory;
 import java.util.Hashtable;
 import java.util.List;
-
+import java.util.Map;
 import javax.management.MalformedObjectNameException;
 import javax.management.ObjectName;
 import javax.management.openmbean.CompositeData;
-
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.testclassification.MiscTests;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
-import org.codehaus.jackson.JsonNode;
-import org.codehaus.jackson.JsonProcessingException;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category({MiscTests.class, SmallTests.class})
 public class TestJSONMetricUtil {
 
-  private static final Log LOG = LogFactory.getLog(TestJSONMetricUtil.class);
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestJSONMetricUtil.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestJSONMetricUtil.class);
 
   @Test
   public void testBuildHashtable() {
@@ -51,17 +57,14 @@ public class TestJSONMetricUtil {
     String[] values = {"MemoryPool", "Par Eden Space"};
     String[] values2 = {"MemoryPool", "Par Eden Space", "Test"};
     String[] emptyValue = {};
-    Hashtable<String, String> properties = JSONMetricUtil.buldKeyValueTable(keys, values);
-    Hashtable<String, String> nullObject = JSONMetricUtil.buldKeyValueTable(keys, values2);
-    Hashtable<String, String> nullObject1 = JSONMetricUtil.buldKeyValueTable(keys, emptyValue);
-    Hashtable<String, String> nullObject2 = JSONMetricUtil.buldKeyValueTable(emptyKey, values2);
-    Hashtable<String, String> nullObject3 = JSONMetricUtil.buldKeyValueTable(emptyKey, emptyValue);
-    assertEquals(properties.get("type"), values[0]);
-    assertEquals(properties.get("name"), values[1]);
-    assertEquals(nullObject, null);
-    assertEquals(nullObject1, null);
-    assertEquals(nullObject2, null);
-    assertEquals(nullObject3, null);
+    Map<String, String> properties = JSONMetricUtil.buldKeyValueTable(keys, values);
+    assertEquals(values[0], properties.get("type"));
+    assertEquals(values[1], properties.get("name"));
+
+    assertNull(JSONMetricUtil.buldKeyValueTable(keys, values2));
+    assertNull(JSONMetricUtil.buldKeyValueTable(keys, emptyValue));
+    assertNull(JSONMetricUtil.buldKeyValueTable(emptyKey, values2));
+    assertNull(JSONMetricUtil.buldKeyValueTable(emptyKey, emptyValue));
   }
 
   @Test
@@ -73,10 +76,10 @@ public class TestJSONMetricUtil {
     JsonNode r2 = JSONMetricUtil.searchJson(node, "data2");
     JsonNode r3 = JSONMetricUtil.searchJson(node, "data3");
     JsonNode r4 = JSONMetricUtil.searchJson(node, "data4");
-    assertEquals(r1.getIntValue(), 100);
-    assertEquals(r2.getTextValue(), "hello");
-    assertEquals(r3.get(0).getIntValue(), 1);
-    assertEquals(r4.getIntValue(), 0);
+    assertEquals(100, r1.intValue());
+    assertEquals("hello", r2.textValue());
+    assertEquals(1, r3.get(0).intValue());
+    assertEquals(0, r4.intValue());
   }
 
   @Test
@@ -86,7 +89,7 @@ public class TestJSONMetricUtil {
     Hashtable<String, String> properties = JSONMetricUtil.buldKeyValueTable(keys, values);
     ObjectName testObject = JSONMetricUtil.buildObjectName(JSONMetricUtil.JAVA_LANG_DOMAIN,
       properties);
-    assertEquals(testObject.getDomain(), JSONMetricUtil.JAVA_LANG_DOMAIN);
+    assertEquals(JSONMetricUtil.JAVA_LANG_DOMAIN, testObject.getDomain());
     assertEquals(testObject.getKeyPropertyList(), properties);
   }
 

@@ -29,13 +29,13 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Abortable;
 import org.apache.hadoop.hbase.DaemonThreadFactory;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.errorhandling.ForeignException;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Handle running each of the individual tasks for completing a backup procedure on a region
@@ -43,7 +43,7 @@ import org.apache.hadoop.hbase.errorhandling.ForeignException;
  */
 @InterfaceAudience.Private
 public class LogRollBackupSubprocedurePool implements Closeable, Abortable {
-  private static final Log LOG = LogFactory.getLog(LogRollBackupSubprocedurePool.class);
+  private static final Logger LOG = LoggerFactory.getLogger(LogRollBackupSubprocedurePool.class);
 
   /** Maximum number of concurrent snapshot region tasks that can run concurrently */
   private static final String CONCURENT_BACKUP_TASKS_KEY = "hbase.backup.region.concurrentTasks";
@@ -52,7 +52,7 @@ public class LogRollBackupSubprocedurePool implements Closeable, Abortable {
   private final ExecutorCompletionService<Void> taskPool;
   private final ThreadPoolExecutor executor;
   private volatile boolean aborted;
-  private final List<Future<Void>> futures = new ArrayList<Future<Void>>();
+  private final List<Future<Void>> futures = new ArrayList<>();
   private final String name;
 
   public LogRollBackupSubprocedurePool(String name, Configuration conf) {
@@ -64,9 +64,9 @@ public class LogRollBackupSubprocedurePool implements Closeable, Abortable {
     this.name = name;
     executor =
         new ThreadPoolExecutor(1, threads, keepAlive, TimeUnit.SECONDS,
-            new LinkedBlockingQueue<Runnable>(), new DaemonThreadFactory("rs(" + name
+            new LinkedBlockingQueue<>(), new DaemonThreadFactory("rs(" + name
                 + ")-backup-pool"));
-    taskPool = new ExecutorCompletionService<Void>(executor);
+    taskPool = new ExecutorCompletionService<>(executor);
   }
 
   /**

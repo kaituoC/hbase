@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,45 +17,52 @@
  */
 package org.apache.hadoop.hbase.master;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.*;
-import org.apache.hadoop.hbase.client.*;
-import org.apache.hadoop.hbase.master.assignment.AssignmentManager;
-import org.apache.hadoop.hbase.regionserver.HRegion;
-import org.apache.hadoop.hbase.testclassification.MasterTests;
-import org.apache.hadoop.hbase.testclassification.MediumTests;
-import org.apache.hadoop.hbase.testclassification.SmallTests;
-import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.hbase.util.PairOfSameType;
-import org.apache.hadoop.hbase.util.Threads;
-import static org.junit.Assert.assertArrayEquals;
-import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
-import org.junit.AfterClass;
-import org.junit.BeforeClass;
-import org.junit.Rule;
-import org.junit.Test;
-import org.junit.experimental.categories.Category;
-
-import org.junit.rules.TestName;
-import org.junit.rules.TestRule;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.assertNotNull;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
+import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HRegionLocation;
+import org.apache.hadoop.hbase.MetaMockingUtil;
+import org.apache.hadoop.hbase.MetaTableAccessor;
+import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.client.Admin;
+import org.apache.hadoop.hbase.client.Connection;
+import org.apache.hadoop.hbase.client.ConnectionFactory;
+import org.apache.hadoop.hbase.client.Get;
+import org.apache.hadoop.hbase.client.RegionInfo;
+import org.apache.hadoop.hbase.client.RegionLocator;
+import org.apache.hadoop.hbase.client.Result;
+import org.apache.hadoop.hbase.client.Table;
+import org.apache.hadoop.hbase.master.assignment.AssignmentManager;
+import org.apache.hadoop.hbase.testclassification.MasterTests;
+import org.apache.hadoop.hbase.testclassification.MediumTests;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.PairOfSameType;
+import org.apache.hadoop.hbase.util.Threads;
+import org.junit.AfterClass;
+import org.junit.BeforeClass;
+import org.junit.ClassRule;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.experimental.categories.Category;
+import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category({MasterTests.class, MediumTests.class})
 public class TestCatalogJanitorInMemoryStates {
-  private static final Log LOG = LogFactory.getLog(TestCatalogJanitorInMemoryStates.class);
-  @Rule public final TestRule timeout = CategoryBasedTimeout.builder().
-     withTimeout(this.getClass()).withLookingForStuckThread(true).build();
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestCatalogJanitorInMemoryStates.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestCatalogJanitorInMemoryStates.class);
   @Rule public final TestName name = new TestName();
   protected final static HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   private static byte [] ROW = Bytes.toBytes("testRow");
@@ -84,7 +90,7 @@ public class TestCatalogJanitorInMemoryStates {
   /**
    * Test clearing a split parent from memory.
    */
-  @Test(timeout = 180000)
+  @Test
   public void testInMemoryParentCleanup() throws IOException, InterruptedException {
     final AssignmentManager am = TEST_UTIL.getHBaseCluster().getMaster().getAssignmentManager();
     final ServerManager sm = TEST_UTIL.getHBaseCluster().getMaster().getServerManager();
@@ -129,7 +135,7 @@ public class TestCatalogJanitorInMemoryStates {
  * @return List of region locations
  * @throws IOException, InterruptedException
  */
-  private List<HRegionLocation> splitRegion(final HRegionInfo r)
+  private List<HRegionLocation> splitRegion(final RegionInfo r)
       throws IOException, InterruptedException {
     List<HRegionLocation> locations = new ArrayList<>();
     // Split this table in two.
@@ -137,7 +143,7 @@ public class TestCatalogJanitorInMemoryStates {
     Connection connection = TEST_UTIL.getConnection();
     admin.splitRegion(r.getEncodedNameAsBytes());
     admin.close();
-    PairOfSameType<HRegionInfo> regions = waitOnDaughters(r);
+    PairOfSameType<RegionInfo> regions = waitOnDaughters(r);
     if (regions != null) {
       try (RegionLocator rl = connection.getRegionLocator(r.getTable())) {
         locations.add(rl.getRegionLocation(regions.getFirst().getEncodedNameAsBytes()));
@@ -154,20 +160,20 @@ public class TestCatalogJanitorInMemoryStates {
    * @param r
    * @return Daughter regions; caller needs to check table actually split.
    */
-  private PairOfSameType<HRegionInfo> waitOnDaughters(final HRegionInfo r)
+  private PairOfSameType<RegionInfo> waitOnDaughters(final RegionInfo r)
       throws IOException {
     long start = System.currentTimeMillis();
-    PairOfSameType<HRegionInfo> pair = null;
+    PairOfSameType<RegionInfo> pair = null;
     try (Connection conn = ConnectionFactory.createConnection(TEST_UTIL.getConfiguration());
          Table metaTable = conn.getTable(TableName.META_TABLE_NAME)) {
       Result result = null;
-      HRegionInfo region = null;
+      RegionInfo region = null;
       while ((System.currentTimeMillis() - start) < 60000) {
         result = metaTable.get(new Get(r.getRegionName()));
         if (result == null) {
           break;
         }
-        region = MetaTableAccessor.getHRegionInfo(result);
+        region = MetaTableAccessor.getRegionInfo(result);
         if (region.isSplitParent()) {
           LOG.debug(region.toString() + " IS a parent!");
           pair = MetaTableAccessor.getDaughterRegions(result);

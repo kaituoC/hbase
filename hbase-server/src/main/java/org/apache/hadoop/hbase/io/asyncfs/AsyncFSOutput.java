@@ -28,6 +28,8 @@ import org.apache.hadoop.hdfs.protocol.DatanodeInfo;
 
 /**
  * Interface for asynchronous filesystem output stream.
+ * <p>
+ * The implementation is not required to be thread safe.
  */
 @InterfaceAudience.Private
 public interface AsyncFSOutput extends Closeable {
@@ -58,6 +60,11 @@ public interface AsyncFSOutput extends Closeable {
    * Return the current size of buffered data.
    */
   int buffered();
+
+  /**
+   * Whether the stream is broken.
+   */
+  boolean isBroken();
 
   /**
    * Return current pipeline. Empty array if no pipeline.

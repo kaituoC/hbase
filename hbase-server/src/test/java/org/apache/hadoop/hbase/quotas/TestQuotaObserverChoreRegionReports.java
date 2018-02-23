@@ -1,12 +1,13 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to you under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -25,19 +26,17 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.Waiter;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Table;
@@ -46,17 +45,26 @@ import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * A test case to verify that region reports are expired when they are not sent.
  */
 @Category(LargeTests.class)
 public class TestQuotaObserverChoreRegionReports {
-  private static final Log LOG = LogFactory.getLog(TestQuotaObserverChoreRegionReports.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestQuotaObserverChoreRegionReports.class);
+
+  private static final Logger LOG =
+      LoggerFactory.getLogger(TestQuotaObserverChoreRegionReports.class);
   private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
 
   @Rule
@@ -175,9 +183,9 @@ public class TestQuotaObserverChoreRegionReports {
     });
 
     // Close the region, prevent the server from sending new status reports.
-    List<HRegionInfo> regions = admin.getTableRegions(tn);
+    List<RegionInfo> regions = admin.getRegions(tn);
     assertEquals(1, regions.size());
-    HRegionInfo hri = regions.get(0);
+    RegionInfo hri = regions.get(0);
     admin.unassign(hri.getRegionName(), true);
 
     // We should see this table move out of violation after the report expires.
@@ -218,9 +226,9 @@ public class TestQuotaObserverChoreRegionReports {
     }
   }
 
-  private int getRegionReportsForTable(Map<HRegionInfo,Long> reports, TableName tn) {
+  private int getRegionReportsForTable(Map<RegionInfo,Long> reports, TableName tn) {
     int numReports = 0;
-    for (Entry<HRegionInfo,Long> entry : reports.entrySet()) {
+    for (Entry<RegionInfo,Long> entry : reports.entrySet()) {
       if (tn.equals(entry.getKey().getTable())) {
         numReports++;
       }

@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,11 +17,13 @@
  */
 package org.apache.hadoop.hbase;
 
-
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.io.File;
 import java.io.IOException;
@@ -31,9 +32,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Random;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
@@ -48,6 +46,7 @@ import org.apache.hadoop.hbase.testclassification.MiscTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.zookeeper.MiniZooKeeperCluster;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
@@ -55,13 +54,20 @@ import org.junit.rules.TestName;
 import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
 import org.mockito.stubbing.Answer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Test our testing utility class
  */
 @Category({MiscTests.class, LargeTests.class})
 public class TestHBaseTestingUtility {
-  private static final Log LOG = LogFactory.getLog(TestHBaseTestingUtility.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestHBaseTestingUtility.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestHBaseTestingUtility.class);
 
   @Rule
   public TestName name = new TestName();
@@ -72,7 +78,7 @@ public class TestHBaseTestingUtility {
    * that what we insert in one place doesn't end up in the other.
    * @throws Exception
    */
-  @Test (timeout=180000)
+  @Test
   public void testMultiClusters() throws Exception {
     // Create three clusters
 
@@ -402,8 +408,8 @@ public class TestHBaseTestingUtility {
 
   @Test public void testResolvePortConflict() throws Exception {
     // raises port conflict between 1st call and 2nd call of randomPort() by mocking Random object
-    Random random = Mockito.mock(Random.class);
-    Mockito.when(random.nextInt(Mockito.any(Integer.class)))
+    Random random = mock(Random.class);
+    when(random.nextInt(anyInt()))
       .thenAnswer(new Answer<Integer>() {
         int[] numbers = { 1, 1, 2 };
         int count = 0;
@@ -417,8 +423,8 @@ public class TestHBaseTestingUtility {
       });
 
     HBaseTestingUtility.PortAllocator.AvailablePortChecker portChecker =
-      Mockito.mock(HBaseTestingUtility.PortAllocator.AvailablePortChecker.class);
-    Mockito.when(portChecker.available(Mockito.any(Integer.class))).thenReturn(true);
+      mock(HBaseTestingUtility.PortAllocator.AvailablePortChecker.class);
+    when(portChecker.available(anyInt())).thenReturn(true);
 
     HBaseTestingUtility.PortAllocator portAllocator =
       new HBaseTestingUtility.PortAllocator(random, portChecker);
@@ -426,7 +432,7 @@ public class TestHBaseTestingUtility {
     int port1 = portAllocator.randomFreePort();
     int port2 = portAllocator.randomFreePort();
     assertNotEquals(port1, port2);
-    Mockito.verify(random, Mockito.times(3)).nextInt(Mockito.any(Integer.class));
+    Mockito.verify(random, Mockito.times(3)).nextInt(anyInt());
   }
 
   @Test
@@ -451,37 +457,5 @@ public class TestHBaseTestingUtility {
             htu.getConfiguration().getInt(HConstants.MASTER_INFO_PORT, 0));
     assertEquals(nonDefaultRegionServerPort
             , htu.getConfiguration().getInt(HConstants.REGIONSERVER_PORT, 0));
-  }
-  
-  @Test public void testMRYarnConfigsPopulation() throws IOException {
-    Map<String, String> dummyProps = new HashMap<>();
-    dummyProps.put("mapreduce.jobtracker.address", "dummyhost:11234");
-    dummyProps.put("yarn.resourcemanager.address", "dummyhost:11235");
-    dummyProps.put("mapreduce.jobhistory.address", "dummyhost:11236");
-    dummyProps.put("yarn.resourcemanager.scheduler.address", "dummyhost:11237");
-    dummyProps.put("mapreduce.jobhistory.webapp.address", "dummyhost:11238");
-    dummyProps.put("yarn.resourcemanager.webapp.address", "dummyhost:11239");
-  
-    HBaseTestingUtility hbt = new HBaseTestingUtility();
-    
-    // populate the mr props to the Configuration instance
-    for (Entry<String, String> entry : dummyProps.entrySet()) {
-      hbt.getConfiguration().set(entry.getKey(), entry.getValue());
-    }
-    
-    for (Entry<String,String> entry : dummyProps.entrySet()) {
-      assertTrue("The Configuration for key " + entry.getKey() +" and value: " + entry.getValue() +
-                 " is not populated correctly", hbt.getConfiguration().get(entry.getKey()).equals(entry.getValue()));
-    }
-
-    hbt.startMiniMapReduceCluster();
-    
-    // Confirm that MiniMapReduceCluster overwrites the mr properties and updates the Configuration 
-    for (Entry<String,String> entry : dummyProps.entrySet()) {
-      assertFalse("The MR prop: " + entry.getValue() + " is not overwritten when map reduce mini"+
-                  "cluster is started", hbt.getConfiguration().get(entry.getKey()).equals(entry.getValue()));
-    }
-    
-    hbt.shutdownMiniMapReduceCluster();
   }
 }

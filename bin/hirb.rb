@@ -54,34 +54,22 @@ $LOAD_PATH.unshift Pathname.new(sources)
 cmdline_help = <<HERE # HERE document output as shell usage
 Usage: shell [OPTIONS] [SCRIPTFILE [ARGUMENTS]]
 
- --format=OPTION                Formatter for outputting results.
-                                Valid options are: console, html.
-                                (Default: console)
-
  -d | --debug                   Set DEBUG log levels.
  -h | --help                    This help.
  -n | --noninteractive          Do not run within an IRB session
                                 and exit with non-zero status on
                                 first error.
+ -r | --return-values           Include return values from commands
+                                executed in the shell.
 HERE
 found = []
-format = 'console'
 script2run = nil
 log_level = org.apache.log4j.Level::ERROR
 @shell_debug = false
 interactive = true
+return_values = false
 for arg in ARGV
-  if arg =~ /^--format=(.+)/i
-    format = Regexp.last_match(1)
-    if format =~ /^html$/i
-      raise NoMethodError, 'Not yet implemented'
-    elsif format =~ /^console$/i
-      # This is default
-    else
-      raise ArgumentError, 'Unsupported format ' + arg
-    end
-    found.push(arg)
-  elsif arg == '-h' || arg == '--help'
+  if arg == '-h' || arg == '--help'
     puts cmdline_help
     exit
   elsif arg == '-d' || arg == '--debug'
@@ -92,6 +80,9 @@ for arg in ARGV
     puts 'Setting DEBUG log level...'
   elsif arg == '-n' || arg == '--noninteractive'
     interactive = false
+    found.push(arg)
+  elsif arg == '-r' || arg == '--return-values'
+    return_values = true
     found.push(arg)
   else
     # Presume it a script. Save it off for running later below
@@ -125,7 +116,7 @@ require 'shell/formatter'
 @hbase = Hbase::Hbase.new
 
 # Setup console
-@shell = Shell::Shell.new(@hbase, interactive)
+@shell = Shell::Shell.new(@hbase, interactive, return_values)
 @shell.debug = @shell_debug
 
 # Add commands to this namespace

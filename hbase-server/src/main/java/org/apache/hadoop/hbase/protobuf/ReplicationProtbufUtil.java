@@ -31,21 +31,21 @@ import java.util.UUID;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellScanner;
-import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.PrivateCellUtil;
+import org.apache.hadoop.hbase.wal.WALKeyImpl;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.io.SizedCellScanner;
 import org.apache.hadoop.hbase.ipc.HBaseRpcController;
 import org.apache.hadoop.hbase.ipc.HBaseRpcControllerImpl;
 import org.apache.hadoop.hbase.wal.WALEdit;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.UnsafeByteOperations;
+import org.apache.hbase.thirdparty.com.google.protobuf.UnsafeByteOperations;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.AdminService;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.WALProtos;
 import org.apache.hadoop.hbase.util.Pair;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
-import org.apache.hadoop.hbase.wal.WALKey;
 
 @InterfaceAudience.Private
 public class ReplicationProtbufUtil {
@@ -68,8 +68,8 @@ public class ReplicationProtbufUtil {
     HBaseRpcController controller = new HBaseRpcControllerImpl(p.getSecond());
     try {
       admin.replicateWALEntry(controller, p.getFirst());
-    } catch (org.apache.hadoop.hbase.shaded.com.google.protobuf.ServiceException e) {
-      throw ProtobufUtil.handleRemoteException(e);
+    } catch (org.apache.hbase.thirdparty.com.google.protobuf.ServiceException e) {
+      throw ProtobufUtil.getServiceException(e);
     }
   }
 
@@ -108,15 +108,16 @@ public class ReplicationProtbufUtil {
     HBaseProtos.UUID.Builder uuidBuilder = HBaseProtos.UUID.newBuilder();
     for (Entry entry: entries) {
       entryBuilder.clear();
-      // TODO: this duplicates a lot in WALKey#getBuilder
+      // TODO: this duplicates a lot in WALKeyImpl#getBuilder
       WALProtos.WALKey.Builder keyBuilder = entryBuilder.getKeyBuilder();
-      WALKey key = entry.getKey();
+      WALKeyImpl key = entry.getKey();
       keyBuilder.setEncodedRegionName(
           UnsafeByteOperations.unsafeWrap(encodedRegionName == null
             ? key.getEncodedRegionName()
             : encodedRegionName));
-      keyBuilder.setTableName(UnsafeByteOperations.unsafeWrap(key.getTablename().getName()));
-      keyBuilder.setLogSequenceNumber(key.getLogSeqNum());
+      keyBuilder.setTableName(UnsafeByteOperations.unsafeWrap(key.getTableName().getName()));
+      long sequenceId = key.getSequenceId();
+      keyBuilder.setLogSequenceNumber(sequenceId);
       keyBuilder.setWriteTime(key.getWriteTime());
       if (key.getNonce() != HConstants.NO_NONCE) {
         keyBuilder.setNonce(key.getNonce());
@@ -129,7 +130,7 @@ public class ReplicationProtbufUtil {
         uuidBuilder.setMostSigBits(clusterId.getMostSignificantBits());
         keyBuilder.addClusterIds(uuidBuilder.build());
       }
-      if(key.getOrigLogSeqNum() > 0) {
+      if (key.getOrigLogSeqNum() > 0) {
         keyBuilder.setOrigSequenceNumber(key.getOrigLogSeqNum());
       }
       WALEdit edit = entry.getEdit();
@@ -146,7 +147,7 @@ public class ReplicationProtbufUtil {
       List<Cell> cells = edit.getCells();
       // Add up the size.  It is used later serializing out the kvs.
       for (Cell cell: cells) {
-        size += CellUtil.estimatedSerializedSizeOf(cell);
+        size += PrivateCellUtil.estimatedSerializedSizeOf(cell);
       }
       // Collect up the cells
       allCells.add(cells);

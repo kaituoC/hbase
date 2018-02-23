@@ -18,18 +18,17 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
-import org.apache.commons.logging.Log;
-import org.apache.yetus.audience.InterfaceAudience;
+import java.util.ArrayList;
+import java.util.Iterator;
+import java.util.List;
+import java.util.SortedSet;
+
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.io.TimeRange;
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-
-import java.util.ArrayList;
-import java.util.Iterator;
-import java.util.LinkedList;
-import java.util.List;
-import java.util.SortedSet;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 /**
  * The CompositeImmutableSegments is created as a collection of ImmutableSegments and supports
@@ -41,17 +40,11 @@ import java.util.SortedSet;
 public class CompositeImmutableSegment extends ImmutableSegment {
 
   private final List<ImmutableSegment> segments;
-  // CompositeImmutableSegment is used for snapshots and snapshot should
-  // support getTimeRangeTracker() interface.
-  // Thus we hold a constant TRT build in the construction time from TRT of the given segments.
-  private final TimeRangeTracker timeRangeTracker;
-
   private long keySize = 0;
 
   public CompositeImmutableSegment(CellComparator comparator, List<ImmutableSegment> segments) {
-    super(comparator);
+    super(comparator, segments);
     this.segments = segments;
-    this.timeRangeTracker = new TimeRangeTracker();
     for (ImmutableSegment s : segments) {
       this.timeRangeTracker.includeTimestamp(s.getTimeRangeTracker().getMax());
       this.timeRangeTracker.includeTimestamp(s.getTimeRangeTracker().getMin());
@@ -62,7 +55,7 @@ public class CompositeImmutableSegment extends ImmutableSegment {
   @VisibleForTesting
   @Override
   public List<Segment> getAllSegments() {
-    return new LinkedList<>(segments);
+    return new ArrayList<>(segments);
   }
 
   @Override
@@ -94,14 +87,6 @@ public class CompositeImmutableSegment extends ImmutableSegment {
   }
 
   /**
-   * @return the first cell in the segment that has equal or greater key than the given cell
-   */
-  @Override
-  public Cell getFirstAfter(Cell cell) {
-    throw new IllegalStateException("Not supported by CompositeImmutableScanner");
-  }
-
-  /**
    * Closing a segment before it is being discarded
    */
   @Override
@@ -117,17 +102,12 @@ public class CompositeImmutableSegment extends ImmutableSegment {
    * @return either the given cell or its clone
    */
   @Override
-  public Cell maybeCloneWithAllocator(Cell cell) {
+  public Cell maybeCloneWithAllocator(Cell cell, boolean forceCloneOfBigCell) {
     throw new IllegalStateException("Not supported by CompositeImmutableScanner");
   }
 
   @Override
   public boolean shouldSeek(TimeRange tr, long oldestUnexpiredTS){
-    throw new IllegalStateException("Not supported by CompositeImmutableScanner");
-  }
-
-  @Override
-  public long getMinTimestamp(){
     throw new IllegalStateException("Not supported by CompositeImmutableScanner");
   }
 
@@ -218,7 +198,7 @@ public class CompositeImmutableSegment extends ImmutableSegment {
    * Updates the heap size counter of the segment by the given delta
    */
   @Override
-  protected void incSize(long delta, long heapOverhead) {
+  protected void incSize(long delta, long heapOverhead, long offHeapOverhead) {
     throw new IllegalStateException("Not supported by CompositeImmutableScanner");
   }
 
@@ -267,13 +247,13 @@ public class CompositeImmutableSegment extends ImmutableSegment {
   }
 
   @Override
-  protected void internalAdd(Cell cell, boolean mslabUsed, MemstoreSize memstoreSize) {
+  protected void internalAdd(Cell cell, boolean mslabUsed, MemStoreSizing memstoreSizing) {
     throw new IllegalStateException("Not supported by CompositeImmutableScanner");
   }
 
   @Override
   protected void updateMetaInfo(Cell cellToAdd, boolean succ, boolean mslabUsed,
-      MemstoreSize memstoreSize) {
+      MemStoreSizing memstoreSizing) {
     throw new IllegalStateException("Not supported by CompositeImmutableScanner");
   }
 
@@ -291,7 +271,8 @@ public class CompositeImmutableSegment extends ImmutableSegment {
   /**
    * Dumps all cells of the segment into the given log
    */
-  void dump(Log log) {
+  @Override
+  void dump(Logger log) {
     for (ImmutableSegment s : segments) {
       s.dump(log);
     }

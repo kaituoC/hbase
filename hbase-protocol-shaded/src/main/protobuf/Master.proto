@@ -602,32 +602,27 @@ message SecurityCapabilitiesResponse {
   repeated Capability capabilities = 1;
 }
 
-message ListDrainingRegionServersRequest {
+message ListDecommissionedRegionServersRequest {
 }
 
-message ListDrainingRegionServersResponse {
- repeated ServerName server_name = 1;
-}
-
-message DrainRegionServersRequest {
- repeated ServerName server_name = 1;
-}
-
-message DrainRegionServersResponse {
-}
-
-message RemoveDrainFromRegionServersRequest {
- repeated ServerName server_name = 1;
-}
-
-message RemoveDrainFromRegionServersResponse {
-}
-
-message ListDeadServersRequest {
-}
-
-message ListDeadServersResponse {
+message ListDecommissionedRegionServersResponse {
   repeated ServerName server_name = 1;
+}
+
+message DecommissionRegionServersRequest {
+  repeated ServerName server_name = 1;
+  required bool offload = 2;
+}
+
+message DecommissionRegionServersResponse {
+}
+
+message RecommissionRegionServerRequest {
+  required ServerName server_name = 1;
+  repeated RegionSpecifier region = 2;
+}
+
+message RecommissionRegionServerResponse {
 }
 
 message ClearDeadServersRequest {
@@ -967,17 +962,17 @@ service MasterService {
   rpc ListReplicationPeers(ListReplicationPeersRequest)
     returns(ListReplicationPeersResponse);
 
-  /** Returns a list of ServerNames marked as draining. */
-  rpc listDrainingRegionServers(ListDrainingRegionServersRequest)
-    returns(ListDrainingRegionServersResponse);
+  /** Returns a list of ServerNames marked as decommissioned. */
+  rpc ListDecommissionedRegionServers(ListDecommissionedRegionServersRequest)
+    returns(ListDecommissionedRegionServersResponse);
 
-  /** Mark a list of ServerNames as draining. */
-  rpc drainRegionServers(DrainRegionServersRequest)
-    returns(DrainRegionServersResponse);
+  /** Decommission region servers. */
+  rpc DecommissionRegionServers(DecommissionRegionServersRequest)
+    returns(DecommissionRegionServersResponse);
 
-  /** Unmark a list of ServerNames marked as draining. */
-  rpc removeDrainFromRegionServers(RemoveDrainFromRegionServersRequest)
-    returns(RemoveDrainFromRegionServersResponse);
+  /** Re-commission region server. */
+  rpc RecommissionRegionServer(RecommissionRegionServerRequest)
+    returns(RecommissionRegionServerResponse);
 
   /** Fetches the Master's view of space utilization */
   rpc GetSpaceQuotaRegionSizes(GetSpaceQuotaRegionSizesRequest)
@@ -991,7 +986,4 @@ service MasterService {
   rpc ClearDeadServers(ClearDeadServersRequest)
     returns(ClearDeadServersResponse);
 
-  /** Returns a list of Dead Servers. */
-  rpc ListDeadServers(ListDeadServersRequest)
-    returns(ListDeadServersResponse);
 }

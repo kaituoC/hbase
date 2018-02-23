@@ -18,21 +18,22 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
+import org.apache.hadoop.hbase.exceptions.IllegalArgumentIOException;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.MemoryCompactionPolicy;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ClassSize;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
@@ -57,22 +58,16 @@ public class CompactingMemStore extends AbstractMemStore {
       "hbase.hregion.compacting.memstore.type";
   public static final String COMPACTING_MEMSTORE_TYPE_DEFAULT =
       String.valueOf(MemoryCompactionPolicy.BASIC);
-  // The external setting of the compacting MemStore behaviour
-  public static final String COMPACTING_MEMSTORE_INDEX_KEY =
-      "hbase.hregion.compacting.memstore.index";
-  // usage of CellArrayMap is default, later it will be decided how to use CellChunkMap
-  public static final String COMPACTING_MEMSTORE_INDEX_DEFAULT =
-      String.valueOf(IndexType.ARRAY_MAP);
   // Default fraction of in-memory-flush size w.r.t. flush-to-disk size
   public static final String IN_MEMORY_FLUSH_THRESHOLD_FACTOR_KEY =
       "hbase.memstore.inmemoryflush.threshold.factor";
-  private static final double IN_MEMORY_FLUSH_THRESHOLD_FACTOR_DEFAULT = 0.25;
+  private static final double IN_MEMORY_FLUSH_THRESHOLD_FACTOR_DEFAULT = 0.1;
 
-  private static final Log LOG = LogFactory.getLog(CompactingMemStore.class);
-  private Store store;
+  private static final Logger LOG = LoggerFactory.getLogger(CompactingMemStore.class);
+  private HStore store;
   private RegionServicesForStores regionServices;
   private CompactionPipeline pipeline;
-  private MemStoreCompactor compactor;
+  protected MemStoreCompactor compactor;
 
   private long inmemoryFlushSize;       // the threshold on active size for in-memory flush
   private final AtomicBoolean inMemoryFlushInProgress = new AtomicBoolean(false);
@@ -81,7 +76,7 @@ public class CompactingMemStore extends AbstractMemStore {
   private boolean inWalReplay = false;
 
   @VisibleForTesting
-  private final AtomicBoolean allowCompaction = new AtomicBoolean(true);
+  protected final AtomicBoolean allowCompaction = new AtomicBoolean(true);
   private boolean compositeSnapshot = true;
 
   /**
@@ -113,29 +108,44 @@ public class CompactingMemStore extends AbstractMemStore {
     this.regionServices = regionServices;
     this.pipeline = new CompactionPipeline(getRegionServices());
     this.compactor = createMemStoreCompactor(compactionPolicy);
+    if (conf.getBoolean(MemStoreLAB.USEMSLAB_KEY, MemStoreLAB.USEMSLAB_DEFAULT)) {
+      // if user requested to work with MSLABs (whether on- or off-heap), then the
+      // immutable segments are going to use CellChunkMap as their index
+      indexType = IndexType.CHUNK_MAP;
+    } else {
+      indexType = IndexType.ARRAY_MAP;
+    }
+    // initialization of the flush size should happen after initialization of the index type
+    // so do not transfer the following method
     initInmemoryFlushSize(conf);
-    indexType = IndexType.valueOf(conf.get(CompactingMemStore.COMPACTING_MEMSTORE_INDEX_KEY,
-        CompactingMemStore.COMPACTING_MEMSTORE_INDEX_DEFAULT));
   }
 
   @VisibleForTesting
-  protected MemStoreCompactor createMemStoreCompactor(MemoryCompactionPolicy compactionPolicy) {
+  protected MemStoreCompactor createMemStoreCompactor(MemoryCompactionPolicy compactionPolicy)
+      throws IllegalArgumentIOException {
     return new MemStoreCompactor(this, compactionPolicy);
   }
 
   private void initInmemoryFlushSize(Configuration conf) {
-    long memstoreFlushSize = getRegionServices().getMemstoreFlushSize();
+    double factor = 0;
+    long memstoreFlushSize = getRegionServices().getMemStoreFlushSize();
     int numStores = getRegionServices().getNumStores();
     if (numStores <= 1) {
       // Family number might also be zero in some of our unit test case
       numStores = 1;
     }
     inmemoryFlushSize = memstoreFlushSize / numStores;
-    // multiply by a factor
-    double factor =  conf.getDouble(IN_MEMORY_FLUSH_THRESHOLD_FACTOR_KEY,
-        IN_MEMORY_FLUSH_THRESHOLD_FACTOR_DEFAULT);
-    inmemoryFlushSize *= factor;
-    LOG.info("Setting in-memory flush size threshold to " + inmemoryFlushSize);
+    // multiply by a factor (different factors for different index types)
+    if (indexType == IndexType.ARRAY_MAP) {
+      factor = conf.getDouble(IN_MEMORY_FLUSH_THRESHOLD_FACTOR_KEY,
+          IN_MEMORY_FLUSH_THRESHOLD_FACTOR_DEFAULT);
+    } else {
+      factor = conf.getDouble(IN_MEMORY_FLUSH_THRESHOLD_FACTOR_KEY,
+          IN_MEMORY_FLUSH_THRESHOLD_FACTOR_DEFAULT);
+    }
+    inmemoryFlushSize = (long) (inmemoryFlushSize * factor);
+    LOG.info("Setting in-memory flush size threshold to " + inmemoryFlushSize
+        + " and immutable segments index to be of type " + indexType);
   }
 
   /**
@@ -145,13 +155,13 @@ public class CompactingMemStore extends AbstractMemStore {
    *         caller to make sure this doesn't happen.
    */
   @Override
-  public MemstoreSize size() {
-    MemstoreSize memstoreSize = new MemstoreSize();
-    memstoreSize.incMemstoreSize(this.active.keySize(), this.active.heapSize());
+  public MemStoreSize size() {
+    MemStoreSizing memstoreSizing = new MemStoreSizing();
+    memstoreSizing.incMemStoreSize(active.getMemStoreSize());
     for (Segment item : pipeline.getSegments()) {
-      memstoreSize.incMemstoreSize(item.keySize(), item.heapSize());
+      memstoreSizing.incMemStoreSize(item.getMemStoreSize());
     }
-    return memstoreSize;
+    return memstoreSizing;
   }
 
   /**
@@ -205,6 +215,7 @@ public class CompactingMemStore extends AbstractMemStore {
       } else {
         pushTailToSnapshot();
       }
+      compactor.resetStats();
     }
     return new MemStoreSnapshot(snapshotId, this.snapshot);
   }
@@ -214,19 +225,19 @@ public class CompactingMemStore extends AbstractMemStore {
    * @return size of data that is going to be flushed
    */
   @Override
-  public MemstoreSize getFlushableSize() {
-    MemstoreSize snapshotSize = getSnapshotSize();
-    if (snapshotSize.getDataSize() == 0) {
+  public MemStoreSize getFlushableSize() {
+    MemStoreSizing snapshotSizing = getSnapshotSizing();
+    if (snapshotSizing.getDataSize() == 0) {
       // if snapshot is empty the tail of the pipeline (or everything in the memstore) is flushed
       if (compositeSnapshot) {
-        snapshotSize = pipeline.getPipelineSize();
-        snapshotSize.incMemstoreSize(this.active.keySize(), this.active.heapSize());
+        snapshotSizing = pipeline.getPipelineSizing();
+        snapshotSizing.incMemStoreSize(active.getMemStoreSize());
       } else {
-        snapshotSize = pipeline.getTailSize();
+        snapshotSizing = pipeline.getTailSizing();
       }
     }
-    return snapshotSize.getDataSize() > 0 ? snapshotSize
-        : new MemstoreSize(this.active.keySize(), this.active.heapSize());
+    return snapshotSizing.getDataSize() > 0 ? snapshotSizing
+        : new MemStoreSize(active.getMemStoreSize());
   }
 
   @Override
@@ -298,10 +309,6 @@ public class CompactingMemStore extends AbstractMemStore {
     this.compositeSnapshot = useCompositeSnapshot;
   }
 
-  public boolean isCompositeSnapshot() {
-    return this.compositeSnapshot;
-  }
-
   public boolean swapCompactedSegments(VersionedSegmentsList versionedList, ImmutableSegment result,
       boolean merge) {
     // last true stands for updating the region size
@@ -313,16 +320,17 @@ public class CompactingMemStore extends AbstractMemStore {
    *           with version taken earlier. This version must be passed as a parameter here.
    *           The flattening happens only if versions match.
    */
-  public void flattenOneSegment(long requesterVersion) {
-    pipeline.flattenOneSegment(requesterVersion, indexType);
+  public void flattenOneSegment(long requesterVersion,  MemStoreCompactionStrategy.Action action) {
+    pipeline.flattenOneSegment(requesterVersion, indexType, action);
   }
 
   // setter is used only for testability
   @VisibleForTesting
-  public void setIndexType() {
-    indexType = IndexType.valueOf(getConfiguration().get(
-        CompactingMemStore.COMPACTING_MEMSTORE_INDEX_KEY,
-        CompactingMemStore.COMPACTING_MEMSTORE_INDEX_DEFAULT));
+  void setIndexType(IndexType type) {
+    indexType = type;
+    // Because this functionality is for testing only and tests are setting in-memory flush size
+    // according to their need, there is no setting of in-memory flush size, here.
+    // If it is needed, please change in-memory flush size explicitly
   }
 
   public IndexType getIndexType() {
@@ -341,7 +349,7 @@ public class CompactingMemStore extends AbstractMemStore {
     return store.getSmallestReadPoint();
   }
 
-  public Store getStore() {
+  public HStore getStore() {
     return store;
   }
 
@@ -357,7 +365,7 @@ public class CompactingMemStore extends AbstractMemStore {
     MutableSegment activeTmp = active;
     List<? extends Segment> pipelineList = pipeline.getSegments();
     List<? extends Segment> snapshotList = snapshot.getAllSegments();
-    long order = 1 + pipelineList.size() + snapshotList.size();
+    long order = 1L + pipelineList.size() + snapshotList.size();
     // The list of elements in pipeline + the active element + the snapshot segment
     // The order is the Segment ordinal
     List<KeyValueScanner> list = createList((int) order);
@@ -406,9 +414,7 @@ public class CompactingMemStore extends AbstractMemStore {
       // Phase I: Update the pipeline
       getRegionServices().blockUpdates();
       try {
-        if (LOG.isDebugEnabled()) {
-          LOG.debug("IN-MEMORY FLUSH: Pushing active segment into compaction pipeline");
-        }
+        LOG.trace("IN-MEMORY FLUSH: Pushing active segment into compaction pipeline");
         pushActiveToPipeline(this.active);
       } finally {
         getRegionServices().unblockUpdates();
@@ -430,6 +436,7 @@ public class CompactingMemStore extends AbstractMemStore {
       }
     } finally {
       inMemoryFlushInProgress.set(false);
+      LOG.trace("IN-MEMORY FLUSH: end");
     }
   }
 
@@ -543,27 +550,9 @@ public class CompactingMemStore extends AbstractMemStore {
     }
   }
 
-  //----------------------------------------------------------------------
-  //methods for tests
-  //----------------------------------------------------------------------
   @VisibleForTesting
   boolean isMemStoreFlushingInMemory() {
     return inMemoryFlushInProgress.get();
-  }
-
-  @VisibleForTesting
-  void disableCompaction() {
-    allowCompaction.set(false);
-  }
-
-  @VisibleForTesting
-  void enableCompaction() {
-    allowCompaction.set(true);
-  }
-
-  @VisibleForTesting
-  void initiateType(MemoryCompactionPolicy compactionType) {
-    compactor.initiateAction(compactionType);
   }
 
   /**
@@ -592,7 +581,7 @@ public class CompactingMemStore extends AbstractMemStore {
   // debug method
   public void debug() {
     String msg = "active size=" + this.active.keySize();
-    msg += " threshold="+IN_MEMORY_FLUSH_THRESHOLD_FACTOR_DEFAULT* inmemoryFlushSize;
+    msg += " in-memory flush size is "+ inmemoryFlushSize;
     msg += " allow compaction is "+ (allowCompaction.get() ? "true" : "false");
     msg += " inMemoryFlushInProgress is "+ (inMemoryFlushInProgress.get() ? "true" : "false");
     LOG.debug(msg);

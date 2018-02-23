@@ -19,67 +19,41 @@
 package org.apache.hadoop.hbase.regionserver;
 
 import java.io.IOException;
-import java.util.List;
-import java.util.NavigableSet;
-import java.util.OptionalInt;
+import java.util.Optional;
 
-import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.TestFromClientSideWithCoprocessor;
 import org.apache.hadoop.hbase.coprocessor.ObserverContext;
+import org.apache.hadoop.hbase.coprocessor.RegionCoprocessor;
 import org.apache.hadoop.hbase.coprocessor.RegionCoprocessorEnvironment;
 import org.apache.hadoop.hbase.coprocessor.RegionObserver;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionLifeCycleTracker;
 import org.apache.hadoop.hbase.regionserver.compactions.CompactionRequest;
 
 /**
- * RegionObserver that just reimplements the default behavior,
- * in order to validate that all the necessary APIs for this are public
- * This observer is also used in {@link TestFromClientSideWithCoprocessor} and
- * {@link TestCompactionWithCoprocessor} to make sure that a wide range
- * of functionality still behaves as expected.
+ * RegionObserver that just reimplements the default behavior, in order to validate that all the
+ * necessary APIs for this are public This observer is also used in
+ * {@link TestFromClientSideWithCoprocessor} and {@link TestCompactionWithCoprocessor} to make sure
+ * that a wide range of functionality still behaves as expected.
  */
-public class NoOpScanPolicyObserver implements RegionObserver {
+public class NoOpScanPolicyObserver implements RegionCoprocessor, RegionObserver {
 
-  /**
-   * Reimplement the default behavior
-   */
   @Override
-  public InternalScanner preFlushScannerOpen(final ObserverContext<RegionCoprocessorEnvironment> c,
-      Store store, List<KeyValueScanner> scanners, InternalScanner s, long readPoint)
-      throws IOException {
-    ScanInfo oldSI = store.getScanInfo();
-    ScanInfo scanInfo = new ScanInfo(oldSI.getConfiguration(), store.getColumnFamilyDescriptor(),
-        oldSI.getTtl(), oldSI.getTimeToPurgeDeletes(), oldSI.getComparator());
-    return new StoreScanner(store, scanInfo, OptionalInt.empty(), scanners,
-        ScanType.COMPACT_RETAIN_DELETES, store.getSmallestReadPoint(), HConstants.OLDEST_TIMESTAMP);
-  }
-
-  /**
-   * Reimplement the default behavior
-   */
-  @Override
-  public InternalScanner preCompactScannerOpen(
-      final ObserverContext<RegionCoprocessorEnvironment> c, Store store,
-      List<? extends KeyValueScanner> scanners, ScanType scanType, long earliestPutTs,
-      InternalScanner s, CompactionLifeCycleTracker tracker, long readPoint) throws IOException {
-    // this demonstrates how to override the scanners default behavior
-    ScanInfo oldSI = store.getScanInfo();
-    ScanInfo scanInfo = new ScanInfo(oldSI.getConfiguration(), store.getColumnFamilyDescriptor(),
-        oldSI.getTtl(), oldSI.getTimeToPurgeDeletes(), oldSI.getComparator());
-    return new StoreScanner(store, scanInfo, OptionalInt.empty(), scanners, scanType,
-        store.getSmallestReadPoint(), earliestPutTs);
+  public Optional<RegionObserver> getRegionObserver() {
+    return Optional.of(this);
   }
 
   @Override
-  public KeyValueScanner preStoreScannerOpen(ObserverContext<RegionCoprocessorEnvironment> c,
-      Store store, Scan scan, NavigableSet<byte[]> targetCols, KeyValueScanner s, long readPoint)
-      throws IOException {
-    Region r = c.getEnvironment().getRegion();
-    return scan.isReversed() ? new ReversedStoreScanner(store,
-        store.getScanInfo(), scan, targetCols, r.getReadPoint(scan
-            .getIsolationLevel())) : new StoreScanner(store,
-        store.getScanInfo(), scan, targetCols, r.getReadPoint(scan
-            .getIsolationLevel()));
+  public InternalScanner preFlush(ObserverContext<RegionCoprocessorEnvironment> c, Store store,
+      InternalScanner scanner, FlushLifeCycleTracker tracker) throws IOException {
+    return new DelegatingInternalScanner(scanner);
   }
+
+  @Override
+  public InternalScanner preCompact(ObserverContext<RegionCoprocessorEnvironment> c, Store store,
+      InternalScanner scanner, ScanType scanType, CompactionLifeCycleTracker tracker,
+      CompactionRequest request) throws IOException {
+    return new DelegatingInternalScanner(scanner);
+  }
+
+  // TODO add for postScannerOpen
 }

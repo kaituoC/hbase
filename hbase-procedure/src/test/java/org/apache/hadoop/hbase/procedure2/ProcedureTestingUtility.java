@@ -27,8 +27,6 @@ import java.util.ArrayList;
 import java.util.Set;
 import java.util.concurrent.Callable;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -39,26 +37,28 @@ import org.apache.hadoop.hbase.procedure2.store.NoopProcedureStore;
 import org.apache.hadoop.hbase.procedure2.store.ProcedureStore;
 import org.apache.hadoop.hbase.procedure2.store.ProcedureStore.ProcedureIterator;
 import org.apache.hadoop.hbase.procedure2.store.wal.WALProcedureStore;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.ByteString;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.BytesValue;
+import org.apache.hbase.thirdparty.com.google.protobuf.ByteString;
+import org.apache.hbase.thirdparty.com.google.protobuf.BytesValue;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos.ProcedureState;
 import org.apache.hadoop.hbase.util.NonceKey;
 import org.apache.hadoop.hbase.util.Threads;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class ProcedureTestingUtility {
-  private static final Log LOG = LogFactory.getLog(ProcedureTestingUtility.class);
+  private static final Logger LOG = LoggerFactory.getLogger(ProcedureTestingUtility.class);
 
   private ProcedureTestingUtility() {
   }
 
-  public static ProcedureStore createStore(final Configuration conf, final FileSystem fs,
-      final Path baseDir) throws IOException {
-    return createWalStore(conf, fs, baseDir);
+  public static ProcedureStore createStore(final Configuration conf, final Path dir)
+      throws IOException {
+    return createWalStore(conf, dir);
   }
 
-  public static WALProcedureStore createWalStore(final Configuration conf, final FileSystem fs,
-      final Path walDir) throws IOException {
-    return new WALProcedureStore(conf, fs, walDir, new WALProcedureStore.LeaseRecovery() {
+  public static WALProcedureStore createWalStore(final Configuration conf, final Path dir)
+      throws IOException {
+    return new WALProcedureStore(conf, dir, null, new WALProcedureStore.LeaseRecovery() {
       @Override
       public void recoverFileLease(FileSystem fs, Path path) throws IOException {
         // no-op

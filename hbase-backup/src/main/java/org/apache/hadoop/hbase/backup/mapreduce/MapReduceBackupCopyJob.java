@@ -19,14 +19,15 @@ package org.apache.hadoop.hbase.backup.mapreduce;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.TableName;
@@ -35,16 +36,21 @@ import org.apache.hadoop.hbase.backup.BackupInfo;
 import org.apache.hadoop.hbase.backup.BackupType;
 import org.apache.hadoop.hbase.backup.impl.BackupManager;
 import org.apache.hadoop.hbase.backup.util.BackupUtils;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.snapshot.ExportSnapshot;
+import org.apache.hadoop.io.SequenceFile;
+import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Cluster;
 import org.apache.hadoop.mapreduce.Counters;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.JobID;
+import org.apache.hadoop.tools.CopyListingFileStatus;
 import org.apache.hadoop.tools.DistCp;
 import org.apache.hadoop.tools.DistCpConstants;
 import org.apache.hadoop.tools.DistCpOptions;
+import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.zookeeper.KeeperException.NoNodeException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Map-Reduce implementation of {@link BackupCopyJob}. Basically, there are 2 types of copy
@@ -53,7 +59,8 @@ import org.apache.zookeeper.KeeperException.NoNodeException;
  */
 @InterfaceAudience.Private
 public class MapReduceBackupCopyJob implements BackupCopyJob {
-  private static final Log LOG = LogFactory.getLog(MapReduceBackupCopyJob.class);
+  public static final String NUMBER_OF_LEVELS_TO_PRESERVE_KEY = "num.levels.preserve";
+  private static final Logger LOG = LoggerFactory.getLogger(MapReduceBackupCopyJob.class);
 
   private Configuration conf;
 
@@ -142,6 +149,7 @@ public class MapReduceBackupCopyJob implements BackupCopyJob {
    * Only the argument "src1, [src2, [...]] dst" is supported,
    * no more DistCp options.
    */
+
   class BackupDistCp extends DistCp {
 
     private BackupInfo backupInfo;
@@ -154,30 +162,20 @@ public class MapReduceBackupCopyJob implements BackupCopyJob {
       this.backupManager = backupManager;
     }
 
+
+
     @Override
     public Job execute() throws Exception {
 
       // reflection preparation for private methods and fields
       Class<?> classDistCp = org.apache.hadoop.tools.DistCp.class;
-      Method methodCreateMetaFolderPath = classDistCp.getDeclaredMethod("createMetaFolderPath");
-      Method methodCreateJob = classDistCp.getDeclaredMethod("createJob");
-      Method methodCreateInputFileListing =
-          classDistCp.getDeclaredMethod("createInputFileListing", Job.class);
       Method methodCleanup = classDistCp.getDeclaredMethod("cleanup");
 
-      Field fieldInputOptions = classDistCp.getDeclaredField("inputOptions");
-      Field fieldMetaFolder = classDistCp.getDeclaredField("metaFolder");
-      Field fieldJobFS = classDistCp.getDeclaredField("jobFS");
+      Field fieldInputOptions = getInputOptionsField(classDistCp);
       Field fieldSubmitted = classDistCp.getDeclaredField("submitted");
 
-      methodCreateMetaFolderPath.setAccessible(true);
-      methodCreateJob.setAccessible(true);
-      methodCreateInputFileListing.setAccessible(true);
       methodCleanup.setAccessible(true);
-
       fieldInputOptions.setAccessible(true);
-      fieldMetaFolder.setAccessible(true);
-      fieldJobFS.setAccessible(true);
       fieldSubmitted.setAccessible(true);
 
       // execute() logic starts here
@@ -185,16 +183,8 @@ public class MapReduceBackupCopyJob implements BackupCopyJob {
 
       Job job = null;
       try {
-        synchronized (this) {
-          // Don't cleanup while we are setting up.
-          fieldMetaFolder.set(this, methodCreateMetaFolderPath.invoke(this));
-          fieldJobFS.set(this, ((Path) fieldMetaFolder.get(this)).getFileSystem(super.getConf()));
-          job = (Job) methodCreateJob.invoke(this);
-        }
-        methodCreateInputFileListing.invoke(this, job);
 
-        // Get the total length of the source files
-        List<Path> srcs = ((DistCpOptions) fieldInputOptions.get(this)).getSourcePaths();
+        List<Path> srcs = getSourcePaths(fieldInputOptions);
 
         long totalSrcLgth = 0;
         for (Path aSrc : srcs) {
@@ -202,14 +192,9 @@ public class MapReduceBackupCopyJob implements BackupCopyJob {
               BackupUtils.getFilesLength(aSrc.getFileSystem(super.getConf()), aSrc);
         }
 
-        // submit the copy job
-        job.submit();
-        fieldSubmitted.set(this, true);
-
-        // after submit the MR job, set its handler in backup handler for cancel process
-        // this.backupHandler.copyJob = job;
-
-        // Update the copy progress to ZK every 0.5s if progress value changed
+        // Async call
+        job = super.execute();
+        // Update the copy progress to system table every 0.5s if progress value changed
         int progressReportFreq =
             MapReduceBackupCopyJob.this.getConf().getInt("hbase.backup.progressreport.frequency",
               500);
@@ -249,12 +234,8 @@ public class MapReduceBackupCopyJob implements BackupCopyJob {
         LOG.debug("Backup progress data updated to backup system table: \"Progress: "
             + newProgressStr + " - " + bytesCopied + " bytes copied.\"");
       } catch (Throwable t) {
-        LOG.error("distcp " + job == null ? "" : job.getJobID() + " encountered error", t);
+        LOG.error(t.toString(), t);
         throw t;
-      } finally {
-        if (!fieldSubmitted.getBoolean(this)) {
-          methodCleanup.invoke(this);
-        }
       }
 
       String jobID = job.getJobID().toString();
@@ -263,12 +244,123 @@ public class MapReduceBackupCopyJob implements BackupCopyJob {
       LOG.debug("DistCp job-id: " + jobID + " completed: " + job.isComplete() + " "
           + job.isSuccessful());
       Counters ctrs = job.getCounters();
-      LOG.debug(ctrs);
+      LOG.debug(Objects.toString(ctrs));
       if (job.isComplete() && !job.isSuccessful()) {
         throw new Exception("DistCp job-id: " + jobID + " failed");
       }
 
       return job;
+    }
+
+    private Field getInputOptionsField(Class<?> classDistCp) throws IOException{
+      Field f = null;
+      try {
+        f = classDistCp.getDeclaredField("inputOptions");
+      } catch(Exception e) {
+        // Haddop 3
+        try {
+          f = classDistCp.getDeclaredField("context");
+        } catch (NoSuchFieldException | SecurityException e1) {
+          throw new IOException(e1);
+        }
+      }
+      return f;
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Path> getSourcePaths(Field fieldInputOptions) throws IOException{
+      Object options;
+      try {
+        options = fieldInputOptions.get(this);
+        if (options instanceof DistCpOptions) {
+          return ((DistCpOptions) options).getSourcePaths();
+        } else {
+          // Hadoop 3
+          Class<?> classContext = Class.forName("org.apache.hadoop.tools.DistCpContext");
+          Method methodGetSourcePaths = classContext.getDeclaredMethod("getSourcePaths");
+          methodGetSourcePaths.setAccessible(true);
+
+          return (List<Path>) methodGetSourcePaths.invoke(options);
+        }
+      } catch (IllegalArgumentException | IllegalAccessException |
+                ClassNotFoundException | NoSuchMethodException |
+                SecurityException | InvocationTargetException e) {
+        throw new IOException(e);
+      }
+
+    }
+
+    @Override
+    protected Path createInputFileListing(Job job) throws IOException {
+
+      if (conf.get(NUMBER_OF_LEVELS_TO_PRESERVE_KEY) == null) {
+        return super.createInputFileListing(job);
+      }
+      long totalBytesExpected = 0;
+      int totalRecords = 0;
+      Path fileListingPath = getFileListingPath();
+      try (SequenceFile.Writer writer = getWriter(fileListingPath)) {
+        List<Path> srcFiles = getSourceFiles();
+        if (srcFiles.size() == 0) {
+          return fileListingPath;
+        }
+        totalRecords = srcFiles.size();
+        FileSystem fs = srcFiles.get(0).getFileSystem(conf);
+        for (Path path : srcFiles) {
+          FileStatus fst = fs.getFileStatus(path);
+          totalBytesExpected += fst.getLen();
+          Text key = getKey(path);
+          writer.append(key, new CopyListingFileStatus(fst));
+        }
+        writer.close();
+
+        // update jobs configuration
+
+        Configuration cfg = job.getConfiguration();
+        cfg.setLong(DistCpConstants.CONF_LABEL_TOTAL_BYTES_TO_BE_COPIED, totalBytesExpected);
+        cfg.set(DistCpConstants.CONF_LABEL_LISTING_FILE_PATH, fileListingPath.toString());
+        cfg.setLong(DistCpConstants.CONF_LABEL_TOTAL_NUMBER_OF_RECORDS, totalRecords);
+      } catch (NoSuchFieldException | SecurityException | IllegalArgumentException
+          | IllegalAccessException | NoSuchMethodException | ClassNotFoundException
+          | InvocationTargetException e) {
+        throw new IOException(e);
+      }
+      return fileListingPath;
+    }
+
+    private Text getKey(Path path) {
+      int level = conf.getInt(NUMBER_OF_LEVELS_TO_PRESERVE_KEY, 1);
+      int count = 0;
+      String relPath = "";
+      while (count++ < level) {
+        relPath = Path.SEPARATOR + path.getName() + relPath;
+        path = path.getParent();
+      }
+      return new Text(relPath);
+    }
+
+    private List<Path> getSourceFiles() throws NoSuchFieldException, SecurityException,
+        IllegalArgumentException, IllegalAccessException, NoSuchMethodException,
+        ClassNotFoundException, InvocationTargetException, IOException {
+      Field options = null;
+      try {
+        options = DistCp.class.getDeclaredField("inputOptions");
+      } catch (NoSuchFieldException | SecurityException e) {
+        options = DistCp.class.getDeclaredField("context");
+      }
+      options.setAccessible(true);
+      return getSourcePaths(options);
+    }
+
+
+
+    private SequenceFile.Writer getWriter(Path pathToListFile) throws IOException {
+      FileSystem fs = pathToListFile.getFileSystem(conf);
+      fs.delete(pathToListFile, false);
+      return SequenceFile.createWriter(conf, SequenceFile.Writer.file(pathToListFile),
+        SequenceFile.Writer.keyClass(Text.class),
+        SequenceFile.Writer.valueClass(CopyListingFileStatus.class),
+        SequenceFile.Writer.compression(SequenceFile.CompressionType.NONE));
     }
 
   }
@@ -306,11 +398,14 @@ public class MapReduceBackupCopyJob implements BackupCopyJob {
         // We need to create the target dir before run distcp.
         LOG.debug("DistCp options: " + Arrays.toString(options));
         Path dest = new Path(options[options.length - 1]);
+        String[] newOptions = new String[options.length + 1];
+        System.arraycopy(options, 0, newOptions, 1, options.length);
+        newOptions[0] = "-async"; // run DisCp in async mode
         FileSystem destfs = dest.getFileSystem(conf);
         if (!destfs.exists(dest)) {
           destfs.mkdirs(dest);
         }
-        res = distcp.run(options);
+        res = distcp.run(newOptions);
       }
       return res;
 

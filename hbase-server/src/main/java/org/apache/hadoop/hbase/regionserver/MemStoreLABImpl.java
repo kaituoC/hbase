@@ -28,16 +28,15 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReentrantLock;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.ExtendedCell;
 import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.yetus.audience.InterfaceAudience;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-import org.apache.hadoop.hbase.shaded.com.google.common.base.Preconditions;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.base.Preconditions;
 /**
  * A memstore-local allocation buffer.
  * <p>
@@ -66,16 +65,16 @@ import org.apache.hadoop.hbase.shaded.com.google.common.base.Preconditions;
 @InterfaceAudience.Private
 public class MemStoreLABImpl implements MemStoreLAB {
 
-  static final Log LOG = LogFactory.getLog(MemStoreLABImpl.class);
+  static final Logger LOG = LoggerFactory.getLogger(MemStoreLABImpl.class);
 
-  private AtomicReference<Chunk> curChunk = new AtomicReference<>();
+  private AtomicReference<Chunk> currChunk = new AtomicReference<>();
   // Lock to manage multiple handlers requesting for a chunk
   private ReentrantLock lock = new ReentrantLock();
 
   // A set of chunks contained by this memstore LAB
   @VisibleForTesting
   Set<Integer> chunks = new ConcurrentSkipListSet<Integer>();
-  private final int chunkSize;
+  private final int dataChunkSize;
   private final int maxAlloc;
   private final ChunkCreator chunkCreator;
   private final CompactingMemStore.IndexType idxType; // what index is used for corresponding segment
@@ -95,19 +94,46 @@ public class MemStoreLABImpl implements MemStoreLAB {
   }
 
   public MemStoreLABImpl(Configuration conf) {
-    chunkSize = conf.getInt(CHUNK_SIZE_KEY, CHUNK_SIZE_DEFAULT);
+    dataChunkSize = conf.getInt(CHUNK_SIZE_KEY, CHUNK_SIZE_DEFAULT);
     maxAlloc = conf.getInt(MAX_ALLOC_KEY, MAX_ALLOC_DEFAULT);
     this.chunkCreator = ChunkCreator.getInstance();
     // if we don't exclude allocations >CHUNK_SIZE, we'd infiniteloop on one!
-    Preconditions.checkArgument(maxAlloc <= chunkSize,
+    Preconditions.checkArgument(maxAlloc <= dataChunkSize,
         MAX_ALLOC_KEY + " must be less than " + CHUNK_SIZE_KEY);
-    idxType = CompactingMemStore.IndexType.valueOf(conf.get(
-        CompactingMemStore.COMPACTING_MEMSTORE_INDEX_KEY,
-        CompactingMemStore.COMPACTING_MEMSTORE_INDEX_DEFAULT));
+
+    // if user requested to work with MSLABs (whether on- or off-heap), then the
+    // immutable segments are going to use CellChunkMap as their index
+    idxType = CompactingMemStore.IndexType.CHUNK_MAP;
   }
 
   @Override
   public Cell copyCellInto(Cell cell) {
+    return copyCellInto(cell, maxAlloc);
+  }
+
+  /**
+   * When a cell's size is too big (bigger than maxAlloc),
+   * copyCellInto does not allocate it on MSLAB.
+   * Since the process of flattening to CellChunkMap assumes that
+   * all cells are allocated on MSLAB, during this process,
+   * the big cells are copied into MSLAB using this method.
+   */
+  @Override
+  public Cell forceCopyOfBigCellInto(Cell cell) {
+    int size = KeyValueUtil.length(cell) + ChunkCreator.SIZEOF_CHUNK_HEADER;
+    Preconditions.checkArgument(size >= 0, "negative size");
+    if (size <= dataChunkSize) {
+      // Using copyCellInto for cells which are bigger than the original maxAlloc
+      Cell newCell = copyCellInto(cell, dataChunkSize);
+      return newCell;
+    } else {
+      Chunk c = getNewExternalChunk(size);
+      int allocOffset = c.alloc(size);
+      return copyToChunkCell(cell, c.getData(), allocOffset, size);
+    }
+  }
+
+  private Cell copyCellInto(Cell cell, int maxAlloc) {
     int size = KeyValueUtil.length(cell);
     Preconditions.checkArgument(size >= 0, "negative size");
     // Callers should satisfy large allocations directly from JVM since they
@@ -160,9 +186,9 @@ public class MemStoreLABImpl implements MemStoreLAB {
       // which directly return tagsLen as 0. So we avoid parsing many length components in
       // reading the tagLength stored in the backing buffer. The Memstore addition of every Cell
       // call getTagsLength().
-      return new NoTagByteBufferChunkCell(buf, offset, len, cell.getSequenceId());
+      return new NoTagByteBufferChunkKeyValue(buf, offset, len, cell.getSequenceId());
     } else {
-      return new ByteBufferChunkCell(buf, offset, len, cell.getSequenceId());
+      return new ByteBufferChunkKeyValue(buf, offset, len, cell.getSequenceId());
     }
   }
 
@@ -214,7 +240,7 @@ public class MemStoreLABImpl implements MemStoreLAB {
    * @return true if we won the race to retire the chunk
    */
   private void tryRetireChunk(Chunk c) {
-    curChunk.compareAndSet(c, null);
+    currChunk.compareAndSet(c, null);
     // If the CAS succeeds, that means that we won the race
     // to retire the chunk. We could use this opportunity to
     // update metrics on external fragmentation.
@@ -229,7 +255,8 @@ public class MemStoreLABImpl implements MemStoreLAB {
    */
   private Chunk getOrMakeChunk() {
     // Try to get the chunk
-    Chunk c = curChunk.get();
+    Chunk c;
+    c = currChunk.get();
     if (c != null) {
       return c;
     }
@@ -239,14 +266,14 @@ public class MemStoreLABImpl implements MemStoreLAB {
     if (lock.tryLock()) {
       try {
         // once again check inside the lock
-        c = curChunk.get();
+        c = currChunk.get();
         if (c != null) {
           return c;
         }
         c = this.chunkCreator.getChunk(idxType);
         if (c != null) {
           // set the curChunk. No need of CAS as only one thread will be here
-          curChunk.set(c);
+          currChunk.set(c);
           chunks.add(c.getId());
           return c;
         }
@@ -257,23 +284,56 @@ public class MemStoreLABImpl implements MemStoreLAB {
     return null;
   }
 
-  /* Creating chunk to be used as index chunk in CellChunkMap, part of the chunks array.
-  ** Returning a new chunk, without replacing current chunk,
+  /* Returning a new pool chunk, without replacing current chunk,
   ** meaning MSLABImpl does not make the returned chunk as CurChunk.
   ** The space on this chunk will be allocated externally.
-  ** The interface is only for external callers
+  ** The interface is only for external callers.
   */
   @Override
-  public Chunk getNewExternalChunk() {
-    // the new chunk is going to be part of the chunk array and will always be referenced
-    Chunk c = this.chunkCreator.getChunk();
-    chunks.add(c.getId());
-    return c;
+  public Chunk getNewExternalChunk(ChunkCreator.ChunkType chunkType) {
+    switch (chunkType) {
+      case INDEX_CHUNK:
+      case DATA_CHUNK:
+        Chunk c = this.chunkCreator.getChunk(chunkType);
+        chunks.add(c.getId());
+        return c;
+      case JUMBO_CHUNK: // a jumbo chunk doesn't have a fixed size
+      default:
+        return null;
+    }
+  }
+
+  /* Returning a new chunk, without replacing current chunk,
+  ** meaning MSLABImpl does not make the returned chunk as CurChunk.
+  ** The space on this chunk will be allocated externally.
+  ** The interface is only for external callers.
+  ** Chunks from pools are not allocated from here, since they have fixed sizes
+  */
+  @Override
+  public Chunk getNewExternalChunk(int size) {
+    int allocSize = size + ChunkCreator.getInstance().SIZEOF_CHUNK_HEADER;
+    if (allocSize <= ChunkCreator.getInstance().getChunkSize()) {
+      return getNewExternalChunk(ChunkCreator.ChunkType.DATA_CHUNK);
+    } else {
+      Chunk c = this.chunkCreator.getJumboChunk(size);
+      chunks.add(c.getId());
+      return c;
+    }
+  }
+
+  @Override
+  public boolean isOnHeap() {
+    return !isOffHeap();
+  }
+
+  @Override
+  public boolean isOffHeap() {
+    return this.chunkCreator.isOffheap();
   }
 
   @VisibleForTesting
   Chunk getCurrentChunk() {
-    return this.curChunk.get();
+    return currChunk.get();
   }
 
   @VisibleForTesting

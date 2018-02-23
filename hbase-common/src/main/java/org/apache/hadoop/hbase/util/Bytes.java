@@ -17,9 +17,9 @@
  */
 package org.apache.hadoop.hbase.util;
 
-import static org.apache.hadoop.hbase.shaded.com.google.common.base.Preconditions.checkArgument;
-import static org.apache.hadoop.hbase.shaded.com.google.common.base.Preconditions.checkNotNull;
-import static org.apache.hadoop.hbase.shaded.com.google.common.base.Preconditions.checkPositionIndex;
+import static org.apache.hbase.thirdparty.com.google.common.base.Preconditions.checkArgument;
+import static org.apache.hbase.thirdparty.com.google.common.base.Preconditions.checkNotNull;
+import static org.apache.hbase.thirdparty.com.google.common.base.Preconditions.checkPositionIndex;
 
 import java.io.DataInput;
 import java.io.DataOutput;
@@ -30,27 +30,29 @@ import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.Iterator;
 import java.util.List;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.io.RawComparator;
 import org.apache.hadoop.io.WritableComparator;
 import org.apache.hadoop.io.WritableUtils;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+
+import com.google.protobuf.ByteString;
 
 import sun.misc.Unsafe;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
-import com.google.protobuf.ByteString;
 
 /**
  * Utility class that handles byte arrays, conversions to/from other types,
@@ -71,7 +73,7 @@ public class Bytes implements Comparable<Bytes> {
   //HConstants.EMPTY_BYTE_ARRAY should be updated if this changed
   private static final byte [] EMPTY_BYTE_ARRAY = new byte [0];
 
-  private static final Log LOG = LogFactory.getLog(Bytes.class);
+  private static final Logger LOG = LoggerFactory.getLogger(Bytes.class);
 
   /**
    * Size of boolean in bytes
@@ -270,6 +272,7 @@ public class Bytes implements Comparable<Bytes> {
    * @return Positive if left is bigger than right, 0 if they are equal, and
    *         negative if left is smaller than right.
    */
+  @Override
   public int compareTo(Bytes that) {
     return BYTES_RAWCOMPARATOR.compare(
         this.bytes, this.offset, this.length,
@@ -1157,9 +1160,9 @@ public class Bytes implements Comparable<Bytes> {
       return UnsafeAccess.toShort(bytes, offset);
     } else {
       short n = 0;
-      n ^= bytes[offset] & 0xFF;
-      n <<= 8;
-      n ^= bytes[offset+1] & 0xFF;
+      n = (short) ((n ^ bytes[offset]) & 0xFF);
+      n = (short) (n << 8);
+      n = (short) ((n ^ bytes[offset+1]) & 0xFF);
       return n;
    }
   }
@@ -1542,8 +1545,8 @@ public class Bytes implements Comparable<Bytes> {
          * than 4 bytes even on 32-bit. On the other hand, it is substantially faster on 64-bit.
          */
         for (i = 0; i < strideLimit; i += stride) {
-          long lw = theUnsafe.getLong(buffer1, offset1Adj + (long) i);
-          long rw = theUnsafe.getLong(buffer2, offset2Adj + (long) i);
+          long lw = theUnsafe.getLong(buffer1, offset1Adj + i);
+          long rw = theUnsafe.getLong(buffer2, offset2Adj + i);
           if (lw != rw) {
             if(!UnsafeAccess.littleEndian) {
               return ((lw + Long.MIN_VALUE) < (rw + Long.MIN_VALUE)) ? -1 : 1;
@@ -1936,7 +1939,7 @@ public class Bytes implements Comparable<Bytes> {
   public static int hashCode(byte[] bytes, int offset, int length) {
     int hash = 1;
     for (int i = offset; i < offset + length; i++)
-      hash = (31 * hash) + (int) bytes[i];
+      hash = (31 * hash) + bytes[i];
     return hash;
   }
 
@@ -2337,21 +2340,24 @@ public class Bytes implements Comparable<Bytes> {
   }
 
   public static boolean isSorted(Collection<byte[]> arrays) {
-    byte[] previous = new byte[0];
-    for (byte[] array : IterableUtils.nullSafe(arrays)) {
-      if (Bytes.compareTo(previous, array) > 0) {
-        return false;
+    if (!CollectionUtils.isEmpty(arrays)) {
+      byte[] previous = new byte[0];
+      for (byte[] array : arrays) {
+        if (Bytes.compareTo(previous, array) > 0) {
+          return false;
+        }
+        previous = array;
       }
-      previous = array;
     }
     return true;
   }
 
   public static List<byte[]> getUtf8ByteArrays(List<String> strings) {
-    List<byte[]> byteArrays = Lists.newArrayListWithCapacity(CollectionUtils.nullSafeSize(strings));
-    for (String s : IterableUtils.nullSafe(strings)) {
-      byteArrays.add(Bytes.toBytes(s));
+    if (CollectionUtils.isEmpty(strings)) {
+      return Collections.emptyList();
     }
+    List<byte[]> byteArrays = new ArrayList<>(strings.size());
+    strings.forEach(s -> byteArrays.add(Bytes.toBytes(s)));
     return byteArrays;
   }
 
@@ -2517,7 +2523,7 @@ public class Bytes implements Comparable<Bytes> {
     }
     return new String(ch);
   }
-  
+
   /**
    * Convert a byte array into a hex string
    */

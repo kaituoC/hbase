@@ -15,10 +15,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.tool;
 
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Matchers.anyLong;
+import static org.mockito.Matchers.eq;
+import static org.mockito.Matchers.isA;
+import static org.mockito.Mockito.atLeastOnce;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import org.apache.hadoop.hbase.*;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Table;
@@ -28,11 +42,11 @@ import org.apache.hadoop.util.ToolRunner;
 import org.apache.log4j.Appender;
 import org.apache.log4j.LogManager;
 import org.apache.log4j.spi.LoggingEvent;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Iterables;
 import org.junit.After;
 import org.junit.Before;
-import org.junit.Rule;
+import org.junit.ClassRule;
 import org.junit.Ignore;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
@@ -41,20 +55,15 @@ import org.mockito.ArgumentMatcher;
 import org.mockito.Mock;
 import org.mockito.runners.MockitoJUnitRunner;
 
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-
-import static org.junit.Assert.assertNotEquals;
-import static org.mockito.Matchers.anyLong;
-import static org.mockito.Matchers.eq;
-import static org.mockito.Matchers.isA;
-import static org.mockito.Matchers.argThat;
-import static org.junit.Assert.assertEquals;
-import static org.mockito.Mockito.*;
+import org.apache.hbase.thirdparty.com.google.common.collect.Iterables;
 
 @RunWith(MockitoJUnitRunner.class)
 @Category({MediumTests.class})
 public class TestCanaryTool {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestCanaryTool.class);
 
   private HBaseTestingUtility testingUtility;
   private static final byte[] FAMILY = Bytes.toBytes("f");
@@ -89,7 +98,7 @@ public class TestCanaryTool {
     Canary.ZookeeperStdOutSink sink = spy(new Canary.ZookeeperStdOutSink());
     Canary canary = new Canary(executor, sink);
     String[] args = { "-t", "10000", "-zookeeper" };
-    ToolRunner.run(testingUtility.getConfiguration(), canary, args);
+    assertEquals(0, ToolRunner.run(testingUtility.getConfiguration(), canary, args));
 
     String baseZnode = testingUtility.getConfiguration()
         .get(HConstants.ZOOKEEPER_ZNODE_PARENT, HConstants.DEFAULT_ZOOKEEPER_ZNODE_PARENT);
@@ -112,7 +121,7 @@ public class TestCanaryTool {
     Canary.RegionStdOutSink sink = spy(new Canary.RegionStdOutSink());
     Canary canary = new Canary(executor, sink);
     String[] args = { "-writeSniffing", "-t", "10000", name.getMethodName() };
-    ToolRunner.run(testingUtility.getConfiguration(), canary, args);
+    assertEquals(0, ToolRunner.run(testingUtility.getConfiguration(), canary, args));
     assertEquals("verify no read error count", 0, canary.getReadFailures().size());
     assertEquals("verify no write error count", 0, canary.getWriteFailures().size());
     verify(sink, atLeastOnce()).publishReadTiming(isA(ServerName.class), isA(HRegionInfo.class),
@@ -142,7 +151,7 @@ public class TestCanaryTool {
     String configuredTimeoutStr = tableNames[0].getNameAsString() + "=" + Long.MAX_VALUE + "," +
       tableNames[1].getNameAsString() + "=0";
     String[] args = { "-readTableTimeouts", configuredTimeoutStr, name.getMethodName() + "1", name.getMethodName() + "2"};
-    ToolRunner.run(testingUtility.getConfiguration(), canary, args);
+    assertEquals(0, ToolRunner.run(testingUtility.getConfiguration(), canary, args));
     verify(sink, times(tableNames.length)).initializeAndGetReadLatencyForTable(isA(String.class));
     for (int i=0; i<2; i++) {
       assertNotEquals("verify non-null read latency", null, sink.getReadLatencyMap().get(tableNames[i].getNameAsString()));
@@ -151,14 +160,14 @@ public class TestCanaryTool {
     // One table's timeout is set for 0 ms and thus, should lead to an error.
     verify(mockAppender, times(1)).doAppend(argThat(new ArgumentMatcher<LoggingEvent>() {
       @Override
-      public boolean matches(Object argument) {
+      public boolean matches(LoggingEvent argument) {
         return ((LoggingEvent) argument).getRenderedMessage().contains("exceeded the configured read timeout.");
       }
     }));
     verify(mockAppender, times(2)).doAppend(argThat(new ArgumentMatcher<LoggingEvent>() {
       @Override
-      public boolean matches(Object argument) {
-        return ((LoggingEvent) argument).getRenderedMessage().contains("The configured read timeout was");
+      public boolean matches(LoggingEvent argument) {
+        return argument.getRenderedMessage().contains("The configured read timeout was");
       }
     }));
   }
@@ -170,15 +179,16 @@ public class TestCanaryTool {
     Canary.RegionStdOutSink sink = spy(new Canary.RegionStdOutSink());
     Canary canary = new Canary(executor, sink);
     String[] args = { "-writeSniffing", "-writeTableTimeout", String.valueOf(Long.MAX_VALUE)};
-    ToolRunner.run(testingUtility.getConfiguration(), canary, args);
+    assertEquals(0, ToolRunner.run(testingUtility.getConfiguration(), canary, args));
     assertNotEquals("verify non-null write latency", null, sink.getWriteLatency());
     assertNotEquals("verify non-zero write latency", 0L, sink.getWriteLatency());
-    verify(mockAppender, times(1)).doAppend(argThat(new ArgumentMatcher<LoggingEvent>() {
-      @Override
-      public boolean matches(Object argument) {
-        return ((LoggingEvent) argument).getRenderedMessage().contains("The configured write timeout was");
-      }
-    }));
+    verify(mockAppender, times(1)).doAppend(argThat(
+        new ArgumentMatcher<LoggingEvent>() {
+          @Override
+          public boolean matches(LoggingEvent argument) {
+            return argument.getRenderedMessage().contains("The configured write timeout was");
+          }
+        }));
   }
 
   //no table created, so there should be no regions
@@ -187,8 +197,8 @@ public class TestCanaryTool {
     runRegionserverCanary();
     verify(mockAppender).doAppend(argThat(new ArgumentMatcher<LoggingEvent>() {
       @Override
-      public boolean matches(Object argument) {
-        return ((LoggingEvent) argument).getRenderedMessage().contains("Regionserver not serving any regions");
+      public boolean matches(LoggingEvent argument) {
+        return argument.getRenderedMessage().contains("Regionserver not serving any regions");
       }
     }));
   }
@@ -201,8 +211,8 @@ public class TestCanaryTool {
     runRegionserverCanary();
     verify(mockAppender, never()).doAppend(argThat(new ArgumentMatcher<LoggingEvent>() {
       @Override
-      public boolean matches(Object argument) {
-        return ((LoggingEvent) argument).getRenderedMessage().contains("Regionserver not serving any regions");
+      public boolean matches(LoggingEvent argument) {
+        return argument.getRenderedMessage().contains("Regionserver not serving any regions");
       }
     }));
   }
@@ -225,7 +235,7 @@ public class TestCanaryTool {
     org.apache.hadoop.conf.Configuration conf =
       new org.apache.hadoop.conf.Configuration(testingUtility.getConfiguration());
     conf.setBoolean(HConstants.HBASE_CANARY_READ_RAW_SCAN_KEY, true);
-    ToolRunner.run(conf, canary, args);
+    assertEquals(0, ToolRunner.run(conf, canary, args));
     verify(sink, atLeastOnce())
         .publishReadTiming(isA(ServerName.class), isA(HRegionInfo.class),
         isA(ColumnFamilyDescriptor.class), anyLong());
@@ -236,7 +246,7 @@ public class TestCanaryTool {
     ExecutorService executor = new ScheduledThreadPoolExecutor(1);
     Canary canary = new Canary(executor, new Canary.RegionServerStdOutSink());
     String[] args = { "-t", "10000", "-regionserver"};
-    ToolRunner.run(testingUtility.getConfiguration(), canary, args);
+    assertEquals(0, ToolRunner.run(testingUtility.getConfiguration(), canary, args));
     assertEquals("verify no read error count", 0, canary.getReadFailures().size());
   }
 

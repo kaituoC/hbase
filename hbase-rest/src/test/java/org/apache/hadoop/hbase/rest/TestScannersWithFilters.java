@@ -1,5 +1,4 @@
-/*
- *
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -16,7 +15,6 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.rest;
 
 import static org.junit.Assert.assertEquals;
@@ -29,15 +27,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
-
 import javax.xml.bind.JAXBContext;
 import javax.xml.bind.Marshaller;
 import javax.xml.bind.Unmarshaller;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.CompareOperator;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HConstants;
@@ -51,7 +46,6 @@ import org.apache.hadoop.hbase.client.Put;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.filter.BinaryComparator;
-import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
 import org.apache.hadoop.hbase.filter.Filter;
 import org.apache.hadoop.hbase.filter.FilterList;
 import org.apache.hadoop.hbase.filter.FilterList.Operator;
@@ -77,13 +71,20 @@ import org.apache.hadoop.hbase.testclassification.RestTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category({RestTests.class, MediumTests.class})
 public class TestScannersWithFilters {
 
-  private static final Log LOG = LogFactory.getLog(TestScannersWithFilters.class);
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestScannersWithFilters.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestScannersWithFilters.class);
 
   private static final TableName TABLE = TableName.valueOf("TestScannersWithFilters");
 
@@ -122,8 +123,8 @@ public class TestScannersWithFilters {
   private static JAXBContext context;
   private static Marshaller marshaller;
   private static Unmarshaller unmarshaller;
-  private static long numRows = ROWS_ONE.length + ROWS_TWO.length;
-  private static long colsPerRow = FAMILIES.length * QUALIFIERS_ONE.length;
+  private static long numRows = (long) ROWS_ONE.length + ROWS_TWO.length;
+  private static long colsPerRow = (long) FAMILIES.length * QUALIFIERS_ONE.length;
 
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
@@ -230,13 +231,13 @@ public class TestScannersWithFilters {
     byte[] body = Bytes.toBytes(writer.toString());
     Response response = client.put("/" + TABLE + "/scanner",
       Constants.MIMETYPE_XML, body);
-    assertEquals(response.getCode(), 201);
+    assertEquals(201, response.getCode());
     String scannerURI = response.getLocation();
     assertNotNull(scannerURI);
 
     // get a cell set
     response = client.get(scannerURI, Constants.MIMETYPE_XML);
-    assertEquals(response.getCode(), 200);
+    assertEquals(200, response.getCode());
     assertEquals(Constants.MIMETYPE_XML, response.getHeader("content-type"));
     CellSetModel cells = (CellSetModel)
       unmarshaller.unmarshal(new ByteArrayInputStream(response.getBody()));
@@ -252,7 +253,7 @@ public class TestScannersWithFilters {
 
     // delete the scanner
     response = client.delete(scannerURI);
-    assertEquals(response.getCode(), 200);
+    assertEquals(200, response.getCode());
   }
 
   private static void verifyScanFull(Scan s, KeyValue [] kvs)
@@ -265,20 +266,20 @@ public class TestScannersWithFilters {
     byte[] body = Bytes.toBytes(writer.toString());
     Response response = client.put("/" + TABLE + "/scanner",
       Constants.MIMETYPE_XML, body);
-    assertEquals(response.getCode(), 201);
+    assertEquals(201, response.getCode());
     String scannerURI = response.getLocation();
     assertNotNull(scannerURI);
 
     // get a cell set
     response = client.get(scannerURI, Constants.MIMETYPE_XML);
-    assertEquals(response.getCode(), 200);
+    assertEquals(200, response.getCode());
     assertEquals(Constants.MIMETYPE_XML, response.getHeader("content-type"));
     CellSetModel cellSet = (CellSetModel)
       unmarshaller.unmarshal(new ByteArrayInputStream(response.getBody()));
 
     // delete the scanner
     response = client.delete(scannerURI);
-    assertEquals(response.getCode(), 200);
+    assertEquals(200, response.getCode());
 
     int row = 0;
     int idx = 0;
@@ -295,7 +296,7 @@ public class TestScannersWithFilters {
       for (CellModel cell: cells) {
         assertTrue("Row mismatch",
             Bytes.equals(rowModel.getKey(), CellUtil.cloneRow(kvs[idx])));
-        byte[][] split = KeyValue.parseColumn(cell.getColumn());
+        byte[][] split = CellUtil.parseColumn(cell.getColumn());
         assertTrue("Family mismatch",
             Bytes.equals(split[0], CellUtil.cloneFamily(kvs[idx])));
         assertTrue("Qualifier mismatch",
@@ -319,20 +320,20 @@ public class TestScannersWithFilters {
     byte[] body = Bytes.toBytes(writer.toString());
     Response response = client.put("/" + TABLE + "/scanner",
       Constants.MIMETYPE_XML, body);
-    assertEquals(response.getCode(), 201);
+    assertEquals(201, response.getCode());
     String scannerURI = response.getLocation();
     assertNotNull(scannerURI);
 
     // get a cell set
     response = client.get(scannerURI, Constants.MIMETYPE_XML);
-    assertEquals(response.getCode(), 200);
+    assertEquals(200, response.getCode());
     assertEquals(Constants.MIMETYPE_XML, response.getHeader("content-type"));
     CellSetModel cellSet = (CellSetModel)
       unmarshaller.unmarshal(new ByteArrayInputStream(response.getBody()));
 
     // delete the scanner
     response = client.delete(scannerURI);
-    assertEquals(response.getCode(), 200);
+    assertEquals(200, response.getCode());
 
     Iterator<RowModel> i = cellSet.getRows().iterator();
     int j = 0;

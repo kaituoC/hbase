@@ -1,28 +1,30 @@
-/*
- * Copyright The Apache Software Foundation
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements. See the NOTICE file distributed with this
- * work for additional information regarding copyright ownership. The ASF
- * licenses this file to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS, WITHOUT
- * WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the
- * License for the specific language governing permissions and limitations
- * under the License.
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  */
 package org.apache.hadoop.hbase.thrift;
 
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.fail;
+
 import java.util.ArrayList;
 import java.util.List;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
@@ -37,13 +39,15 @@ import org.apache.thrift.transport.THttpClient;
 import org.apache.thrift.transport.TTransportException;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-import static org.junit.Assert.assertFalse;
-import org.junit.Rule;
 import org.junit.rules.ExpectedException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.base.Joiner;
+import org.apache.hbase.thirdparty.com.google.common.base.Joiner;
 
 /**
  * Start the HBase Thrift HTTP server on a random port through the command-line
@@ -53,8 +57,12 @@ import org.apache.hadoop.hbase.shaded.com.google.common.base.Joiner;
 
 public class TestThriftHttpServer {
 
-  private static final Log LOG =
-      LogFactory.getLog(TestThriftHttpServer.class);
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestThriftHttpServer.class);
+
+  private static final Logger LOG =
+      LoggerFactory.getLogger(TestThriftHttpServer.class);
 
   private static final HBaseTestingUtility TEST_UTIL =
       new HBaseTestingUtility();
@@ -83,6 +91,26 @@ public class TestThriftHttpServer {
     EnvironmentEdgeManager.reset();
   }
 
+  @Test
+  public void testExceptionThrownWhenMisConfigured() throws Exception {
+    Configuration conf = new Configuration(TEST_UTIL.getConfiguration());
+    conf.set("hbase.thrift.security.qop", "privacy");
+    conf.setBoolean("hbase.thrift.ssl.enabled", false);
+
+    ThriftServerRunner runner = null;
+    ExpectedException thrown = ExpectedException.none();
+    try {
+      thrown.expect(IllegalArgumentException.class);
+      thrown.expectMessage("Thrift HTTP Server's QoP is privacy, " +
+          "but hbase.thrift.ssl.enabled is false");
+      runner = new ThriftServerRunner(conf);
+      fail("Thrift HTTP Server starts up even with wrong security configurations.");
+    } catch (Exception e) {
+    }
+
+    assertNull(runner);
+  }
+
   private void startHttpServerThread(final String[] args) {
     LOG.info("Starting HBase Thrift server with HTTP server: " + Joiner.on(" ").join(args));
 
@@ -105,7 +133,7 @@ public class TestThriftHttpServer {
   @Rule
   public ExpectedException exception = ExpectedException.none();
 
-  @Test(timeout=600000)
+  @Test
   public void testRunThriftServerWithHeaderBufferLength() throws Exception {
 
     // Test thrift server with HTTP header length less than 64k
@@ -121,7 +149,7 @@ public class TestThriftHttpServer {
     runThriftServer(1024 * 64);
   }
 
-  @Test(timeout=600000)
+  @Test
   public void testRunThriftServer() throws Exception {
     runThriftServer(0);
   }
@@ -138,7 +166,7 @@ public class TestThriftHttpServer {
 
     // wait up to 10s for the server to start
     for (int i = 0; i < 100
-        && ( thriftServer.serverRunner == null ||  thriftServer.serverRunner.httpServer ==
+        && (thriftServer.serverRunner == null ||  thriftServer.serverRunner.httpServer ==
         null); i++) {
       Thread.sleep(100);
     }

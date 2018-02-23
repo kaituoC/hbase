@@ -20,9 +20,7 @@ package org.apache.hadoop.hbase.master;
 import static org.junit.Assert.*;
 
 import java.util.AbstractMap.SimpleImmutableEntry;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.quotas.SpaceQuotaSnapshot;
 import org.apache.hadoop.hbase.quotas.SpaceQuotaSnapshot.SpaceQuotaStatus;
@@ -32,12 +30,20 @@ import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Threads;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category({MasterTests.class, MediumTests.class})
 public class TestMasterMetricsWrapper {
-  private static final Log LOG = LogFactory.getLog(TestMasterMetricsWrapper.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestMasterMetricsWrapper.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestMasterMetricsWrapper.class);
 
   private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   private static final int NUM_RS = 4;
@@ -52,7 +58,7 @@ public class TestMasterMetricsWrapper {
     TEST_UTIL.shutdownMiniCluster();
   }
 
-  @Test (timeout = 30000)
+  @Test
   public void testInfo() {
     HMaster master = TEST_UTIL.getHBaseCluster().getMaster();
     MetricsMasterWrapperImpl info = new MetricsMasterWrapperImpl(master);

@@ -25,13 +25,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.backup.impl.BackupSystemTable;
@@ -43,12 +41,20 @@ import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category({ MasterTests.class, SmallTests.class })
 public class TestBackupHFileCleaner {
-  private static final Log LOG = LogFactory.getLog(TestBackupHFileCleaner.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestBackupHFileCleaner.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestBackupHFileCleaner.class);
   private final static HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   private static Configuration conf = TEST_UTIL.getConfiguration();
   private static TableName tableName = TableName.valueOf("backup.hfile.cleaner");
@@ -57,7 +63,7 @@ public class TestBackupHFileCleaner {
   Path root;
 
   /**
-   * @throws java.lang.Exception
+   * @throws Exception if starting the mini cluster or getting the filesystem fails
    */
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
@@ -68,7 +74,7 @@ public class TestBackupHFileCleaner {
   }
 
   /**
-   * @throws java.lang.Exception
+   * @throws Exception if closing the filesystem or shutting down the mini cluster fails
    */
   @AfterClass
   public static void tearDownAfterClass() throws Exception {
@@ -110,7 +116,9 @@ public class TestBackupHFileCleaner {
     deletable = cleaner.getDeletableFiles(stats);
     boolean found = false;
     for (FileStatus stat1 : deletable) {
-      if (stat.equals(stat1)) found = true;
+      if (stat.equals(stat1)) {
+        found = true;
+      }
     }
     assertTrue("Cleaner should allow to delete this file as there is no hfile reference "
         + "for it.", found);
@@ -133,7 +141,9 @@ public class TestBackupHFileCleaner {
     deletable = cleaner.getDeletableFiles(stats);
     found = false;
     for (FileStatus stat1 : deletable) {
-      if (stat.equals(stat1)) found = true;
+      if (stat.equals(stat1)) {
+        found = true;
+      }
     }
     assertFalse("Cleaner should not allow to delete this file as there is a hfile reference "
         + "for it.", found);

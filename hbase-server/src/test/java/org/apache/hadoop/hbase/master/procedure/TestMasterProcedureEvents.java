@@ -15,14 +15,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.master.procedure;
 
 import static org.junit.Assert.assertEquals;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HRegionInfo;
@@ -41,14 +39,22 @@ import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.junit.After;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category({MasterTests.class, MediumTests.class})
 public class TestMasterProcedureEvents {
-  private static final Log LOG = LogFactory.getLog(TestCreateTableProcedure.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestMasterProcedureEvents.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestCreateTableProcedure.class);
 
   protected static final HBaseTestingUtility UTIL = new HBaseTestingUtility();
 
@@ -84,7 +90,7 @@ public class TestMasterProcedureEvents {
     }
   }
 
-  @Test(timeout = 30000)
+  @Test
   public void testMasterInitializedEvent() throws Exception {
     final TableName tableName = TableName.valueOf(name.getMethodName());
     HMaster master = UTIL.getMiniHBaseCluster().getMaster();
@@ -102,7 +108,7 @@ public class TestMasterProcedureEvents {
       new CreateTableProcedure(procExec.getEnvironment(), htd, new HRegionInfo[] { hri }));
   }
 
-  @Test(timeout = 30000)
+  @Test
   public void testServerCrashProcedureEvent() throws Exception {
     final TableName tableName = TableName.valueOf(name.getMethodName());
     HMaster master = UTIL.getMiniHBaseCluster().getMaster();
@@ -168,7 +174,7 @@ public class TestMasterProcedureEvents {
 
     // wake the event
     LOG.debug("wake " + event);
-    procSched.wakeEvent(event);
+    event.wake(procSched);
     assertEquals(true, event.isReady());
 
     // wait until proc completes

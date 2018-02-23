@@ -22,6 +22,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.CompareOperator;
@@ -109,7 +110,25 @@ public interface Table extends Closeable {
    * @return Array of boolean.  True if the specified Get matches one or more keys, false if not.
    * @throws IOException e
    */
-  boolean[] existsAll(List<Get> gets) throws IOException;
+  boolean[] exists(List<Get> gets) throws IOException;
+
+  /**
+   * Test for the existence of columns in the table, as specified by the Gets.
+   * This will return an array of booleans. Each value will be true if the related Get matches
+   * one or more keys, false if not.
+   * This is a server-side call so it prevents any data from being transferred to
+   * the client.
+   *
+   * @param gets the Gets
+   * @return Array of boolean.  True if the specified Get matches one or more keys, false if not.
+   * @throws IOException e
+   * @deprecated since 2.0 version and will be removed in 3.0 version.
+   *             use {@link #exists(List)}
+   */
+  @Deprecated
+  default boolean[] existsAll(List<Get> gets) throws IOException {
+    return exists(gets);
+  }
 
   /**
    * Method that does a batch call on Deletes, Gets, Puts, Increments, Appends, RowMutations.
@@ -240,9 +259,11 @@ public interface Table extends Closeable {
    * @param put data to put if check succeeds
    * @throws IOException e
    * @return true if the new put was executed, false otherwise
+   * @deprecated Since 2.0.0. Will be removed in 3.0.0. Use {@link #checkAndMutate(byte[], byte[])}
    */
+  @Deprecated
   boolean checkAndPut(byte[] row, byte[] family, byte[] qualifier,
-    byte[] value, Put put) throws IOException;
+      byte[] value, Put put) throws IOException;
 
   /**
    * Atomically checks if a row/family/qualifier value matches the expected
@@ -262,12 +283,11 @@ public interface Table extends Closeable {
    * @param put data to put if check succeeds
    * @throws IOException e
    * @return true if the new put was executed, false otherwise
-   * @deprecated Since 2.0.0. Will be removed in 3.0.0. Use
-   *  {@link #checkAndPut(byte[], byte[], byte[], CompareOperator, byte[], Put)}}
+   * @deprecated Since 2.0.0. Will be removed in 3.0.0. Use {@link #checkAndMutate(byte[], byte[])}
    */
   @Deprecated
   boolean checkAndPut(byte[] row, byte[] family, byte[] qualifier,
-    CompareFilter.CompareOp compareOp, byte[] value, Put put) throws IOException;
+      CompareFilter.CompareOp compareOp, byte[] value, Put put) throws IOException;
 
   /**
    * Atomically checks if a row/family/qualifier value matches the expected
@@ -287,9 +307,11 @@ public interface Table extends Closeable {
    * @param put data to put if check succeeds
    * @throws IOException e
    * @return true if the new put was executed, false otherwise
+   * @deprecated Since 2.0.0. Will be removed in 3.0.0. Use {@link #checkAndMutate(byte[], byte[])}
    */
-  boolean checkAndPut(byte[] row, byte[] family, byte[] qualifier,
-                      CompareOperator op, byte[] value, Put put) throws IOException;
+  @Deprecated
+  boolean checkAndPut(byte[] row, byte[] family, byte[] qualifier, CompareOperator op,
+      byte[] value, Put put) throws IOException;
 
   /**
    * Deletes the specified cells/row.
@@ -337,7 +359,9 @@ public interface Table extends Closeable {
    * @param delete data to delete if check succeeds
    * @throws IOException e
    * @return true if the new delete was executed, false otherwise
+   * @deprecated Since 2.0.0. Will be removed in 3.0.0. Use {@link #checkAndMutate(byte[], byte[])}
    */
+  @Deprecated
   boolean checkAndDelete(byte[] row, byte[] family, byte[] qualifier,
     byte[] value, Delete delete) throws IOException;
 
@@ -359,8 +383,7 @@ public interface Table extends Closeable {
    * @param delete data to delete if check succeeds
    * @throws IOException e
    * @return true if the new delete was executed, false otherwise
-   * @deprecated Since 2.0.0. Will be removed in 3.0.0. Use
-   *  {@link #checkAndDelete(byte[], byte[], byte[], byte[], Delete)}
+   * @deprecated Since 2.0.0. Will be removed in 3.0.0. Use {@link #checkAndMutate(byte[], byte[])}
    */
   @Deprecated
   boolean checkAndDelete(byte[] row, byte[] family, byte[] qualifier,
@@ -384,9 +407,73 @@ public interface Table extends Closeable {
    * @param delete data to delete if check succeeds
    * @throws IOException e
    * @return true if the new delete was executed, false otherwise
+   * @deprecated Since 2.0.0. Will be removed in 3.0.0. Use {@link #checkAndMutate(byte[], byte[])}
    */
+  @Deprecated
   boolean checkAndDelete(byte[] row, byte[] family, byte[] qualifier,
                          CompareOperator op, byte[] value, Delete delete) throws IOException;
+
+  /**
+   * Atomically checks if a row/family/qualifier value matches the expected value. If it does, it
+   * adds the Put/Delete/RowMutations.
+   * <p>
+   * Use the returned {@link CheckAndMutateBuilder} to construct your request and then execute it.
+   * This is a fluent style API, the code is like:
+   *
+   * <pre>
+   * <code>
+   * table.checkAndMutate(row, family).qualifier(qualifier).ifNotExists().thenPut(put);
+   * </code>
+   * </pre>
+   */
+  CheckAndMutateBuilder checkAndMutate(byte[] row, byte[] family);
+  /**
+   * A helper class for sending checkAndMutate request.
+   */
+  interface CheckAndMutateBuilder {
+
+    /**
+     * @param qualifier column qualifier to check.
+     */
+    CheckAndMutateBuilder qualifier(byte[] qualifier);
+
+    /**
+     * Check for lack of column.
+     */
+    CheckAndMutateBuilder ifNotExists();
+
+    /**
+     * Check for equality.
+     * @param value the expected value
+     */
+    default CheckAndMutateBuilder ifEquals(byte[] value) {
+      return ifMatches(CompareOperator.EQUAL, value);
+    }
+
+    /**
+     * @param compareOp comparison operator to use
+     * @param value the expected value
+     */
+    CheckAndMutateBuilder ifMatches(CompareOperator compareOp, byte[] value);
+
+    /**
+     * @param put data to put if check succeeds
+     * @return {@code true} if the new put was executed, {@code false} otherwise.
+     */
+    boolean thenPut(Put put) throws IOException;
+
+    /**
+     * @param delete data to delete if check succeeds
+     * @return {@code true} if the new delete was executed, {@code false} otherwise.
+     */
+    boolean thenDelete(Delete delete) throws IOException;
+    /**
+     * @param mutation mutations to perform if check succeeds
+     * @return true if the new mutation was executed, false otherwise.
+     */
+    boolean thenMutate(RowMutations mutation) throws IOException;
+
+  }
 
   /**
    * Performs multiple mutations atomically on a single row. Currently
@@ -630,8 +717,7 @@ public interface Table extends Closeable {
    * @param mutation  mutations to perform if check succeeds
    * @throws IOException e
    * @return true if the new put was executed, false otherwise
-   * @deprecated Since 2.0.0. Will be removed in 3.0.0. Use
-   * {@link #checkAndMutate(byte[], byte[], byte[], CompareOperator, byte[], RowMutations)}
+   * @deprecated Since 2.0.0. Will be removed in 3.0.0. Use {@link #checkAndMutate(byte[], byte[])}
    */
   @Deprecated
   boolean checkAndMutate(byte[] row, byte[] family, byte[] qualifier,
@@ -655,34 +741,28 @@ public interface Table extends Closeable {
    * @param mutation  mutations to perform if check succeeds
    * @throws IOException e
    * @return true if the new put was executed, false otherwise
+   * @deprecated Since 2.0.0. Will be removed in 3.0.0. Use {@link #checkAndMutate(byte[], byte[])}
    */
+  @Deprecated
   boolean checkAndMutate(byte[] row, byte[] family, byte[] qualifier, CompareOperator op,
                          byte[] value, RowMutations mutation) throws IOException;
 
   /**
-   * Set timeout (millisecond) of each operation in this Table instance, will override the value
-   * of hbase.client.operation.timeout in configuration.
-   * Operation timeout is a top-level restriction that makes sure a blocking method will not be
-   * blocked more than this. In each operation, if rpc request fails because of timeout or
-   * other reason, it will retry until success or throw a RetriesExhaustedException. But if the
-   * total time being blocking reach the operation timeout before retries exhausted, it will break
-   * early and throw SocketTimeoutException.
-   * @param operationTimeout the total timeout of each operation in millisecond.
-   * @deprecated since 2.0.0, use {@link TableBuilder#setOperationTimeout} instead
+   * Get timeout of each rpc request in this Table instance. It will be overridden by a more
+   * specific rpc timeout config such as readRpcTimeout or writeRpcTimeout.
+   * @see #getReadRpcTimeout(TimeUnit)
+   * @see #getWriteRpcTimeout(TimeUnit)
+   * @param unit the unit of time the timeout to be represented in
+   * @return rpc timeout in the specified time unit
    */
-  @Deprecated
-  void setOperationTimeout(int operationTimeout);
-
-  /**
-   * Get timeout (millisecond) of each operation for in Table instance.
-   */
-  int getOperationTimeout();
+  long getRpcTimeout(TimeUnit unit);
 
   /**
    * Get timeout (millisecond) of each rpc request in this Table instance.
    *
    * @return Currently configured read timeout
-   * @deprecated Use getReadRpcTimeout or getWriteRpcTimeout instead
+   * @deprecated use {@link #getReadRpcTimeout(TimeUnit)} or
+   *             {@link #getWriteRpcTimeout(TimeUnit)} instead
    */
   @Deprecated
   int getRpcTimeout();
@@ -703,8 +783,18 @@ public interface Table extends Closeable {
   void setRpcTimeout(int rpcTimeout);
 
   /**
-   * Get timeout (millisecond) of each rpc read request in this Table instance.
+   * Get timeout of each rpc read request in this Table instance.
+   * @param unit the unit of time the timeout to be represented in
+   * @return read rpc timeout in the specified time unit
    */
+  long getReadRpcTimeout(TimeUnit unit);
+
+  /**
+   * Get timeout (millisecond) of each rpc read request in this Table instance.
+   * @deprecated since 2.0 and will be removed in 3.0 version
+   *             use {@link #getReadRpcTimeout(TimeUnit)} instead
+   */
+  @Deprecated
   int getReadRpcTimeout();
 
   /**
@@ -713,15 +803,25 @@ public interface Table extends Closeable {
    * If a rpc read request waiting too long, it will stop waiting and send a new request to retry
    * until retries exhausted or operation timeout reached.
    *
-   * @param readRpcTimeout
+   * @param readRpcTimeout the timeout for read rpc request in milliseconds
    * @deprecated since 2.0.0, use {@link TableBuilder#setReadRpcTimeout} instead
    */
   @Deprecated
   void setReadRpcTimeout(int readRpcTimeout);
 
   /**
-   * Get timeout (millisecond) of each rpc write request in this Table instance.
+   * Get timeout of each rpc write request in this Table instance.
+   * @param unit the unit of time the timeout to be represented in
+   * @return write rpc timeout in the specified time unit
    */
+  long getWriteRpcTimeout(TimeUnit unit);
+
+  /**
+   * Get timeout (millisecond) of each rpc write request in this Table instance.
+   * @deprecated since 2.0 and will be removed in 3.0 version
+   *             use {@link #getWriteRpcTimeout(TimeUnit)} instead
+   */
+  @Deprecated
   int getWriteRpcTimeout();
 
   /**
@@ -730,9 +830,38 @@ public interface Table extends Closeable {
    * If a rpc write request waiting too long, it will stop waiting and send a new request to retry
    * until retries exhausted or operation timeout reached.
    *
-   * @param writeRpcTimeout
+   * @param writeRpcTimeout the timeout for write rpc request in milliseconds
    * @deprecated since 2.0.0, use {@link TableBuilder#setWriteRpcTimeout} instead
    */
   @Deprecated
   void setWriteRpcTimeout(int writeRpcTimeout);
+
+  /**
+   * Get timeout of each operation in Table instance.
+   * @param unit the unit of time the timeout to be represented in
+   * @return operation rpc timeout in the specified time unit
+   */
+  long getOperationTimeout(TimeUnit unit);
+
+  /**
+   * Get timeout (millisecond) of each operation for in Table instance.
+   * @deprecated since 2.0 and will be removed in 3.0 version
+   *             use {@link #getOperationTimeout(TimeUnit)} instead
+   */
+  @Deprecated
+  int getOperationTimeout();
+
+  /**
+   * Set timeout (millisecond) of each operation in this Table instance, will override the value
+   * of hbase.client.operation.timeout in configuration.
+   * Operation timeout is a top-level restriction that makes sure a blocking method will not be
+   * blocked more than this. In each operation, if rpc request fails because of timeout or
+   * other reason, it will retry until success or throw a RetriesExhaustedException. But if the
+   * total time being blocking reach the operation timeout before retries exhausted, it will break
+   * early and throw SocketTimeoutException.
+   * @param operationTimeout the total timeout of each operation in millisecond.
+   * @deprecated since 2.0.0, use {@link TableBuilder#setOperationTimeout} instead
+   */
+  @Deprecated
+  void setOperationTimeout(int operationTimeout);
 }

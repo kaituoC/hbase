@@ -37,7 +37,7 @@ public interface CellBuilder {
 
   CellBuilder setTimestamp(final long timestamp);
 
-  CellBuilder setType(final byte type);
+  CellBuilder setType(final Cell.Type type);
 
   CellBuilder setValue(final byte[] value);
   CellBuilder setValue(final byte[] value, final int vOffset, final int vLength);

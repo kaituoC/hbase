@@ -29,8 +29,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import javax.crypto.spec.SecretKeySpec;
 
 import org.apache.commons.cli.CommandLine;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HBaseInterfaceAudience;
@@ -40,6 +38,8 @@ import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptor;
 import org.apache.hadoop.hbase.client.ColumnFamilyDescriptorBuilder;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
@@ -49,6 +49,7 @@ import org.apache.hadoop.hbase.io.compress.Compression;
 import org.apache.hadoop.hbase.io.crypto.Cipher;
 import org.apache.hadoop.hbase.io.crypto.Encryption;
 import org.apache.hadoop.hbase.io.encoding.DataBlockEncoding;
+import org.apache.hadoop.hbase.log.HBaseMarkers;
 import org.apache.hadoop.hbase.regionserver.BloomType;
 import org.apache.hadoop.hbase.security.EncryptionUtil;
 import org.apache.hadoop.hbase.security.HBaseKerberosUtils;
@@ -67,7 +68,7 @@ import org.apache.hadoop.util.ToolRunner;
 @InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.TOOLS)
 public class LoadTestTool extends AbstractHBaseTool {
 
-  private static final Log LOG = LogFactory.getLog(LoadTestTool.class);
+  private static final Logger LOG = LoggerFactory.getLogger(LoadTestTool.class);
   private static final String COLON = ":";
 
   /** Table name for the test */
@@ -142,7 +143,6 @@ public class LoadTestTool extends AbstractHBaseTool {
   protected static final String OPT_SKIP_INIT = "skip_init";
   protected static final String OPT_INIT_ONLY = "init_only";
   protected static final String NUM_TABLES = "num_tables";
-  protected static final String OPT_REGIONS_PER_SERVER = "regions_per_server";
   protected static final String OPT_BATCHUPDATE = "batchupdate";
   protected static final String OPT_UPDATE = "update";
 
@@ -349,10 +349,6 @@ public class LoadTestTool extends AbstractHBaseTool {
       "A positive integer number. When a number n is specified, load test "
           + "tool  will load n table parallely. -tn parameter value becomes "
           + "table name prefix. Each table name is in format <tn>_1...<tn>_n");
-
-    addOptWithArg(OPT_REGIONS_PER_SERVER,
-      "A positive integer number. When a number n is specified, load test "
-          + "tool will create the test table with n regions per server");
 
     addOptWithArg(OPT_ENCRYPTION, OPT_ENCRYPTION_USAGE);
     addOptNoArg(OPT_DEFERRED_LOG_FLUSH, OPT_DEFERRED_LOG_FLUSH_USAGE);
@@ -584,7 +580,7 @@ public class LoadTestTool extends AbstractHBaseTool {
           try {
             addAuthInfoToConf(authConfig, conf, superUser, userNames);
           } catch (IOException exp) {
-            LOG.error(exp);
+            LOG.error(exp.toString(), exp);
             return EXIT_FAILURE;
           }
           userOwner = User.create(HBaseKerberosUtils.loginAndReturnUGI(conf, superUser));
@@ -614,7 +610,8 @@ public class LoadTestTool extends AbstractHBaseTool {
         AccessControlClient.grant(ConnectionFactory.createConnection(conf),
             tableName, userOwner.getShortName(), null, null, actions);
       } catch (Throwable e) {
-        LOG.fatal("Error in granting permission for the user " + userOwner.getShortName(), e);
+        LOG.error(HBaseMarkers.FATAL, "Error in granting permission for the user " +
+            userOwner.getShortName(), e);
         return EXIT_FAILURE;
       }
     }

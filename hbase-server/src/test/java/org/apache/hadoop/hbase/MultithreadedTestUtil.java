@@ -25,14 +25,14 @@ import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public abstract class MultithreadedTestUtil {
 
-  private static final Log LOG =
-    LogFactory.getLog(MultithreadedTestUtil.class);
+  private static final Logger LOG =
+    LoggerFactory.getLogger(MultithreadedTestUtil.class);
 
   public static class TestContext {
     private final Configuration conf;
@@ -119,6 +119,7 @@ public abstract class MultithreadedTestUtil {
       this.ctx = ctx;
     }
 
+    @Override
     public void run() {
       try {
         doWork();
@@ -143,6 +144,7 @@ public abstract class MultithreadedTestUtil {
       super(ctx);
     }
 
+    @Override
     public final void doWork() throws Exception {
       try {
         while (ctx.shouldRun() && !stopped) {

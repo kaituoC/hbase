@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -25,20 +24,19 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Abortable;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.MiniHBaseCluster;
 import org.apache.hadoop.hbase.ServerLoad;
+import org.apache.hadoop.hbase.ServerMetricsBuilder;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.master.assignment.AssignmentManager;
 import org.apache.hadoop.hbase.regionserver.HRegion;
@@ -47,22 +45,29 @@ import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.JVMClusterUtil;
-import org.apache.hadoop.hbase.zookeeper.DrainingServerTracker;
-import org.apache.hadoop.hbase.zookeeper.RegionServerTracker;
 import org.apache.hadoop.hbase.zookeeper.ZKUtil;
-import org.apache.hadoop.hbase.zookeeper.ZooKeeperWatcher;
+import org.apache.hadoop.hbase.zookeeper.ZKWatcher;
+import org.apache.hadoop.hbase.zookeeper.ZNodePaths;
 import org.junit.AfterClass;
 import org.junit.Assert;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
 import org.mockito.Mockito;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category({MasterTests.class, MediumTests.class})
 public class TestAssignmentListener {
-  private static final Log LOG = LogFactory.getLog(TestAssignmentListener.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestAssignmentListener.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestAssignmentListener.class);
 
   private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
 
@@ -97,14 +102,14 @@ public class TestAssignmentListener {
     }
 
     @Override
-    public void regionOpened(final HRegionInfo regionInfo, final ServerName serverName) {
+    public void regionOpened(final RegionInfo regionInfo, final ServerName serverName) {
       LOG.info("Assignment open region=" + regionInfo + " server=" + serverName);
       openCount.incrementAndGet();
       modified.incrementAndGet();
     }
 
     @Override
-    public void regionClosed(final HRegionInfo regionInfo) {
+    public void regionClosed(final RegionInfo regionInfo) {
       LOG.info("Assignment close region=" + regionInfo);
       closeCount.incrementAndGet();
       modified.incrementAndGet();
@@ -169,7 +174,7 @@ public class TestAssignmentListener {
     TEST_UTIL.shutdownMiniCluster();
   }
 
-  @Test(timeout=60000)
+  @Test
   public void testServerListener() throws IOException, InterruptedException {
     ServerManager serverManager = TEST_UTIL.getHBaseCluster().getMaster().getServerManager();
 
@@ -211,7 +216,7 @@ public class TestAssignmentListener {
     }
   }
 
-  @Test(timeout=60000)
+  @Test
   public void testAssignmentListener() throws IOException, InterruptedException {
     AssignmentManager am = TEST_UTIL.getHBaseCluster().getMaster().getAssignmentManager();
     Admin admin = TEST_UTIL.getAdmin();
@@ -258,7 +263,7 @@ public class TestAssignmentListener {
         admin.majorCompact(tableName);
         mergeable = 0;
         for (JVMClusterUtil.RegionServerThread regionThread: miniCluster.getRegionServerThreads()) {
-          for (Region region: regionThread.getRegionServer().getOnlineRegions(tableName)) {
+          for (Region region: regionThread.getRegionServer().getRegions(tableName)) {
             mergeable += ((HRegion)region).isMergeable() ? 1 : 0;
           }
         }
@@ -267,7 +272,7 @@ public class TestAssignmentListener {
       // Merge the two regions
       LOG.info("Merge Regions");
       listener.reset();
-      List<HRegionInfo> regions = admin.getTableRegions(tableName);
+      List<RegionInfo> regions = admin.getRegions(tableName);
       assertEquals(2, regions.size());
       boolean sameServer = areAllRegionsLocatedOnSameServer(tableName);
       // If the regions are located by different server, we need to move
@@ -299,7 +304,7 @@ public class TestAssignmentListener {
     MiniHBaseCluster miniCluster = TEST_UTIL.getMiniHBaseCluster();
     int serverCount = 0;
     for (JVMClusterUtil.RegionServerThread regionThread: miniCluster.getRegionServerThreads()) {
-      if (!regionThread.getRegionServer().getOnlineRegions(TABLE_NAME).isEmpty()) {
+      if (!regionThread.getRegionServer().getRegions(TABLE_NAME).isEmpty()) {
         ++serverCount;
       }
       if (serverCount > 1) {
@@ -318,11 +323,11 @@ public class TestAssignmentListener {
     // are properly added to the ServerManager.drainingServers when they
     // register with the ServerManager under these circumstances.
     Configuration conf = TEST_UTIL.getConfiguration();
-    ZooKeeperWatcher zooKeeper = new ZooKeeperWatcher(conf,
+    ZKWatcher zooKeeper = new ZKWatcher(conf,
         "zkWatcher-NewServerDrainTest", abortable, true);
     String baseZNode = conf.get(HConstants.ZOOKEEPER_ZNODE_PARENT,
         HConstants.DEFAULT_ZOOKEEPER_ZNODE_PARENT);
-    String drainingZNode = ZKUtil.joinZNode(baseZNode,
+    String drainingZNode = ZNodePaths.joinZNode(baseZNode,
         conf.get("zookeeper.znode.draining.rs", "draining"));
 
     HMaster master = Mockito.mock(HMaster.class);
@@ -342,13 +347,13 @@ public class TestAssignmentListener {
     // is started (just as we see when we failover to the Backup HMaster).
     // One of these will already be a draining server.
     HashMap<ServerName, ServerLoad> onlineServers = new HashMap<>();
-    onlineServers.put(SERVERNAME_A, ServerLoad.EMPTY_SERVERLOAD);
-    onlineServers.put(SERVERNAME_C, ServerLoad.EMPTY_SERVERLOAD);
+    onlineServers.put(SERVERNAME_A, new ServerLoad(ServerMetricsBuilder.of(SERVERNAME_A)));
+    onlineServers.put(SERVERNAME_C, new ServerLoad(ServerMetricsBuilder.of(SERVERNAME_C)));
 
     // Create draining znodes for the draining servers, which would have been
     // performed when the previous HMaster was running.
     for (ServerName sn : drainingServers) {
-      String znode = ZKUtil.joinZNode(drainingZNode, sn.getServerName());
+      String znode = ZNodePaths.joinZNode(drainingZNode, sn.getServerName());
       ZKUtil.createAndFailSilent(zooKeeper, znode);
     }
 
@@ -365,10 +370,8 @@ public class TestAssignmentListener {
     drainingServerTracker.start();
 
     // Confirm our ServerManager lists are empty.
-    Assert.assertEquals(serverManager.getOnlineServers(),
-        new HashMap<ServerName, ServerLoad>());
-    Assert.assertEquals(serverManager.getDrainingServersList(),
-        new ArrayList<ServerName>());
+    Assert.assertEquals(new HashMap<ServerName, ServerLoad>(), serverManager.getOnlineServers());
+    Assert.assertEquals(new ArrayList<ServerName>(), serverManager.getDrainingServersList());
 
     // checkAndRecordNewServer() is how servers are added to the ServerManager.
     ArrayList<ServerName> onlineDrainingServers = new ArrayList<>();
@@ -381,8 +384,7 @@ public class TestAssignmentListener {
     }
 
     // Verify the ServerManager lists are correctly updated.
-    Assert.assertEquals(serverManager.getOnlineServers(), onlineServers);
-    Assert.assertEquals(serverManager.getDrainingServersList(),
-        onlineDrainingServers);
+    Assert.assertEquals(onlineServers, serverManager.getOnlineServers());
+    Assert.assertEquals(onlineDrainingServers, serverManager.getDrainingServersList());
   }
 }

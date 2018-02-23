@@ -108,6 +108,7 @@ module Shell
         yield
       rescue => cause
         # let individual command handle exceptions first
+        cause = cause.getCause if cause.is_a? java.io.UncheckedIOException
         handle_exceptions(cause, *args) if respond_to?(:handle_exceptions)
         # Global HBase exception handling below if not handled by respective command above
         if cause.is_a?(org.apache.hadoop.hbase.TableNotFoundException)
@@ -117,7 +118,8 @@ module Shell
           raise "Unknown region #{args.first}!"
         end
         if cause.is_a?(org.apache.hadoop.hbase.NamespaceNotFoundException)
-          raise "Unknown namespace #{args.first}!"
+          s = /.*NamespaceNotFoundException: (?<namespace>[^\n]+).*/.match(cause.message)
+          raise "Unknown namespace #{s['namespace']}!"
         end
         if cause.is_a?(org.apache.hadoop.hbase.snapshot.SnapshotDoesNotExistException)
           raise "Unknown snapshot #{args.first}!"

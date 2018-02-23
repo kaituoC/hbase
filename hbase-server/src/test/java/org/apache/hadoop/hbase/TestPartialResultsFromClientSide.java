@@ -29,12 +29,10 @@ import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.client.ClientScanner;
 import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
@@ -51,10 +49,13 @@ import org.apache.hadoop.hbase.util.ClassSize;
 import org.apache.hadoop.hbase.util.Pair;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * These tests are focused on testing how partial results appear to a client. Partial results are
@@ -68,7 +69,12 @@ import org.junit.rules.TestName;
  */
 @Category(MediumTests.class)
 public class TestPartialResultsFromClientSide {
-  private static final Log LOG = LogFactory.getLog(TestPartialResultsFromClientSide.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestPartialResultsFromClientSide.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestPartialResultsFromClientSide.class);
 
   private final static HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   private final static int MINICLUSTER_SIZE = 5;
@@ -385,7 +391,7 @@ public class TestPartialResultsFromClientSide {
       // Estimate the cell heap size. One difference is that on server side, the KV Heap size is
       // estimated differently in case the cell is backed up by MSLAB byte[] (no overhead for
       // backing array). Thus below calculation is a bit brittle.
-      CELL_HEAP_SIZE = CellUtil.estimatedHeapSizeOf(result.rawCells()[0])
+      CELL_HEAP_SIZE = PrivateCellUtil.estimatedSizeOfCell(result.rawCells()[0])
           - (ClassSize.ARRAY+3);
       if (LOG.isInfoEnabled()) LOG.info("Cell heap size: " + CELL_HEAP_SIZE);
       scanner.close();
@@ -817,11 +823,11 @@ public class TestPartialResultsFromClientSide {
   }
 
   private void moveRegion(Table table, int index) throws IOException{
-    List<Pair<HRegionInfo, ServerName>> regions = MetaTableAccessor
+    List<Pair<RegionInfo, ServerName>> regions = MetaTableAccessor
         .getTableRegionsAndLocations(TEST_UTIL.getConnection(),
             table.getName());
     assertEquals(1, regions.size());
-    HRegionInfo regionInfo = regions.get(0).getFirst();
+    RegionInfo regionInfo = regions.get(0).getFirst();
     ServerName name = TEST_UTIL.getHBaseCluster().getRegionServer(index).getServerName();
     TEST_UTIL.getAdmin().move(regionInfo.getEncodedNameAsBytes(),
         Bytes.toBytes(name.getServerName()));

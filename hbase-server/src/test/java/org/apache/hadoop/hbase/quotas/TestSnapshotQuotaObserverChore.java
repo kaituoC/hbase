@@ -1,12 +1,13 @@
-/*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to you under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+/**
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- * http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -24,13 +25,10 @@ import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellScanner;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HTableDescriptor;
@@ -49,25 +47,34 @@ import org.apache.hadoop.hbase.master.HMaster;
 import org.apache.hadoop.hbase.quotas.SnapshotQuotaObserverChore.SnapshotWithSize;
 import org.apache.hadoop.hbase.quotas.SpaceQuotaHelperForTests.NoFilesToDischarge;
 import org.apache.hadoop.hbase.quotas.SpaceQuotaHelperForTests.SpaceQuotaSnapshotPredicate;
+import org.apache.hadoop.hbase.regionserver.HStore;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.junit.AfterClass;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.HashMultimap;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Iterables;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Multimap;
+import org.apache.hbase.thirdparty.com.google.common.collect.HashMultimap;
+import org.apache.hbase.thirdparty.com.google.common.collect.Iterables;
+import org.apache.hbase.thirdparty.com.google.common.collect.Multimap;
 
 /**
  * Test class for the {@link SnapshotQuotaObserverChore}.
  */
 @Category(MediumTests.class)
 public class TestSnapshotQuotaObserverChore {
-  private static final Log LOG = LogFactory.getLog(TestSnapshotQuotaObserverChore.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestSnapshotQuotaObserverChore.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestSnapshotQuotaObserverChore.class);
   private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   private static final AtomicLong COUNTER = new AtomicLong();
 
@@ -240,13 +247,14 @@ public class TestSnapshotQuotaObserverChore {
     helper.writeData(tn1, 256L * SpaceQuotaHelperForTests.ONE_KILOBYTE);
     admin.flush(tn1);
 
-    final AtomicReference<Long> lastSeenSize = new AtomicReference<>();
+    final long snapshotSize = TEST_UTIL.getMiniHBaseCluster().getRegions(tn1).stream()
+        .flatMap(r -> r.getStores().stream()).mapToLong(HStore::getHFilesSize).sum();
+
     // Wait for the Master chore to run to see the usage (with a fudge factor)
     TEST_UTIL.waitFor(30_000, new SpaceQuotaSnapshotPredicate(conn, tn1) {
       @Override
       boolean evaluate(SpaceQuotaSnapshot snapshot) throws Exception {
-        lastSeenSize.set(snapshot.getUsage());
-        return snapshot.getUsage() > 230L * SpaceQuotaHelperForTests.ONE_KILOBYTE;
+        return snapshot.getUsage() == snapshotSize;
       }
     });
 
@@ -275,11 +283,15 @@ public class TestSnapshotQuotaObserverChore {
 
     // Test table should reflect it's original size since ingest was deterministic
     TEST_UTIL.waitFor(30_000, new SpaceQuotaSnapshotPredicate(conn, tn1) {
+      private final long regionSize = TEST_UTIL.getMiniHBaseCluster().getRegions(tn1).stream()
+          .flatMap(r -> r.getStores().stream()).mapToLong(HStore::getHFilesSize).sum();
+
       @Override
       boolean evaluate(SpaceQuotaSnapshot snapshot) throws Exception {
-        LOG.debug("Current usage=" + snapshot.getUsage() + " lastSeenSize=" + lastSeenSize.get());
-        return closeInSize(
-            snapshot.getUsage(), lastSeenSize.get(), SpaceQuotaHelperForTests.ONE_KILOBYTE);
+        LOG.debug("Current usage=" + snapshot.getUsage() + " snapshotSize=" + snapshotSize);
+        // The usage of table space consists of region size and snapshot size
+        return closeInSize(snapshot.getUsage(), snapshotSize + regionSize,
+            SpaceQuotaHelperForTests.ONE_KILOBYTE);
       }
     });
 
@@ -296,7 +308,7 @@ public class TestSnapshotQuotaObserverChore {
     sws = Iterables.getOnlyElement(snapshotsWithSize.get(tn1));
     assertEquals(snapshotName, sws.getName());
     // The snapshot should take up the size the table originally took up
-    assertEquals(lastSeenSize.get().longValue(), sws.getSize());
+    assertEquals(snapshotSize, sws.getSize());
   }
 
   @Test

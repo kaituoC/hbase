@@ -25,6 +25,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -32,19 +33,22 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletionException;
-
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.replication.ReplicationException;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
 import org.apache.hadoop.hbase.replication.ReplicationPeerDescription;
+import org.apache.hadoop.hbase.replication.ReplicationQueueStorage;
+import org.apache.hadoop.hbase.replication.ReplicationStorageFactory;
 import org.apache.hadoop.hbase.testclassification.ClientTests;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
+import org.junit.After;
 import org.junit.BeforeClass;
-import org.junit.Rule;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-import org.junit.rules.TestName;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
@@ -55,10 +59,14 @@ import org.junit.runners.Parameterized;
 @Category({LargeTests.class, ClientTests.class})
 public class TestAsyncReplicationAdminApi extends TestAsyncAdminBase {
 
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestAsyncReplicationAdminApi.class);
+
   private final String ID_ONE = "1";
   private final String KEY_ONE = "127.0.0.1:2181:/hbase";
-  private final String ID_SECOND = "2";
-  private final String KEY_SECOND = "127.0.0.1:2181:/hbase2";
+  private final String ID_TWO = "2";
+  private final String KEY_TWO = "127.0.0.1:2181:/hbase2";
 
   @BeforeClass
   public static void setUpBeforeClass() throws Exception {
@@ -70,12 +78,31 @@ public class TestAsyncReplicationAdminApi extends TestAsyncAdminBase {
     ASYNC_CONN = ConnectionFactory.createAsyncConnection(TEST_UTIL.getConfiguration()).get();
   }
 
+  @After
+  public void clearPeerAndQueues() throws IOException, ReplicationException {
+    try {
+      admin.removeReplicationPeer(ID_ONE).join();
+    } catch (Exception e) {
+    }
+    try {
+      admin.removeReplicationPeer(ID_TWO).join();
+    } catch (Exception e) {
+    }
+    ReplicationQueueStorage queueStorage = ReplicationStorageFactory
+        .getReplicationQueueStorage(TEST_UTIL.getZooKeeperWatcher(), TEST_UTIL.getConfiguration());
+    for (ServerName serverName : queueStorage.getListOfReplicators()) {
+      for (String queue : queueStorage.getAllQueues(serverName)) {
+        queueStorage.removeQueue(serverName, queue);
+      }
+    }
+  }
+
   @Test
   public void testAddRemovePeer() throws Exception {
     ReplicationPeerConfig rpc1 = new ReplicationPeerConfig();
     rpc1.setClusterKey(KEY_ONE);
     ReplicationPeerConfig rpc2 = new ReplicationPeerConfig();
-    rpc2.setClusterKey(KEY_SECOND);
+    rpc2.setClusterKey(KEY_TWO);
     // Add a valid peer
     admin.addReplicationPeer(ID_ONE, rpc1).join();
     // try adding the same (fails)
@@ -88,19 +115,19 @@ public class TestAsyncReplicationAdminApi extends TestAsyncAdminBase {
     assertEquals(1, admin.listReplicationPeers().get().size());
     // Try to remove an inexisting peer
     try {
-      admin.removeReplicationPeer(ID_SECOND).join();
+      admin.removeReplicationPeer(ID_TWO).join();
       fail("Test case should fail as removing a inexisting peer.");
     } catch (CompletionException e) {
       // OK!
     }
     assertEquals(1, admin.listReplicationPeers().get().size());
     // Add a second since multi-slave is supported
-    admin.addReplicationPeer(ID_SECOND, rpc2).join();
+    admin.addReplicationPeer(ID_TWO, rpc2).join();
     assertEquals(2, admin.listReplicationPeers().get().size());
     // Remove the first peer we added
     admin.removeReplicationPeer(ID_ONE).join();
     assertEquals(1, admin.listReplicationPeers().get().size());
-    admin.removeReplicationPeer(ID_SECOND).join();
+    admin.removeReplicationPeer(ID_TWO).join();
     assertEquals(0, admin.listReplicationPeers().get().size());
   }
 
@@ -151,6 +178,8 @@ public class TestAsyncReplicationAdminApi extends TestAsyncAdminBase {
 
     // Add a valid peer
     admin.addReplicationPeer(ID_ONE, rpc1).join();
+    rpc1.setReplicateAllUserTables(false);
+    admin.updateReplicationPeerConfig(ID_ONE, rpc1).join();
 
     Map<TableName, List<String>> tableCFs = new HashMap<>();
 
@@ -250,6 +279,9 @@ public class TestAsyncReplicationAdminApi extends TestAsyncAdminBase {
     final TableName tableName4 = TableName.valueOf(tableName.getNameAsString() + "t4");
     // Add a valid peer
     admin.addReplicationPeer(ID_ONE, rpc1).join();
+    rpc1.setReplicateAllUserTables(false);
+    admin.updateReplicationPeerConfig(ID_ONE, rpc1).join();
+
     Map<TableName, List<String>> tableCFs = new HashMap<>();
     try {
       tableCFs.put(tableName3, null);
@@ -330,6 +362,8 @@ public class TestAsyncReplicationAdminApi extends TestAsyncAdminBase {
     ReplicationPeerConfig rpc = new ReplicationPeerConfig();
     rpc.setClusterKey(KEY_ONE);
     admin.addReplicationPeer(ID_ONE, rpc).join();
+    rpc.setReplicateAllUserTables(false);
+    admin.updateReplicationPeerConfig(ID_ONE, rpc).join();
 
     // add ns1 and ns2 to peer config
     rpc = admin.getReplicationPeerConfig(ID_ONE).get();
@@ -345,7 +379,7 @@ public class TestAsyncReplicationAdminApi extends TestAsyncAdminBase {
 
     // update peer config only contains ns1
     rpc = admin.getReplicationPeerConfig(ID_ONE).get();
-    namespaces.clear();
+    namespaces = new HashSet<>();
     namespaces.add(ns1);
     rpc.setNamespaces(namespaces);
     admin.updateReplicationPeerConfig(ID_ONE, rpc).join();
@@ -366,6 +400,8 @@ public class TestAsyncReplicationAdminApi extends TestAsyncAdminBase {
     ReplicationPeerConfig rpc = new ReplicationPeerConfig();
     rpc.setClusterKey(KEY_ONE);
     admin.addReplicationPeer(ID_ONE, rpc).join();
+    rpc.setReplicateAllUserTables(false);
+    admin.updateReplicationPeerConfig(ID_ONE, rpc).join();
 
     rpc = admin.getReplicationPeerConfig(ID_ONE).get();
     Set<String> namespaces = new HashSet<String>();

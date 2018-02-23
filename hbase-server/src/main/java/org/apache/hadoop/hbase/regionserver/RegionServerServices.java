@@ -20,43 +20,38 @@ package org.apache.hadoop.hbase.regionserver;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
 
-import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.hbase.Abortable;
-import org.apache.hadoop.hbase.HBaseInterfaceAudience;
-import org.apache.hadoop.hbase.HRegionInfo;
-import org.apache.hadoop.hbase.TableName;
-import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.yetus.audience.InterfaceStability;
+import org.apache.hadoop.hbase.Server;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.locking.EntityLock;
 import org.apache.hadoop.hbase.executor.ExecutorService;
 import org.apache.hadoop.hbase.ipc.RpcServerInterface;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProtos.RegionStateTransition.TransitionCode;
 import org.apache.hadoop.hbase.quotas.RegionServerRpcQuotaManager;
 import org.apache.hadoop.hbase.quotas.RegionServerSpaceQuotaManager;
+import org.apache.hadoop.hbase.regionserver.compactions.CompactionRequester;
 import org.apache.hadoop.hbase.regionserver.throttle.ThroughputController;
 import org.apache.hadoop.hbase.wal.WAL;
+import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.zookeeper.KeeperException;
+
+import org.apache.hadoop.hbase.shaded.protobuf.generated.RegionServerStatusProtos.RegionStateTransition.TransitionCode;
 
 import com.google.protobuf.Service;
 
 /**
- * Services provided by {@link HRegionServer}
+ * A curated subset of services provided by {@link HRegionServer}.
+ * For use internally only. Passed to Managers, Services and Chores so can pass less-than-a
+ * full-on HRegionServer at test-time. Be judicious adding API. Changes cause ripples through
+ * the code base.
  */
-@InterfaceAudience.LimitedPrivate(HBaseInterfaceAudience.COPROC)
-@InterfaceStability.Evolving
-public interface RegionServerServices extends OnlineRegions, FavoredNodesForRegion {
-  /**
-   * @return True if this regionserver is stopping.
-   */
-  boolean isStopping();
+@InterfaceAudience.Private
+public interface RegionServerServices extends Server, MutableOnlineRegions, FavoredNodesForRegion {
 
   /** @return the WAL for a particular region. Pass null for getting the
    * default (common) WAL */
-  WAL getWAL(HRegionInfo regionInfo) throws IOException;
+  WAL getWAL(RegionInfo regionInfo) throws IOException;
 
   /** @return the List of WALs that are used by this server
    *  Doesn't include the meta WAL
@@ -64,9 +59,16 @@ public interface RegionServerServices extends OnlineRegions, FavoredNodesForRegi
   List<WAL> getWALs() throws IOException;
 
   /**
-   * @return Implementation of {@link FlushRequester} or null.
+   * @return Implementation of {@link FlushRequester} or null. Usually it will not be null unless
+   *         during intialization.
    */
   FlushRequester getFlushRequester();
+
+  /**
+   * @return Implementation of {@link CompactionRequester} or null. Usually it will not be null
+   *         unless during intialization.
+   */
+  CompactionRequester getCompactionRequestor();
 
   /**
    * @return the RegionServerAccounting for this Region Server
@@ -92,15 +94,15 @@ public interface RegionServerServices extends OnlineRegions, FavoredNodesForRegi
    * Context for postOpenDeployTasks().
    */
   class PostOpenDeployContext {
-    private final Region region;
+    private final HRegion region;
     private final long masterSystemTime;
 
     @InterfaceAudience.Private
-    public PostOpenDeployContext(Region region, long masterSystemTime) {
+    public PostOpenDeployContext(HRegion region, long masterSystemTime) {
       this.region = region;
       this.masterSystemTime = masterSystemTime;
     }
-    public Region getRegion() {
+    public HRegion getRegion() {
       return region;
     }
     public long getMasterSystemTime() {
@@ -118,27 +120,15 @@ public interface RegionServerServices extends OnlineRegions, FavoredNodesForRegi
    */
   void postOpenDeployTasks(final PostOpenDeployContext context) throws KeeperException, IOException;
 
-  /**
-   * Tasks to perform after region open to complete deploy of region on
-   * regionserver
-   *
-   * @param r Region to open.
-   * @throws KeeperException
-   * @throws IOException
-   * @deprecated use {@link #postOpenDeployTasks(PostOpenDeployContext)}
-   */
-  @Deprecated
-  void postOpenDeployTasks(final Region r) throws KeeperException, IOException;
-
   class RegionStateTransitionContext {
     private final TransitionCode code;
     private final long openSeqNum;
     private final long masterSystemTime;
-    private final HRegionInfo[] hris;
+    private final RegionInfo[] hris;
 
     @InterfaceAudience.Private
     public RegionStateTransitionContext(TransitionCode code, long openSeqNum, long masterSystemTime,
-        HRegionInfo... hris) {
+        RegionInfo... hris) {
       this.code = code;
       this.openSeqNum = openSeqNum;
       this.masterSystemTime = masterSystemTime;
@@ -153,7 +143,7 @@ public interface RegionServerServices extends OnlineRegions, FavoredNodesForRegi
     public long getMasterSystemTime() {
       return masterSystemTime;
     }
-    public HRegionInfo[] getHris() {
+    public RegionInfo[] getHris() {
       return hris;
     }
   }
@@ -162,20 +152,6 @@ public interface RegionServerServices extends OnlineRegions, FavoredNodesForRegi
    * Notify master that a handler requests to change a region state
    */
   boolean reportRegionStateTransition(final RegionStateTransitionContext context);
-
-  /**
-   * Notify master that a handler requests to change a region state
-   * @deprecated use {@link #reportRegionStateTransition(RegionStateTransitionContext)}
-   */
-  @Deprecated
-  boolean reportRegionStateTransition(TransitionCode code, long openSeqNum, HRegionInfo... hris);
-
-  /**
-   * Notify master that a handler requests to change a region state
-   * @deprecated use {@link #reportRegionStateTransition(RegionStateTransitionContext)}
-   */
-  @Deprecated
-  boolean reportRegionStateTransition(TransitionCode code, HRegionInfo... hris);
 
   /**
    * Returns a reference to the region server's RPC server
@@ -189,11 +165,6 @@ public interface RegionServerServices extends OnlineRegions, FavoredNodesForRegi
   ConcurrentMap<byte[], Boolean> getRegionsInTransitionInRS();
 
   /**
-   * @return Return the FileSystem object used by the regionserver
-   */
-  FileSystem getFileSystem();
-
-  /**
    * @return The RegionServer's "Leases" service
    */
   Leases getLeases();
@@ -204,21 +175,10 @@ public interface RegionServerServices extends OnlineRegions, FavoredNodesForRegi
   ExecutorService getExecutorService();
 
   /**
-   * @return set of recovering regions on the hosting region server
-   */
-  Map<String, Region> getRecoveringRegions();
-
-  /**
    * Only required for "old" log replay; if it's removed, remove this.
    * @return The RegionServer's NonceManager
    */
-  public ServerNonceManager getNonceManager();
-
-  /**
-   * @return all the online tables in this RS
-   */
-  Set<TableName> getOnlineTables();
-
+  ServerNonceManager getNonceManager();
 
   /**
    * Registers a new protocol buffer {@link Service} subclass as a coprocessor endpoint to be
@@ -262,7 +222,7 @@ public interface RegionServerServices extends OnlineRegions, FavoredNodesForRegi
   /**
    * Master based locks on namespaces/tables/regions.
    */
-  EntityLock regionLock(List<HRegionInfo> regionInfos, String description,
+  EntityLock regionLock(List<RegionInfo> regionInfos, String description,
       Abortable abort) throws IOException;
 
   /**

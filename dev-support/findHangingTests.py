@@ -75,8 +75,9 @@ def get_bad_tests(console_url):
             if "FAILURE!" in line:
                 failed_tests_set.add(test_case)
             if test_case not in hanging_tests_set:
-                print  ("ERROR! No test '{}' found in hanging_tests. Might get wrong results "
-                        "for this test.".format(test_case))
+                print ("ERROR! No test '{}' found in hanging_tests. Might get wrong results "
+                       "for this test. This may also happen if maven is set to retry failing "
+                       "tests.".format(test_case))
             else:
                 hanging_tests_set.remove(test_case)
         result3 = re.match("^\\s+(\\w*).*\\sTestTimedOut", line)
@@ -86,7 +87,6 @@ def get_bad_tests(console_url):
         for bad_string in BAD_RUN_STRINGS:
             if re.match(".*" + bad_string + ".*", line):
                 print "Bad string found in build:\n > {}".format(line)
-                return
     print "Result > total tests: {:4}   failed : {:4}  timedout : {:4}  hanging : {:4}".format(
         len(all_tests_set), len(failed_tests_set), len(timeout_tests_set), len(hanging_tests_set))
     return [all_tests_set, failed_tests_set, timeout_tests_set, hanging_tests_set]

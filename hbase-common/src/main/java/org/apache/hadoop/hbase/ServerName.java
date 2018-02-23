@@ -24,12 +24,12 @@ import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
 
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.net.Address;
 import org.apache.hadoop.hbase.util.Addressing;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.yetus.audience.InterfaceAudience;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.net.InetAddresses;
+import org.apache.hbase.thirdparty.com.google.common.net.InetAddresses;
 
 
 /**
@@ -322,10 +322,27 @@ public class ServerName implements Comparable<ServerName>, Serializable {
 
   @Override
   public int compareTo(ServerName other) {
-    int compare = this.getHostname().compareToIgnoreCase(other.getHostname());
-    if (compare != 0) return compare;
+    int compare;
+    if (other == null) {
+      return -1;
+    }
+    if (this.getHostname() == null) {
+      if (other.getHostname() != null) {
+        return 1;
+      }
+    } else {
+      if (other.getHostname() == null) {
+        return -1;
+      }
+      compare = this.getHostname().compareToIgnoreCase(other.getHostname());
+      if (compare != 0) {
+        return compare;
+      }
+    }
     compare = this.getPort() - other.getPort();
-    if (compare != 0) return compare;
+    if (compare != 0) {
+      return compare;
+    }
     return Long.compare(this.getStartcode(), other.getStartcode());
   }
 

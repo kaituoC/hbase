@@ -21,16 +21,12 @@ import static org.apache.hadoop.hbase.client.AsyncProcess.START_LOG_ERRORS_AFTER
 
 import java.util.Arrays;
 import java.util.List;
-import java.util.Optional;
-import java.util.concurrent.ExecutionException;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
 import org.apache.commons.io.IOUtils;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.TableName;
@@ -41,17 +37,17 @@ import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Rule;
 import org.junit.rules.TestName;
-import org.junit.runner.RunWith;
-import org.junit.runners.Parameterized;
 import org.junit.runners.Parameterized.Parameter;
 import org.junit.runners.Parameterized.Parameters;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Class to test AsyncAdmin.
  */
 public abstract class TestAsyncAdminBase {
 
-  protected static final Log LOG = LogFactory.getLog(TestAsyncAdminBase.class);
+  protected static final Logger LOG = LoggerFactory.getLogger(TestAsyncAdminBase.class);
   protected final static HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
   protected static final byte[] FAMILY = Bytes.toBytes("testFamily");
   protected static final byte[] FAMILY_0 = Bytes.toBytes("cf0");
@@ -106,7 +102,7 @@ public abstract class TestAsyncAdminBase {
 
   @After
   public void tearDown() throws Exception {
-    admin.listTableNames(Optional.of(Pattern.compile(tableName.getNameAsString() + ".*")), false)
+    admin.listTableNames(Pattern.compile(tableName.getNameAsString() + ".*"), false)
         .whenCompleteAsync((tables, err) -> {
           if (tables != null) {
             tables.forEach(table -> {
@@ -122,19 +118,21 @@ public abstract class TestAsyncAdminBase {
   }
 
   protected void createTableWithDefaultConf(TableName tableName) {
-    createTableWithDefaultConf(tableName, Optional.empty());
+    createTableWithDefaultConf(tableName, null);
   }
 
-  protected void createTableWithDefaultConf(TableName tableName, Optional<byte[][]> splitKeys) {
+  protected void createTableWithDefaultConf(TableName tableName, byte[][] splitKeys) {
     createTableWithDefaultConf(tableName, splitKeys, FAMILY);
   }
 
-  protected void createTableWithDefaultConf(TableName tableName, Optional<byte[][]> splitKeys,
+  protected void createTableWithDefaultConf(TableName tableName, byte[][] splitKeys,
       byte[]... families) {
     TableDescriptorBuilder builder = TableDescriptorBuilder.newBuilder(tableName);
     for (byte[] family : families) {
       builder.addColumnFamily(ColumnFamilyDescriptorBuilder.of(family));
     }
-    admin.createTable(builder.build(), splitKeys).join();
+    CompletableFuture<Void> future = splitKeys == null ? admin.createTable(builder.build())
+        : admin.createTable(builder.build(), splitKeys);
+    future.join();
   }
 }

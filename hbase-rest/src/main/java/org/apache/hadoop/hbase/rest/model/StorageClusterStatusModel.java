@@ -36,6 +36,8 @@ import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.rest.protobuf.generated.StorageClusterStatusMessage.StorageClusterStatus;
 import org.apache.hadoop.hbase.util.Bytes;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 /**
  * Representation of the status of a storage cluster:
  * <p>
@@ -203,7 +205,7 @@ public class StorageClusterStatusModel
        * @return memstore size, in MB
        */
       @XmlAttribute
-      public int getMemstoreSizeMB() {
+      public int getMemStoreSizeMB() {
         return memstoreSizeMB;
       }
 
@@ -356,7 +358,7 @@ public class StorageClusterStatusModel
       /**
        * @param memstoreSizeMB memstore size, in MB
        */
-      public void setMemstoreSizeMB(int memstoreSizeMB) {
+      public void setMemStoreSizeMB(int memstoreSizeMB) {
         this.memstoreSizeMB = memstoreSizeMB;
       }
 
@@ -561,6 +563,8 @@ public class StorageClusterStatusModel
    */
   @XmlElement(name = "Node")
   @XmlElementWrapper(name = "LiveNodes")
+  // workaround https://github.com/FasterXML/jackson-dataformat-xml/issues/192
+  @JsonProperty("LiveNodes")
   public List<Node> getLiveNodes() {
     return liveNodes;
   }
@@ -570,6 +574,8 @@ public class StorageClusterStatusModel
    */
   @XmlElement(name = "Node")
   @XmlElementWrapper(name = "DeadNodes")
+  // workaround https://github.com/FasterXML/jackson-dataformat-xml/issues/192
+  @JsonProperty("DeadNodes")
   public List<String> getDeadNodes() {
     return deadNodes;
   }
@@ -624,7 +630,7 @@ public class StorageClusterStatusModel
    * @param requests the total number of requests per second handled by the
    * cluster
    */
-  public void setRequests(int requests) {
+  public void setRequests(long requests) {
     this.requests = requests;
   }
 
@@ -728,7 +734,7 @@ public class StorageClusterStatusModel
         regionBuilder.setStores(region.stores);
         regionBuilder.setStorefiles(region.storefiles);
         regionBuilder.setStorefileSizeMB(region.storefileSizeMB);
-        regionBuilder.setMemstoreSizeMB(region.memstoreSizeMB);
+        regionBuilder.setMemStoreSizeMB(region.memstoreSizeMB);
         regionBuilder.setStorefileIndexSizeKB(region.storefileIndexSizeKB);
         regionBuilder.setReadRequestsCount(region.readRequestsCount);
         regionBuilder.setWriteRequestsCount(region.writeRequestsCount);
@@ -774,7 +780,7 @@ public class StorageClusterStatusModel
           region.getStores(),
           region.getStorefiles(),
           region.getStorefileSizeMB(),
-          region.getMemstoreSizeMB(),
+          region.getMemStoreSizeMB(),
           region.getStorefileIndexSizeKB(),
           region.getReadRequestsCount(),
           region.getWriteRequestsCount(),

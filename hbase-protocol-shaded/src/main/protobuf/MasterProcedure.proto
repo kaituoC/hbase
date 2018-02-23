@@ -27,6 +27,7 @@ option optimize_for = SPEED;
 import "HBase.proto";
 import "RPC.proto";
 import "Snapshot.proto";
+import "Replication.proto";
 
 // ============================================================================
 //  WARNING - Compatibility rules
@@ -148,52 +149,6 @@ message DeleteNamespaceStateData {
   optional NamespaceDescriptor namespace_descriptor = 2;
 }
 
-enum AddColumnFamilyState {
-  ADD_COLUMN_FAMILY_PREPARE = 1;
-  ADD_COLUMN_FAMILY_PRE_OPERATION = 2;
-  ADD_COLUMN_FAMILY_UPDATE_TABLE_DESCRIPTOR = 3;
-  ADD_COLUMN_FAMILY_POST_OPERATION = 4;
-  ADD_COLUMN_FAMILY_REOPEN_ALL_REGIONS = 5;
-}
-
-message AddColumnFamilyStateData {
-  required UserInformation user_info = 1;
-  required TableName table_name = 2;
-  required ColumnFamilySchema columnfamily_schema = 3;
-  optional TableSchema unmodified_table_schema = 4;
-}
-
-enum ModifyColumnFamilyState {
-  MODIFY_COLUMN_FAMILY_PREPARE = 1;
-  MODIFY_COLUMN_FAMILY_PRE_OPERATION = 2;
-  MODIFY_COLUMN_FAMILY_UPDATE_TABLE_DESCRIPTOR = 3;
-  MODIFY_COLUMN_FAMILY_POST_OPERATION = 4;
-  MODIFY_COLUMN_FAMILY_REOPEN_ALL_REGIONS = 5;
-}
-
-message ModifyColumnFamilyStateData {
-  required UserInformation user_info = 1;
-  required TableName table_name = 2;
-  required ColumnFamilySchema columnfamily_schema = 3;
-  optional TableSchema unmodified_table_schema = 4;
-}
-
-enum DeleteColumnFamilyState {
-  DELETE_COLUMN_FAMILY_PREPARE = 1;
-  DELETE_COLUMN_FAMILY_PRE_OPERATION = 2;
-  DELETE_COLUMN_FAMILY_UPDATE_TABLE_DESCRIPTOR = 3;
-  DELETE_COLUMN_FAMILY_DELETE_FS_LAYOUT = 4;
-  DELETE_COLUMN_FAMILY_POST_OPERATION = 5;
-  DELETE_COLUMN_FAMILY_REOPEN_ALL_REGIONS = 6;
-}
-
-message DeleteColumnFamilyStateData {
-  required UserInformation user_info = 1;
-  required TableName table_name = 2;
-  required bytes columnfamily_name = 3;
-  optional TableSchema unmodified_table_schema = 4;
-}
-
 enum EnableTableState {
   ENABLE_TABLE_PREPARE = 1;
   ENABLE_TABLE_PRE_OPERATION = 2;
@@ -286,9 +241,9 @@ enum SplitTableRegionState {
   SPLIT_TABLE_REGION_PRE_OPERATION = 2;
   SPLIT_TABLE_REGION_CLOSE_PARENT_REGION = 3;
   SPLIT_TABLE_REGION_CREATE_DAUGHTER_REGIONS = 4;
-  SPLIT_TABLE_REGION_PRE_OPERATION_BEFORE_PONR = 5;
+  SPLIT_TABLE_REGION_PRE_OPERATION_BEFORE_META = 5;
   SPLIT_TABLE_REGION_UPDATE_META = 6;
-  SPLIT_TABLE_REGION_PRE_OPERATION_AFTER_PONR = 7;
+  SPLIT_TABLE_REGION_PRE_OPERATION_AFTER_META = 7;
   SPLIT_TABLE_REGION_OPEN_CHILD_REGIONS = 8;
   SPLIT_TABLE_REGION_POST_OPERATION = 9;
 }
@@ -302,16 +257,14 @@ message SplitTableRegionStateData {
 enum MergeTableRegionsState {
   MERGE_TABLE_REGIONS_PREPARE = 1;
   MERGE_TABLE_REGIONS_PRE_OPERATION = 2;
-  MERGE_TABLE_REGIONS_MOVE_REGION_TO_SAME_RS = 3;
-  MERGE_TABLE_REGIONS_PRE_MERGE_OPERATION = 4;
-  MERGE_TABLE_REGIONS_SET_MERGING_TABLE_STATE = 5;
-  MERGE_TABLE_REGIONS_CLOSE_REGIONS = 6;
-  MERGE_TABLE_REGIONS_CREATE_MERGED_REGION = 7;
-  MERGE_TABLE_REGIONS_PRE_MERGE_COMMIT_OPERATION = 8;
-  MERGE_TABLE_REGIONS_UPDATE_META = 9;
-  MERGE_TABLE_REGIONS_POST_MERGE_COMMIT_OPERATION = 10;
-  MERGE_TABLE_REGIONS_OPEN_MERGED_REGION = 11;
-  MERGE_TABLE_REGIONS_POST_OPERATION = 12;
+  MERGE_TABLE_REGIONS_PRE_MERGE_OPERATION = 3;
+  MERGE_TABLE_REGIONS_CLOSE_REGIONS = 4;
+  MERGE_TABLE_REGIONS_CREATE_MERGED_REGION = 5;
+  MERGE_TABLE_REGIONS_PRE_MERGE_COMMIT_OPERATION = 6;
+  MERGE_TABLE_REGIONS_UPDATE_META = 7;
+  MERGE_TABLE_REGIONS_POST_MERGE_COMMIT_OPERATION = 8;
+  MERGE_TABLE_REGIONS_OPEN_MERGED_REGION = 9;
+  MERGE_TABLE_REGIONS_POST_OPERATION = 10;
 }
 
 message MergeTableRegionsStateData {
@@ -324,7 +277,7 @@ message MergeTableRegionsStateData {
 
 message ServerCrashStateData {
   required ServerName server_name = 1;
-  optional bool distributed_log_replay = 2;
+  // optional bool DEPRECATED_distributed_log_replay = 2;
   repeated RegionInfo regions_on_crashed_server = 3;
   repeated RegionInfo regions_assigned = 4;
   optional bool carrying_meta = 5;
@@ -343,7 +296,7 @@ enum ServerCrashState {
   SERVER_CRASH_GET_REGIONS = 3;
   SERVER_CRASH_NO_SPLIT_LOGS = 4;
   SERVER_CRASH_SPLIT_LOGS = 5;
-  SERVER_CRASH_PREPARE_LOG_REPLAY = 6;
+  // Removed SERVER_CRASH_PREPARE_LOG_REPLAY = 6;
   // Removed SERVER_CRASH_CALC_REGIONS_TO_ASSIGN = 7;
   SERVER_CRASH_ASSIGN = 8;
   SERVER_CRASH_WAIT_ON_ASSIGN = 9;
@@ -412,4 +365,48 @@ message GCMergedRegionsStateData {
   required RegionInfo parent_a = 1;
   required RegionInfo parent_b = 2;
   required RegionInfo merged_child = 3;
+}
+
+enum PeerModificationState {
+  PRE_PEER_MODIFICATION = 1;
+  UPDATE_PEER_STORAGE = 2;
+  REFRESH_PEER_ON_RS = 3;
+  POST_PEER_MODIFICATION = 4;
+}
+
+message PeerModificationStateData {
+  required string peer_id = 1;
+}
+
+enum PeerModificationType {
+  ADD_PEER = 1;
+  REMOVE_PEER = 2;
+  ENABLE_PEER = 3;
+  DISABLE_PEER = 4;
+  UPDATE_PEER_CONFIG = 5;
+}
+
+message RefreshPeerStateData {
+  required string peer_id = 1;
+  required PeerModificationType type = 2;
+  required ServerName target_server = 3;
+}
+
+message RefreshPeerParameter {
+  required string peer_id = 1;
+  required PeerModificationType type = 2;
+  required ServerName target_server = 3;
+}
+
+message PeerProcedureStateData {
+  required string peer_id = 1;
+}
+
+message AddPeerStateData {
+  required ReplicationPeer peer_config = 1;
+  required bool enabled = 2;
+}
+
+message UpdatePeerConfigStateData {
+  required ReplicationPeer peer_config = 1;
 }

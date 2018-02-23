@@ -42,7 +42,7 @@ import org.apache.hadoop.hbase.io.hfile.bucket.BucketCache;
 import org.apache.hadoop.hbase.nio.ByteBuff;
 import org.apache.hadoop.hbase.util.ChecksumType;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 public class CacheTestUtils {
 
@@ -302,7 +302,7 @@ public class CacheTestUtils {
 
     @Override
     public long heapSize() {
-      return 4 + buf.length;
+      return 4L + buf.length;
     }
 
     @Override
@@ -373,9 +373,10 @@ public class CacheTestUtils {
 
       String strKey;
       /* No conflicting keys */
-      for (strKey = new Long(rand.nextLong()).toString(); !usedStrings
-          .add(strKey); strKey = new Long(rand.nextLong()).toString())
-        ;
+      strKey = Long.toString(rand.nextLong());
+      while (!usedStrings.add(strKey)) {
+        strKey = Long.toString(rand.nextLong());
+      }
 
       returnedBlocks[i] = new HFileBlockPair();
       returnedBlocks[i].blockName = new BlockCacheKey(strKey, 0);

@@ -20,18 +20,22 @@ package org.apache.hadoop.hbase;
 import static org.junit.Assert.*;
 
 import java.io.IOException;
-
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.master.HMaster;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.MiscTests;
 import org.apache.zookeeper.KeeperException;
-
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
 @Category({MiscTests.class, MediumTests.class})
 public class TestLocalHBaseCluster {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestLocalHBaseCluster.class);
+
   private static final HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
 
   /**
@@ -66,10 +70,9 @@ public class TestLocalHBaseCluster {
    * running in local mode.
    */
   public static class MyHMaster extends HMaster {
-    public MyHMaster(Configuration conf, CoordinatedStateManager cp)
-      throws IOException, KeeperException,
+    public MyHMaster(Configuration conf) throws IOException, KeeperException,
         InterruptedException {
-      super(conf, cp);
+      super(conf);
     }
 
     public int echo(int val) {
@@ -82,9 +85,8 @@ public class TestLocalHBaseCluster {
    */
   public static class MyHRegionServer extends MiniHBaseCluster.MiniHBaseClusterRegionServer {
 
-    public MyHRegionServer(Configuration conf, CoordinatedStateManager cp) throws IOException,
-        InterruptedException {
-      super(conf, cp);
+    public MyHRegionServer(Configuration conf) throws IOException, InterruptedException {
+      super(conf);
     }
 
     public int echo(int val) {

@@ -18,6 +18,8 @@
 
 package org.apache.hadoop.hbase.rsgroup;
 
+import com.google.protobuf.ServiceException;
+
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.util.ArrayList;
@@ -34,27 +36,24 @@ import java.util.SortedSet;
 import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.Coprocessor;
 import org.apache.hadoop.hbase.DoNotRetryIOException;
 import org.apache.hadoop.hbase.HColumnDescriptor;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.HTableDescriptor;
 import org.apache.hadoop.hbase.MetaTableAccessor;
 import org.apache.hadoop.hbase.MetaTableAccessor.DefaultVisitorBase;
-import org.apache.hadoop.hbase.NamespaceDescriptor;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.ClusterConnection;
 import org.apache.hadoop.hbase.client.Delete;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.Mutation;
 import org.apache.hadoop.hbase.client.Put;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.Table;
@@ -66,6 +65,7 @@ import org.apache.hadoop.hbase.ipc.CoprocessorRpcChannel;
 import org.apache.hadoop.hbase.master.MasterServices;
 import org.apache.hadoop.hbase.master.ServerListener;
 import org.apache.hadoop.hbase.master.TableStateManager;
+import org.apache.hadoop.hbase.master.assignment.RegionStates.RegionStateNode;
 import org.apache.hadoop.hbase.net.Address;
 import org.apache.hadoop.hbase.procedure2.Procedure;
 import org.apache.hadoop.hbase.protobuf.ProtobufMagic;
@@ -74,17 +74,20 @@ import org.apache.hadoop.hbase.protobuf.generated.MultiRowMutationProtos;
 import org.apache.hadoop.hbase.protobuf.generated.RSGroupProtos;
 import org.apache.hadoop.hbase.regionserver.DisabledRegionSplitPolicy;
 import org.apache.hadoop.hbase.security.access.AccessControlLists;
-import org.apache.hadoop.hbase.shaded.protobuf.RequestConverter;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.ClientProtos;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.zookeeper.ZKUtil;
-import org.apache.hadoop.hbase.zookeeper.ZooKeeperWatcher;
+import org.apache.hadoop.hbase.zookeeper.ZKWatcher;
+import org.apache.hadoop.hbase.zookeeper.ZNodePaths;
+import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.zookeeper.KeeperException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Maps;
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Sets;
-import com.google.protobuf.ServiceException;
+import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
+import org.apache.hbase.thirdparty.com.google.common.collect.Maps;
+import org.apache.hbase.thirdparty.com.google.common.collect.Sets;
+import org.apache.hadoop.hbase.shaded.protobuf.RequestConverter;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.ClientProtos;
 
 /**
  * This is an implementation of {@link RSGroupInfoManager} which makes
@@ -111,8 +114,8 @@ import com.google.protobuf.ServiceException;
  * no other has access concurrently. Reads must be able to continue concurrently.
  */
 @InterfaceAudience.Private
-class RSGroupInfoManagerImpl implements RSGroupInfoManager {
-  private static final Log LOG = LogFactory.getLog(RSGroupInfoManagerImpl.class);
+final class RSGroupInfoManagerImpl implements RSGroupInfoManager {
+  private static final Logger LOG = LoggerFactory.getLogger(RSGroupInfoManagerImpl.class);
 
   /** Table descriptor for <code>hbase:rsgroup</code> catalog table */
   private final static HTableDescriptor RSGROUP_TABLE_DESC;
@@ -137,12 +140,13 @@ class RSGroupInfoManagerImpl implements RSGroupInfoManager {
   private final MasterServices masterServices;
   private Table rsGroupTable;
   private final ClusterConnection conn;
-  private final ZooKeeperWatcher watcher;
+  private final ZKWatcher watcher;
   private final RSGroupStartupWorker rsGroupStartupWorker = new RSGroupStartupWorker();
   // contains list of groups that were last flushed to persistent store
   private Set<String> prevRSGroups = new HashSet<>();
   private final ServerEventsListenerThread serverEventsListenerThread =
       new ServerEventsListenerThread();
+  private FailedOpenUpdaterThread failedOpenUpdaterThread;
 
   private RSGroupInfoManagerImpl(MasterServices masterServices) throws IOException {
     this.masterServices = masterServices;
@@ -152,15 +156,22 @@ class RSGroupInfoManagerImpl implements RSGroupInfoManager {
 
   private synchronized void init() throws IOException{
     refresh();
-    rsGroupStartupWorker.start();
     serverEventsListenerThread.start();
     masterServices.getServerManager().registerListener(serverEventsListenerThread);
+    failedOpenUpdaterThread = new FailedOpenUpdaterThread(masterServices.getConfiguration());
+    failedOpenUpdaterThread.start();
+    masterServices.getServerManager().registerListener(failedOpenUpdaterThread);
   }
 
   static RSGroupInfoManager getInstance(MasterServices master) throws IOException {
     RSGroupInfoManagerImpl instance = new RSGroupInfoManagerImpl(master);
     instance.init();
     return instance;
+  }
+
+  public void start(){
+    // create system table of rsgroup
+    rsGroupStartupWorker.start();
   }
 
   @Override
@@ -301,6 +312,32 @@ class RSGroupInfoManagerImpl implements RSGroupInfoManager {
     flushConfig(newGroupMap);
   }
 
+  @Override
+  public synchronized void removeServers(Set<Address> servers) throws IOException {
+    Map<String, RSGroupInfo> rsGroupInfos = new HashMap<String, RSGroupInfo>();
+    for (Address el: servers) {
+      RSGroupInfo rsGroupInfo = getRSGroupOfServer(el);
+      if (rsGroupInfo != null) {
+        RSGroupInfo newRsGroupInfo = rsGroupInfos.get(rsGroupInfo.getName());
+        if (newRsGroupInfo == null) {
+          rsGroupInfo.removeServer(el);
+          rsGroupInfos.put(rsGroupInfo.getName(), rsGroupInfo);
+        } else {
+          newRsGroupInfo.removeServer(el);
+          rsGroupInfos.put(newRsGroupInfo.getName(), newRsGroupInfo);
+        }
+      }else {
+        LOG.warn("Server " + el + " does not belong to any rsgroup.");
+      }
+    }
+
+    if (rsGroupInfos.size() > 0) {
+      Map<String, RSGroupInfo> newGroupMap = Maps.newHashMap(rsGroupMap);
+      newGroupMap.putAll(rsGroupInfos);
+      flushConfig(newGroupMap);
+    }
+  }
+
   List<RSGroupInfo> retrieveGroupListFromGroupTable() throws IOException {
     List<RSGroupInfo> rsGroupInfoList = Lists.newArrayList();
     for (Result result : rsGroupTable.getScanner(new Scan())) {
@@ -312,13 +349,13 @@ class RSGroupInfoManagerImpl implements RSGroupInfoManager {
   }
 
   List<RSGroupInfo> retrieveGroupListFromZookeeper() throws IOException {
-    String groupBasePath = ZKUtil.joinZNode(watcher.znodePaths.baseZNode, rsGroupZNode);
+    String groupBasePath = ZNodePaths.joinZNode(watcher.znodePaths.baseZNode, rsGroupZNode);
     List<RSGroupInfo> RSGroupInfoList = Lists.newArrayList();
     //Overwrite any info stored by table, this takes precedence
     try {
       if(ZKUtil.checkExists(watcher, groupBasePath) != -1) {
         for(String znode: ZKUtil.listChildrenAndWatchForNewChildren(watcher, groupBasePath)) {
-          byte[] data = ZKUtil.getData(watcher, ZKUtil.joinZNode(groupBasePath, znode));
+          byte[] data = ZKUtil.getData(watcher, ZNodePaths.joinZNode(groupBasePath, znode));
           if(data.length > 0) {
             ProtobufUtil.expectPBMagicPrefix(data);
             ByteArrayInputStream bis = new ByteArrayInputStream(
@@ -366,14 +403,8 @@ class RSGroupInfoManagerImpl implements RSGroupInfoManager {
       orphanTables.add(TableName.valueOf(entry));
     }
 
-    final List<TableName> specialTables;
-    if(!masterServices.isInitialized()) {
-      specialTables = Arrays.asList(AccessControlLists.ACL_TABLE_NAME, TableName.META_TABLE_NAME,
-          TableName.NAMESPACE_TABLE_NAME, RSGROUP_TABLE_NAME);
-    } else {
-      specialTables =
-          masterServices.listTableNamesByNamespace(NamespaceDescriptor.SYSTEM_NAMESPACE_NAME_STR);
-    }
+    final List<TableName> specialTables = Arrays.asList(AccessControlLists.ACL_TABLE_NAME,
+        TableName.META_TABLE_NAME, TableName.NAMESPACE_TABLE_NAME, RSGROUP_TABLE_NAME);
 
     for (TableName table : specialTables) {
       orphanTables.add(table);
@@ -462,20 +493,20 @@ class RSGroupInfoManagerImpl implements RSGroupInfoManager {
     resetRSGroupAndTableMaps(newGroupMap, newTableMap);
 
     try {
-      String groupBasePath = ZKUtil.joinZNode(watcher.znodePaths.baseZNode, rsGroupZNode);
+      String groupBasePath = ZNodePaths.joinZNode(watcher.znodePaths.baseZNode, rsGroupZNode);
       ZKUtil.createAndFailSilent(watcher, groupBasePath, ProtobufMagic.PB_MAGIC);
 
       List<ZKUtil.ZKUtilOp> zkOps = new ArrayList<>(newGroupMap.size());
       for(String groupName : prevRSGroups) {
         if(!newGroupMap.containsKey(groupName)) {
-          String znode = ZKUtil.joinZNode(groupBasePath, groupName);
+          String znode = ZNodePaths.joinZNode(groupBasePath, groupName);
           zkOps.add(ZKUtil.ZKUtilOp.deleteNodeFailSilent(znode));
         }
       }
 
 
       for (RSGroupInfo RSGroupInfo : newGroupMap.values()) {
-        String znode = ZKUtil.joinZNode(groupBasePath, RSGroupInfo.getName());
+        String znode = ZNodePaths.joinZNode(groupBasePath, RSGroupInfo.getName());
         RSGroupProtos.RSGroupInfo proto = RSGroupProtobufUtil.toProtoGroupInfo(RSGroupInfo);
         LOG.debug("Updating znode: "+znode);
         ZKUtil.createAndFailSilent(watcher, znode);
@@ -563,6 +594,26 @@ class RSGroupInfoManagerImpl implements RSGroupInfoManager {
     flushConfig(newGroupMap);
   }
 
+  // Called by FailedOpenUpdaterThread
+  private void updateFailedAssignments() {
+    // Kick all regions in FAILED_OPEN state
+    List<RegionInfo> stuckAssignments = Lists.newArrayList();
+    for (RegionStateNode state:
+        masterServices.getAssignmentManager().getRegionStates().getRegionsInTransition()) {
+      if (state.isStuck()) {
+        stuckAssignments.add(state.getRegionInfo());
+      }
+    }
+    for (RegionInfo region: stuckAssignments) {
+      LOG.info("Retrying assignment of " + region);
+      try {
+        masterServices.getAssignmentManager().unassign(region);
+      } catch (IOException e) {
+        LOG.warn("Unable to reassign " + region, e);
+      }
+    }
+  }
+
   /**
    * Calls {@link RSGroupInfoManagerImpl#updateDefaultServers(SortedSet)} to update list of known
    * servers. Notifications about server changes are received by registering {@link ServerListener}.
@@ -570,7 +621,7 @@ class RSGroupInfoManagerImpl implements RSGroupInfoManager {
    * done asynchronously in this thread.
    */
   private class ServerEventsListenerThread extends Thread implements ServerListener {
-    private final Log LOG = LogFactory.getLog(ServerEventsListenerThread.class);
+    private final Logger LOG = LoggerFactory.getLogger(ServerEventsListenerThread.class);
     private boolean changed = false;
 
     ServerEventsListenerThread() {
@@ -607,7 +658,7 @@ class RSGroupInfoManagerImpl implements RSGroupInfoManager {
           }
           try {
             synchronized (this) {
-              if(!changed) {
+              while (!changed) {
                 wait();
               }
               changed = false;
@@ -622,8 +673,69 @@ class RSGroupInfoManagerImpl implements RSGroupInfoManager {
     }
   }
 
+  private class FailedOpenUpdaterThread extends Thread implements ServerListener {
+    private final long waitInterval;
+    private volatile boolean hasChanged = false;
+
+    public FailedOpenUpdaterThread(Configuration conf) {
+      this.waitInterval = conf.getLong(REASSIGN_WAIT_INTERVAL_KEY,
+        DEFAULT_REASSIGN_WAIT_INTERVAL);
+      setDaemon(true);
+    }
+
+    @Override
+    public void serverAdded(ServerName serverName) {
+      serverChanged();
+    }
+
+    @Override
+    public void serverRemoved(ServerName serverName) {
+    }
+
+    @Override
+    public void run() {
+      while (isMasterRunning(masterServices)) {
+        boolean interrupted = false;
+        try {
+          synchronized (this) {
+            while (!hasChanged) {
+              wait();
+            }
+            hasChanged = false;
+          }
+        } catch (InterruptedException e) {
+          LOG.warn("Interrupted", e);
+          interrupted = true;
+        }
+        if (!isMasterRunning(masterServices) || interrupted) {
+          continue;
+        }
+
+        // First, wait a while in case more servers are about to rejoin the cluster
+        try {
+          Thread.sleep(waitInterval);
+        } catch (InterruptedException e) {
+          LOG.warn("Interrupted", e);
+        }
+        if (!isMasterRunning(masterServices)) {
+          continue;
+        }
+
+        // Kick all regions in FAILED_OPEN state
+        updateFailedAssignments();
+      }
+    }
+
+    public void serverChanged() {
+      synchronized (this) {
+        hasChanged = true;
+        this.notify();
+      }
+    }
+  }
+
   private class RSGroupStartupWorker extends Thread {
-    private final Log LOG = LogFactory.getLog(RSGroupStartupWorker.class);
+    private final Logger LOG = LoggerFactory.getLogger(RSGroupStartupWorker.class);
     private volatile boolean online = false;
 
     RSGroupStartupWorker() {
@@ -639,8 +751,8 @@ class RSGroupInfoManagerImpl implements RSGroupInfoManager {
     }
 
     private boolean waitForGroupTableOnline() {
-      final List<HRegionInfo> foundRegions = new LinkedList<>();
-      final List<HRegionInfo> assignedRegions = new LinkedList<>();
+      final List<RegionInfo> foundRegions = new LinkedList<>();
+      final List<RegionInfo> assignedRegions = new LinkedList<>();
       final AtomicBoolean found = new AtomicBoolean(false);
       final TableStateManager tsm = masterServices.getTableStateManager();
       boolean createSent = false;
@@ -659,7 +771,7 @@ class RSGroupInfoManagerImpl implements RSGroupInfoManager {
             MetaTableAccessor.Visitor visitor = new DefaultVisitorBase() {
               @Override
               public boolean visitInternal(Result row) throws IOException {
-                HRegionInfo info = MetaTableAccessor.getHRegionInfo(row);
+                RegionInfo info = MetaTableAccessor.getRegionInfo(row);
                 if (info != null) {
                   Cell serverCell =
                       row.getColumnLatestCell(HConstants.CATALOG_FAMILY,
@@ -690,7 +802,9 @@ class RSGroupInfoManagerImpl implements RSGroupInfoManager {
                     if(cell != null) {
                       sn = ServerName.parseVersionedServerName(CellUtil.cloneValue(cell));
                     }
-                    if (tsm.isTableState(TableName.NAMESPACE_TABLE_NAME,
+                    if (sn == null) {
+                      nsFound.set(false);
+                    } else if (tsm.isTableState(TableName.NAMESPACE_TABLE_NAME,
                         TableState.State.ENABLED)) {
                       try {
                         ClientProtos.ClientService.BlockingInterface rs = conn.getClient(sn);

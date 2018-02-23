@@ -18,11 +18,13 @@
  */
 package org.apache.hadoop.hbase;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import com.google.protobuf.Service;
+
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.CoprocessorEnvironment;
 import org.apache.hadoop.hbase.coprocessor.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.lang.management.ManagementFactory;
@@ -32,6 +34,7 @@ import java.rmi.server.RMIClientSocketFactory;
 import java.rmi.server.RMIServerSocketFactory;
 import java.rmi.server.UnicastRemoteObject;
 import java.util.HashMap;
+import java.util.Optional;
 
 import javax.management.MBeanServer;
 import javax.management.remote.JMXConnectorServer;
@@ -46,9 +49,8 @@ import javax.management.remote.rmi.RMIConnectorServer;
  * 2)support password authentication
  * 3)support subset of SSL (with default configuration)
  */
-public class JMXListener implements Coprocessor {
-
-  private static final Log LOG = LogFactory.getLog(JMXListener.class);
+public class JMXListener implements MasterCoprocessor, RegionServerCoprocessor {
+  private static final Logger LOG = LoggerFactory.getLogger(JMXListener.class);
   public static final String RMI_REGISTRY_PORT_CONF_KEY = ".rmi.registry.port";
   public static final String RMI_CONNECTOR_PORT_CONF_KEY = ".rmi.connector.port";
   public static final int defMasterRMIRegistryPort = 10101;

@@ -19,6 +19,7 @@
 
 include Java
 java_import java.util.Arrays
+java_import java.util.regex.Pattern
 java_import org.apache.hadoop.hbase.util.Pair
 java_import org.apache.hadoop.hbase.util.RegionSplitter
 java_import org.apache.hadoop.hbase.util.Bytes
@@ -45,16 +46,21 @@ module Hbase
     #----------------------------------------------------------------------------------------------
     # Returns a list of tables in hbase
     def list(regex = '.*')
-      @admin.listTableNames(regex).map(&:getNameAsString)
+      @admin.listTableNames(Pattern.compile(regex)).map(&:getNameAsString)
     end
 
     #----------------------------------------------------------------------------------------------
-    # Requests a table or region flush
-    def flush(table_or_region_name)
-      @admin.flushRegion(table_or_region_name.to_java_bytes)
-    rescue java.lang.IllegalArgumentException => e
+    # Requests a table or region or region server flush
+    def flush(name)
+      @admin.flushRegion(name.to_java_bytes)
+    rescue java.lang.IllegalArgumentException
       # Unknown region. Try table.
-      @admin.flush(TableName.valueOf(table_or_region_name))
+      begin
+        @admin.flush(TableName.valueOf(name))
+      rescue java.lang.IllegalArgumentException
+        # Unknown table. Try region server.
+        @admin.flushRegionServer(ServerName.valueOf(name))
+      end
     end
 
     #----------------------------------------------------------------------------------------------
@@ -196,6 +202,12 @@ module Hbase
     end
 
     #----------------------------------------------------------------------------------------------
+    # Requests clear block cache for table
+    def clear_block_cache(table_name)
+      @admin.clearBlockCache(org.apache.hadoop.hbase.TableName.valueOf(table_name)).toString
+    end
+
+    #----------------------------------------------------------------------------------------------
     # Requests region normalization for all configured tables in the cluster
     # Returns true if normalizer ran successfully
     def normalize
@@ -214,6 +226,13 @@ module Hbase
     # Returns the state of region normalizer (true is enabled).
     def normalizer_enabled?
       @admin.isNormalizerEnabled
+    end
+
+    #----------------------------------------------------------------------------------------------
+    # Query the current state of master in maintenance mode.
+    # Returns the state of maintenance mode (true is on).
+    def in_maintenance_mode?
+      @admin.isMasterInMaintenanceMode
     end
 
     #----------------------------------------------------------------------------------------------
@@ -269,7 +288,7 @@ module Hbase
     # Enables all tables matching the given regex
     def enable_all(regex)
       regex = regex.to_s
-      @admin.enableTables(regex)
+      @admin.enableTables(Pattern.compile(regex))
     end
 
     #----------------------------------------------------------------------------------------------
@@ -283,8 +302,8 @@ module Hbase
     #----------------------------------------------------------------------------------------------
     # Disables all tables matching the given regex
     def disable_all(regex)
-      regex = regex.to_s
-      @admin.disableTables(regex).map { |t| t.getTableName.getNameAsString }
+      pattern = Pattern.compile(regex.to_s)
+      @admin.disableTables(pattern).map { |t| t.getTableName.getNameAsString }
     end
 
     #---------------------------------------------------------------------------------------------
@@ -313,15 +332,15 @@ module Hbase
     #----------------------------------------------------------------------------------------------
     # Drops a table
     def drop_all(regex)
-      regex = regex.to_s
-      failed = @admin.deleteTables(regex).map { |t| t.getTableName.getNameAsString }
+      pattern = Pattern.compile(regex.to_s)
+      failed = @admin.deleteTables(pattern).map { |t| t.getTableName.getNameAsString }
       failed
     end
 
     #----------------------------------------------------------------------------------------------
     # Returns ZooKeeper status dump
     def zk_dump
-      @zk_wrapper = org.apache.hadoop.hbase.zookeeper.ZooKeeperWatcher.new(
+      @zk_wrapper = org.apache.hadoop.hbase.zookeeper.ZKWatcher.new(
         @admin.getConfiguration,
         'admin',
         nil
@@ -720,8 +739,8 @@ module Hbase
       if format == 'detailed'
         puts(format('version %s', status.getHBaseVersion))
         # Put regions in transition first because usually empty
-        puts(format('%d regionsInTransition', status.getRegionsInTransition.size))
-        for v in status.getRegionsInTransition
+        puts(format('%d regionsInTransition', status.getRegionStatesInTransition.size))
+        for v in status.getRegionStatesInTransition
           puts(format('    %s', v))
         end
         master = status.getMaster
@@ -842,7 +861,6 @@ module Hbase
       family.setCacheIndexesOnWrite(JBoolean.valueOf(arg.delete(org.apache.hadoop.hbase.HColumnDescriptor::CACHE_INDEX_ON_WRITE))) if arg.include?(org.apache.hadoop.hbase.HColumnDescriptor::CACHE_INDEX_ON_WRITE)
       family.setCacheBloomsOnWrite(JBoolean.valueOf(arg.delete(org.apache.hadoop.hbase.HColumnDescriptor::CACHE_BLOOMS_ON_WRITE))) if arg.include?(org.apache.hadoop.hbase.HColumnDescriptor::CACHE_BLOOMS_ON_WRITE)
       family.setEvictBlocksOnClose(JBoolean.valueOf(arg.delete(org.apache.hadoop.hbase.HColumnDescriptor::EVICT_BLOCKS_ON_CLOSE))) if arg.include?(org.apache.hadoop.hbase.HColumnDescriptor::EVICT_BLOCKS_ON_CLOSE)
-      family.setCacheDataInL1(JBoolean.valueOf(arg.delete(org.apache.hadoop.hbase.HColumnDescriptor::CACHE_DATA_IN_L1))) if arg.include?(org.apache.hadoop.hbase.HColumnDescriptor::CACHE_DATA_IN_L1)
       family.setInMemory(JBoolean.valueOf(arg.delete(org.apache.hadoop.hbase.HColumnDescriptor::IN_MEMORY))) if arg.include?(org.apache.hadoop.hbase.HColumnDescriptor::IN_MEMORY)
       if arg.include?(org.apache.hadoop.hbase.HColumnDescriptor::IN_MEMORY_COMPACTION)
         family.setInMemoryCompaction(
@@ -1005,25 +1023,27 @@ module Hbase
     #----------------------------------------------------------------------------------------------
     # Deletes the snapshots matching the given regex
     def delete_all_snapshot(regex)
-      @admin.deleteSnapshots(regex).to_a
+      @admin.deleteSnapshots(Pattern.compile(regex)).to_a
     end
 
     #----------------------------------------------------------------------------------------------
     # Deletes the table snapshots matching the given regex
     def delete_table_snapshots(tableNameRegex, snapshotNameRegex = '.*')
-      @admin.deleteTableSnapshots(tableNameRegex, snapshotNameRegex).to_a
+      @admin.deleteTableSnapshots(Pattern.compile(tableNameRegex),
+        Pattern.compile(snapshotNameRegex)).to_a
     end
 
     #----------------------------------------------------------------------------------------------
     # Returns a list of snapshots
     def list_snapshot(regex = '.*')
-      @admin.listSnapshots(regex).to_a
+      @admin.listSnapshots(Pattern.compile(regex)).to_a
     end
 
     #----------------------------------------------------------------------------------------------
     # Returns a list of table snapshots
     def list_table_snapshots(tableNameRegex, snapshotNameRegex = '.*')
-      @admin.listTableSnapshots(tableNameRegex, snapshotNameRegex).to_a
+      @admin.listTableSnapshots(Pattern.compile(tableNameRegex),
+        Pattern.compile(snapshotNameRegex)).to_a
     end
 
     #----------------------------------------------------------------------------------------------
@@ -1270,6 +1290,12 @@ module Hbase
         end
       end
       @admin.clearDeadServers(servers).to_a
+    end
+
+    #----------------------------------------------------------------------------------------------
+    # List live region servers
+    def list_liveservers
+      @admin.getClusterStatus.getServers.to_a
     end
   end
 end

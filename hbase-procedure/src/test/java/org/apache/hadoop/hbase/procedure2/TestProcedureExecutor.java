@@ -15,33 +15,37 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-
 package org.apache.hadoop.hbase.procedure2;
+
+import static org.junit.Assert.assertEquals;
 
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseCommonTestingUtility;
 import org.apache.hadoop.hbase.procedure2.ProcedureTestingUtility;
 import org.apache.hadoop.hbase.procedure2.ProcedureTestingUtility.NoopProcedure;
 import org.apache.hadoop.hbase.procedure2.store.NoopProcedureStore;
-import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
+import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.hbase.util.Threads;
-
 import org.junit.After;
 import org.junit.Before;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-
-import static org.junit.Assert.assertEquals;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category({MasterTests.class, SmallTests.class})
 public class TestProcedureExecutor {
-  private static final Log LOG = LogFactory.getLog(TestProcedureExecutor.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestProcedureExecutor.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestProcedureExecutor.class);
 
   private TestProcEnv procEnv;
   private NoopProcedureStore procStore;
@@ -71,7 +75,7 @@ public class TestProcedureExecutor {
     procExecutor.start(numThreads, true);
   }
 
-  @Test(timeout=60000)
+  @Test
   public void testWorkerStuck() throws Exception {
     // replace the executor
     final Configuration conf = new Configuration(htu.getConfiguration());
@@ -186,5 +190,5 @@ public class TestProcedureExecutor {
     }
   }
 
-  private class TestProcEnv { }
+  private static class TestProcEnv { }
 }

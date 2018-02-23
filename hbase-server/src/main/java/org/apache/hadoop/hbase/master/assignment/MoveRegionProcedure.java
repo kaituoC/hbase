@@ -1,4 +1,4 @@
-/**
+/*
  *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
@@ -21,16 +21,16 @@ package org.apache.hadoop.hbase.master.assignment;
 
 import java.io.IOException;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.master.RegionPlan;
 import org.apache.hadoop.hbase.master.procedure.AbstractStateMachineRegionProcedure;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.procedure2.ProcedureStateSerializer;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.MoveRegionState;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.MoveRegionStateData;
@@ -43,7 +43,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.MasterProcedureProtos.M
  */
 @InterfaceAudience.Private
 public class MoveRegionProcedure extends AbstractStateMachineRegionProcedure<MoveRegionState> {
-  private static final Log LOG = LogFactory.getLog(MoveRegionProcedure.class);
+  private static final Logger LOG = LoggerFactory.getLogger(MoveRegionProcedure.class);
   private RegionPlan plan;
 
   public MoveRegionProcedure() {
@@ -64,12 +64,13 @@ public class MoveRegionProcedure extends AbstractStateMachineRegionProcedure<Mov
     }
     switch (state) {
       case MOVE_REGION_UNASSIGN:
-        addChildProcedure(new UnassignProcedure(plan.getRegionInfo(), plan.getSource(), true));
+        addChildProcedure(new UnassignProcedure(plan.getRegionInfo(), plan.getSource(),
+            plan.getDestination(), true));
         setNextState(MoveRegionState.MOVE_REGION_ASSIGN);
         break;
       case MOVE_REGION_ASSIGN:
         AssignProcedure assignProcedure = plan.getDestination() == null ?
-            new AssignProcedure(plan.getRegionInfo(), true) :
+            new AssignProcedure(plan.getRegionInfo()):
             new AssignProcedure(plan.getRegionInfo(), plan.getDestination());
         addChildProcedure(assignProcedure);
         return Flow.NO_MORE_STATE;
@@ -128,7 +129,7 @@ public class MoveRegionProcedure extends AbstractStateMachineRegionProcedure<Mov
     super.serializeStateData(serializer);
 
     final MoveRegionStateData.Builder state = MoveRegionStateData.newBuilder()
-        // No need to serialize the HRegionInfo. The super class has the region.
+        // No need to serialize the RegionInfo. The super class has the region.
         .setSourceServer(ProtobufUtil.toServerName(plan.getSource()));
     if (plan.getDestination() != null) {
       state.setDestinationServer(ProtobufUtil.toServerName(plan.getDestination()));
@@ -143,7 +144,7 @@ public class MoveRegionProcedure extends AbstractStateMachineRegionProcedure<Mov
     super.deserializeStateData(serializer);
 
     final MoveRegionStateData state = serializer.deserialize(MoveRegionStateData.class);
-    final HRegionInfo regionInfo = getRegion(); // Get it from super class deserialization.
+    final RegionInfo regionInfo = getRegion(); // Get it from super class deserialization.
     final ServerName sourceServer = ProtobufUtil.toServerName(state.getSourceServer());
     final ServerName destinationServer = state.hasDestinationServer() ?
         ProtobufUtil.toServerName(state.getDestinationServer()) : null;

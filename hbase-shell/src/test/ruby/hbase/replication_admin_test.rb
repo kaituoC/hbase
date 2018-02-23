@@ -73,8 +73,10 @@ module Hbase
       command(:add_peer, @peer_id, {CLUSTER_KEY => cluster_key})
 
       assert_equal(1, command(:list_peers).length)
-      assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
-      assert_equal(cluster_key, command(:list_peers).get(0).getPeerConfig.getClusterKey)
+      peer = command(:list_peers).get(0)
+      assert_equal(@peer_id, peer.getPeerId)
+      assert_equal(cluster_key, peer.getPeerConfig.getClusterKey)
+      assert_equal(true, peer.getPeerConfig.replicateAllUserTables)
 
       # cleanup for future tests
       command(:remove_peer, @peer_id)
@@ -86,14 +88,16 @@ module Hbase
       command(:add_peer, @peer_id, {CLUSTER_KEY => cluster_key})
 
       assert_equal(1, command(:list_peers).length)
-      assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
-      assert_equal(cluster_key, command(:list_peers).get(0).getPeerConfig.getClusterKey)
+      peer = command(:list_peers).get(0)
+      assert_equal(@peer_id, peer.getPeerId)
+      assert_equal(cluster_key, peer.getPeerConfig.getClusterKey)
+      assert_equal(true, peer.getPeerConfig.replicateAllUserTables)
 
       # cleanup for future tests
       command(:remove_peer, @peer_id)
     end
 
-    define_test "add_peer: single zk cluster key - peer config" do
+    define_test "add_peer: single zk cluster key with enabled/disabled state" do
       cluster_key = "server1.cie.com:2181:/hbase"
 
       args = { CLUSTER_KEY => cluster_key }
@@ -101,9 +105,26 @@ module Hbase
 
       assert_equal(1, command(:list_peers).length)
       assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
-      assert_equal(cluster_key, command(:list_peers).get(0).getPeerConfig.getClusterKey)
+      assert_equal(true, command(:list_peers).get(0).isEnabled)
 
-      # cleanup for future tests
+      command(:remove_peer, @peer_id)
+
+      enable_args = { CLUSTER_KEY => cluster_key, STATE => 'ENABLED' }
+      command(:add_peer, @peer_id, enable_args)
+
+      assert_equal(1, command(:list_peers).length)
+      assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
+      assert_equal(true, command(:list_peers).get(0).isEnabled)
+
+      command(:remove_peer, @peer_id)
+
+      disable_args = { CLUSTER_KEY => cluster_key, STATE => 'DISABLED' }
+      command(:add_peer, @peer_id, disable_args)
+
+      assert_equal(1, command(:list_peers).length)
+      assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
+      assert_equal(false, command(:list_peers).get(0).isEnabled)
+
       command(:remove_peer, @peer_id)
     end
 
@@ -114,8 +135,10 @@ module Hbase
       command(:add_peer, @peer_id, args)
 
       assert_equal(1, command(:list_peers).length)
-      assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
-      assert_equal(cluster_key, command(:list_peers).get(0).getPeerConfig.getClusterKey)
+      peer = command(:list_peers).get(0)
+      assert_equal(@peer_id, peer.getPeerId)
+      assert_equal(cluster_key, peer.getPeerConfig.getClusterKey)
+      assert_equal(true, peer.getPeerConfig.replicateAllUserTables)
 
       # cleanup for future tests
       command(:remove_peer, @peer_id)
@@ -130,11 +153,13 @@ module Hbase
       command(:add_peer, @peer_id, args)
 
       assert_equal(1, command(:list_peers).length)
-      assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
-      peer_config = command(:list_peers).get(0).getPeerConfig
+      peer = command(:list_peers).get(0)
+      assert_equal(@peer_id, peer.getPeerId)
+      peer_config = peer.getPeerConfig
+      assert_equal(false, peer_config.replicateAllUserTables)
       assert_equal(cluster_key, peer_config.get_cluster_key)
       assert_equal(namespaces_str,
-        replication_admin.show_peer_namespaces(peer_config))
+                   replication_admin.show_peer_namespaces(peer_config))
 
       # cleanup for future tests
       command(:remove_peer, @peer_id)
@@ -152,8 +177,10 @@ module Hbase
       command(:add_peer, @peer_id, args)
 
       assert_equal(1, command(:list_peers).length)
-      assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
-      peer_config = command(:list_peers).get(0).getPeerConfig
+      peer = command(:list_peers).get(0)
+      assert_equal(@peer_id, peer.getPeerId)
+      peer_config = peer.getPeerConfig
+      assert_equal(false, peer_config.replicateAllUserTables)
       assert_equal(cluster_key, peer_config.get_cluster_key)
       assert_equal(namespaces_str,
         replication_admin.show_peer_namespaces(peer_config))
@@ -186,9 +213,11 @@ module Hbase
       command(:add_peer, @peer_id, args)
 
       assert_equal(1, command(:list_peers).length)
-      assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
-      assert_equal(cluster_key, command(:list_peers).get(0).getPeerConfig.getClusterKey)
-      assert_tablecfs_equal(table_cfs, command(:get_peer_config, @peer_id).getTableCFsMap())
+      peer = command(:list_peers).get(0)
+      assert_equal(@peer_id, peer.getPeerId)
+      assert_equal(cluster_key, peer.getPeerConfig.getClusterKey)
+      assert_tablecfs_equal(table_cfs, peer.getPeerConfig.getTableCFsMap)
+      assert_equal(false, peer.getPeerConfig.replicateAllUserTables)
 
       # cleanup for future tests
       command(:remove_peer, @peer_id)
@@ -208,10 +237,12 @@ module Hbase
       cluster_key = "zk4,zk5,zk6:11000:/hbase-test"
       args = { CLUSTER_KEY => cluster_key}
       command(:add_peer, @peer_id, args)
+      command(:set_peer_replicate_all, @peer_id, false)
 
       assert_equal(1, command(:list_peers).length)
-      assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
-      assert_equal(cluster_key, command(:list_peers).get(0).getPeerConfig.getClusterKey)
+      peer = command(:list_peers).get(0)
+      assert_equal(@peer_id, peer.getPeerId)
+      assert_equal(cluster_key, peer.getPeerConfig.getClusterKey)
 
       table_cfs = { "table1" => [], "table2" => ["cf1"], "ns3:table3" => ["cf1", "cf2"] }
       command(:set_peer_tableCFs, @peer_id, table_cfs)
@@ -225,10 +256,12 @@ module Hbase
       cluster_key = "zk4,zk5,zk6:11000:/hbase-test"
       args = { CLUSTER_KEY => cluster_key}
       command(:add_peer, @peer_id, args)
+      command(:set_peer_replicate_all, @peer_id, false)
 
       assert_equal(1, command(:list_peers).length)
-      assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
-      assert_equal(cluster_key, command(:list_peers).get(0).getPeerConfig.getClusterKey)
+      peer = command(:list_peers).get(0)
+      assert_equal(@peer_id, peer.getPeerId)
+      assert_equal(cluster_key, peer.getPeerConfig.getClusterKey)
 
       table_cfs = { "table1" => [], "ns2:table2" => ["cf1"] }
       command(:append_peer_tableCFs, @peer_id, table_cfs)
@@ -249,8 +282,9 @@ module Hbase
       command(:add_peer, @peer_id, args)
 
       assert_equal(1, command(:list_peers).length)
-      assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
-      assert_equal(cluster_key, command(:list_peers).get(0).getPeerConfig.getClusterKey)
+      peer = command(:list_peers).get(0)
+      assert_equal(@peer_id, peer.getPeerId)
+      assert_equal(cluster_key, peer.getPeerConfig.getClusterKey)
 
       table_cfs = { "table1" => [], "ns2:table2" => ["cf1"] }
       command(:remove_peer_tableCFs, @peer_id, { "ns3:table3" => ["cf1", "cf2"] })
@@ -260,6 +294,29 @@ module Hbase
       command(:remove_peer, @peer_id)
     end
 
+    define_test 'set_peer_exclude_tableCFs: works with table-cfs map' do
+      cluster_key = 'zk4,zk5,zk6:11000:/hbase-test'
+      args = { CLUSTER_KEY => cluster_key }
+      command(:add_peer, @peer_id, args)
+
+      assert_equal(1, command(:list_peers).length)
+      peer = command(:list_peers).get(0)
+      assert_equal(@peer_id, peer.getPeerId)
+      assert_equal(cluster_key, peer.getPeerConfig.getClusterKey)
+
+      table_cfs = { 'table1' => [], 'table2' => ['cf1'],
+                    'ns3:table3' => ['cf1', 'cf2'] }
+      command(:set_peer_exclude_tableCFs, @peer_id, table_cfs)
+      assert_equal(1, command(:list_peers).length)
+      peer = command(:list_peers).get(0)
+      peer_config = peer.getPeerConfig
+      assert_equal(true, peer_config.replicateAllUserTables)
+      assert_tablecfs_equal(table_cfs, peer_config.getExcludeTableCFsMap)
+
+      # cleanup for future tests
+      replication_admin.remove_peer(@peer_id)
+    end
+
     define_test "set_peer_namespaces: works with namespaces array" do
       cluster_key = "zk4,zk5,zk6:11000:/hbase-test"
       namespaces = ["ns1", "ns2"]
@@ -267,6 +324,7 @@ module Hbase
 
       args = { CLUSTER_KEY => cluster_key }
       command(:add_peer, @peer_id, args)
+      command(:set_peer_replicate_all, @peer_id, false)
 
       command(:set_peer_namespaces, @peer_id, namespaces)
 
@@ -274,7 +332,7 @@ module Hbase
       assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
       peer_config = command(:list_peers).get(0).getPeerConfig
       assert_equal(namespaces_str,
-        replication_admin.show_peer_namespaces(peer_config))
+                   replication_admin.show_peer_namespaces(peer_config))
 
       # cleanup for future tests
       command(:remove_peer, @peer_id)
@@ -287,6 +345,7 @@ module Hbase
 
       args = { CLUSTER_KEY => cluster_key }
       command(:add_peer, @peer_id, args)
+      command(:set_peer_replicate_all, @peer_id, false)
 
       command(:append_peer_namespaces, @peer_id, namespaces)
 
@@ -294,7 +353,7 @@ module Hbase
       assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
       peer_config = command(:list_peers).get(0).getPeerConfig
       assert_equal(namespaces_str,
-        replication_admin.show_peer_namespaces(peer_config))
+                   replication_admin.show_peer_namespaces(peer_config))
 
       namespaces = ["ns3"]
       namespaces_str = "ns1;ns2;ns3"
@@ -304,7 +363,7 @@ module Hbase
       assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
       peer_config = command(:list_peers).get(0).getPeerConfig
       assert_equal(namespaces_str,
-        replication_admin.show_peer_namespaces(peer_config))
+                   replication_admin.show_peer_namespaces(peer_config))
 
       # append a namespace which is already in the peer config
       command(:append_peer_namespaces, @peer_id, namespaces)
@@ -313,7 +372,7 @@ module Hbase
       assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
       peer_config = command(:list_peers).get(0).getPeerConfig
       assert_equal(namespaces_str,
-        replication_admin.show_peer_namespaces(peer_config))
+                   replication_admin.show_peer_namespaces(peer_config))
 
       # cleanup for future tests
       command(:remove_peer, @peer_id)
@@ -334,7 +393,7 @@ module Hbase
       assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
       peer_config = command(:list_peers).get(0).getPeerConfig
       assert_equal(namespaces_str,
-        replication_admin.show_peer_namespaces(peer_config))
+                   replication_admin.show_peer_namespaces(peer_config))
 
       namespaces = ["ns3"]
       namespaces_str = nil
@@ -344,7 +403,7 @@ module Hbase
       assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
       peer_config = command(:list_peers).get(0).getPeerConfig
       assert_equal(namespaces_str,
-        replication_admin.show_peer_namespaces(peer_config))
+                   replication_admin.show_peer_namespaces(peer_config))
 
       # remove a namespace which is not in peer config
       command(:remove_peer_namespaces, @peer_id, namespaces)
@@ -353,10 +412,51 @@ module Hbase
       assert_equal(@peer_id, command(:list_peers).get(0).getPeerId)
       peer_config = command(:list_peers).get(0).getPeerConfig
       assert_equal(namespaces_str,
-        replication_admin.show_peer_namespaces(peer_config))
+                   replication_admin.show_peer_namespaces(peer_config))
 
       # cleanup for future tests
       command(:remove_peer, @peer_id)
+    end
+
+    define_test 'set_peer_exclude_namespaces: works with namespaces array' do
+      cluster_key = 'zk4,zk5,zk6:11000:/hbase-test'
+      namespaces = ['ns1', 'ns2']
+      namespaces_str = '!ns1;ns2'
+
+      args = { CLUSTER_KEY => cluster_key }
+      command(:add_peer, @peer_id, args)
+      command(:set_peer_exclude_namespaces, @peer_id, namespaces)
+
+      assert_equal(1, command(:list_peers).length)
+      peer_config = command(:list_peers).get(0).getPeerConfig
+      assert_equal(true, peer_config.replicateAllUserTables)
+      assert_equal(namespaces_str,
+                   replication_admin.show_peer_exclude_namespaces(peer_config))
+
+      # cleanup for future tests
+      command(:remove_peer, @peer_id)
+    end
+
+    define_test 'set_peer_replicate_all' do
+      cluster_key = 'zk4,zk5,zk6:11000:/hbase-test'
+
+      args = { CLUSTER_KEY => cluster_key }
+      command(:add_peer, @peer_id, args)
+
+      assert_equal(1, command(:list_peers).length)
+      peer_config = command(:list_peers).get(0).getPeerConfig
+      assert_equal(true, peer_config.replicateAllUserTables)
+
+      command(:set_peer_replicate_all, @peer_id, false)
+      peer_config = command(:list_peers).get(0).getPeerConfig
+      assert_equal(false, peer_config.replicateAllUserTables)
+
+      command(:set_peer_replicate_all, @peer_id, true)
+      peer_config = command(:list_peers).get(0).getPeerConfig
+      assert_equal(true, peer_config.replicateAllUserTables)
+
+      # cleanup for future tests
+      replication_admin.remove_peer(@peer_id)
     end
 
     define_test "set_peer_bandwidth: works with peer bandwidth upper limit" do

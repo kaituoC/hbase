@@ -23,18 +23,13 @@ import java.text.SimpleDateFormat;
 import java.util.Map;
 import java.util.TreeMap;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.HBaseConfiguration;
-import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.KeyValueUtil;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.client.Delete;
@@ -44,8 +39,9 @@ import org.apache.hadoop.hbase.client.RegionLocator;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.io.ImmutableBytesWritable;
 import org.apache.hadoop.hbase.regionserver.wal.WALCellCodec;
-import org.apache.hadoop.hbase.wal.WALEdit;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.MapReduceExtendedCell;
+import org.apache.hadoop.hbase.wal.WALEdit;
 import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
@@ -53,6 +49,9 @@ import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * A tool to replay WAL files as a M/R job.
@@ -66,7 +65,7 @@ import org.apache.hadoop.util.ToolRunner;
  */
 @InterfaceAudience.Public
 public class WALPlayer extends Configured implements Tool {
-  private static final Log LOG = LogFactory.getLog(WALPlayer.class);
+  private static final Logger LOG = LoggerFactory.getLogger(WALPlayer.class);
   final static String NAME = "WALPlayer";
   public final static String BULK_OUTPUT_CONF_KEY = "wal.bulk.output";
   public final static String TABLES_KEY = "wal.input.tables";
@@ -94,10 +93,10 @@ public class WALPlayer extends Configured implements Tool {
 
   /**
    * A mapper that just writes out KeyValues.
-   * This one can be used together with {@link KeyValueSortReducer}
+   * This one can be used together with {@link CellSortReducer}
    */
   static class WALKeyValueMapper
-    extends Mapper<WALKey, WALEdit, ImmutableBytesWritable, KeyValue> {
+    extends Mapper<WALKey, WALEdit, ImmutableBytesWritable, Cell> {
     private byte[] table;
 
     @Override
@@ -106,13 +105,13 @@ public class WALPlayer extends Configured implements Tool {
     throws IOException {
       try {
         // skip all other tables
-        if (Bytes.equals(table, key.getTablename().getName())) {
+        if (Bytes.equals(table, key.getTableName().getName())) {
           for (Cell cell : value.getCells()) {
-            KeyValue kv = KeyValueUtil.ensureKeyValue(cell);
-            if (WALEdit.isMetaEditFamily(kv)) {
+            if (WALEdit.isMetaEditFamily(cell)) {
               continue;
             }
-            context.write(new ImmutableBytesWritable(CellUtil.cloneRow(kv)), kv);
+            context.write(new ImmutableBytesWritable(CellUtil.cloneRow(cell)),
+              new MapReduceExtendedCell(cell));
           }
         }
       } catch (InterruptedException e) {
@@ -146,10 +145,10 @@ public class WALPlayer extends Configured implements Tool {
     public void map(WALKey key, WALEdit value, Context context)
     throws IOException {
       try {
-        if (tables.isEmpty() || tables.containsKey(key.getTablename())) {
+        if (tables.isEmpty() || tables.containsKey(key.getTableName())) {
           TableName targetTable = tables.isEmpty() ?
-                key.getTablename() :
-                tables.get(key.getTablename());
+                key.getTableName() :
+                tables.get(key.getTableName());
           ImmutableBytesWritable tableOut = new ImmutableBytesWritable(targetTable.getName());
           Put put = null;
           Delete del = null;
@@ -167,7 +166,7 @@ public class WALPlayer extends Configured implements Tool {
               // Aggregate as much as possible into a single Put/Delete
               // operation before writing to the context.
               if (lastCell == null || lastCell.getTypeByte() != cell.getTypeByte()
-                  || !CellUtil.matchingRow(lastCell, cell)) {
+                  || !CellUtil.matchingRows(lastCell, cell)) {
                 // row or type changed, write out aggregate KVs.
                 if (put != null) {
                   context.write(tableOut, put);
@@ -300,17 +299,17 @@ public class WALPlayer extends Configured implements Tool {
       }
       TableName tableName = TableName.valueOf(tables[0]);
       job.setMapperClass(WALKeyValueMapper.class);
-      job.setReducerClass(KeyValueSortReducer.class);
+      job.setReducerClass(CellSortReducer.class);
       Path outputDir = new Path(hfileOutPath);
       FileOutputFormat.setOutputPath(job, outputDir);
-      job.setMapOutputValueClass(KeyValue.class);
+      job.setMapOutputValueClass(MapReduceExtendedCell.class);
       try (Connection conn = ConnectionFactory.createConnection(conf);
           Table table = conn.getTable(tableName);
           RegionLocator regionLocator = conn.getRegionLocator(tableName)) {
         HFileOutputFormat2.configureIncrementalLoad(job, table.getDescriptor(), regionLocator);
       }
       TableMapReduceUtil.addDependencyJarsForClasses(job.getConfiguration(),
-          org.apache.hadoop.hbase.shaded.com.google.common.base.Preconditions.class);
+          org.apache.hbase.thirdparty.com.google.common.base.Preconditions.class);
     } else {
       // output to live cluster
       job.setMapperClass(WALMapper.class);

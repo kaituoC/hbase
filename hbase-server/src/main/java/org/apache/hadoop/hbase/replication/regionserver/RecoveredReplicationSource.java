@@ -1,5 +1,4 @@
-/*
- *
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -23,20 +22,20 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.PriorityBlockingQueue;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.Stoppable;
-import org.apache.yetus.audience.InterfaceAudience;
-import org.apache.hadoop.hbase.replication.ReplicationEndpoint;
-import org.apache.hadoop.hbase.replication.ReplicationPeers;
-import org.apache.hadoop.hbase.replication.ReplicationQueues;
+import org.apache.hadoop.hbase.Server;
+import org.apache.hadoop.hbase.ServerName;
+import org.apache.hadoop.hbase.replication.ReplicationPeer;
+import org.apache.hadoop.hbase.replication.ReplicationQueueStorage;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.util.Threads;
 import org.apache.hadoop.hbase.wal.AbstractFSWALProvider;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Class that handles the recovered source of a replication stream, which is transfered from
@@ -45,17 +44,17 @@ import org.apache.hadoop.hbase.wal.AbstractFSWALProvider;
 @InterfaceAudience.Private
 public class RecoveredReplicationSource extends ReplicationSource {
 
-  private static final Log LOG = LogFactory.getLog(RecoveredReplicationSource.class);
+  private static final Logger LOG = LoggerFactory.getLogger(RecoveredReplicationSource.class);
 
   private String actualPeerId;
 
   @Override
   public void init(Configuration conf, FileSystem fs, ReplicationSourceManager manager,
-      ReplicationQueues replicationQueues, ReplicationPeers replicationPeers, Stoppable stopper,
-      String peerClusterZnode, UUID clusterId, ReplicationEndpoint replicationEndpoint,
-      WALFileLengthProvider walFileLengthProvider, MetricsSource metrics) throws IOException {
-    super.init(conf, fs, manager, replicationQueues, replicationPeers, stopper, peerClusterZnode,
-      clusterId, replicationEndpoint, walFileLengthProvider, metrics);
+      ReplicationQueueStorage queueStorage, ReplicationPeer replicationPeer, Server server,
+      String peerClusterZnode, UUID clusterId, WALFileLengthProvider walFileLengthProvider,
+      MetricsSource metrics) throws IOException {
+    super.init(conf, fs, manager, queueStorage, replicationPeer, server, peerClusterZnode,
+      clusterId, walFileLengthProvider, metrics);
     this.actualPeerId = this.replicationQueueInfo.getPeerId();
   }
 
@@ -63,13 +62,13 @@ public class RecoveredReplicationSource extends ReplicationSource {
   protected void tryStartNewShipper(String walGroupId, PriorityBlockingQueue<Path> queue) {
     final RecoveredReplicationSourceShipper worker =
         new RecoveredReplicationSourceShipper(conf, walGroupId, queue, this,
-            this.replicationQueues);
+            this.queueStorage);
     ReplicationSourceShipper extant = workerThreads.putIfAbsent(walGroupId, worker);
     if (extant != null) {
       LOG.debug("Someone has beat us to start a worker thread for wal group " + walGroupId);
     } else {
       LOG.debug("Starting up worker for wal group " + walGroupId);
-      worker.startup(getUncaughtExceptionHandler());
+      worker.startup(this::uncaughtException);
       worker.setWALReader(
         startNewWALReader(worker.getName(), walGroupId, queue, worker.getStartPosition()));
       workerThreads.put(walGroupId, worker);
@@ -77,13 +76,13 @@ public class RecoveredReplicationSource extends ReplicationSource {
   }
 
   @Override
-  protected ReplicationSourceWALReader startNewWALReader(String threadName,
-      String walGroupId, PriorityBlockingQueue<Path> queue, long startPosition) {
-    ReplicationSourceWALReader walReader = new RecoveredReplicationSourceWALReader(fs,
-        conf, queue, startPosition, walEntryFilter, this);
-    Threads.setDaemonThreadRunning(walReader, threadName
-        + ".replicationSource.replicationWALReaderThread." + walGroupId + "," + peerClusterZnode,
-      getUncaughtExceptionHandler());
+  protected ReplicationSourceWALReader startNewWALReader(String threadName, String walGroupId,
+      PriorityBlockingQueue<Path> queue, long startPosition) {
+    ReplicationSourceWALReader walReader =
+      new RecoveredReplicationSourceWALReader(fs, conf, queue, startPosition, walEntryFilter, this);
+    Threads.setDaemonThreadRunning(walReader,
+      threadName + ".replicationSource.replicationWALReaderThread." + walGroupId + "," + queueId,
+      this::uncaughtException);
     return walReader;
   }
 
@@ -98,7 +97,7 @@ public class RecoveredReplicationSource extends ReplicationSource {
       }
       // Path changed - try to find the right path.
       hasPathChanged = true;
-      if (stopper instanceof ReplicationSyncUp.DummyServer) {
+      if (server instanceof ReplicationSyncUp.DummyServer) {
         // In the case of disaster/recovery, HMaster may be shutdown/crashed before flush data
         // from .logs to .oldlogs. Loop into .logs folders and check whether a match exists
         Path newPath = getReplSyncUpPath(path);
@@ -107,12 +106,13 @@ public class RecoveredReplicationSource extends ReplicationSource {
       } else {
         // See if Path exists in the dead RS folder (there could be a chain of failures
         // to look at)
-        List<String> deadRegionServers = this.replicationQueueInfo.getDeadRegionServers();
+        List<ServerName> deadRegionServers = this.replicationQueueInfo.getDeadRegionServers();
         LOG.info("NB dead servers : " + deadRegionServers.size());
         final Path walDir = FSUtils.getWALRootDir(conf);
-        for (String curDeadServerName : deadRegionServers) {
+        for (ServerName curDeadServerName : deadRegionServers) {
           final Path deadRsDirectory =
-              new Path(walDir, AbstractFSWALProvider.getWALDirectoryName(curDeadServerName));
+              new Path(walDir, AbstractFSWALProvider.getWALDirectoryName(curDeadServerName
+                  .getServerName()));
           Path[] locs = new Path[] { new Path(deadRsDirectory, path.getName()), new Path(
               deadRsDirectory.suffix(AbstractFSWALProvider.SPLITTING_EXT), path.getName()) };
           for (Path possibleLogLocation : locs) {
@@ -178,8 +178,8 @@ public class RecoveredReplicationSource extends ReplicationSource {
         }
       }
       if (allTasksDone) {
-        manager.closeRecoveredQueue(this);
-        LOG.info("Finished recovering queue " + peerClusterZnode + " with the following stats: "
+        manager.removeRecoveredSource(this);
+        LOG.info("Finished recovering queue " + queueId + " with the following stats: "
             + getStats());
       }
     }
@@ -188,5 +188,10 @@ public class RecoveredReplicationSource extends ReplicationSource {
   @Override
   public String getPeerId() {
     return this.actualPeerId;
+  }
+
+  @Override
+  public ServerName getServerWALsBelongTo() {
+    return this.replicationQueueInfo.getDeadRegionServers().get(0);
   }
 }

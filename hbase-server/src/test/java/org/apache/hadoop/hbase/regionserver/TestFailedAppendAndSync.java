@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,7 +17,6 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
-
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
@@ -26,13 +24,11 @@ import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicLong;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.DroppedSnapshotException;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.Server;
@@ -49,12 +45,15 @@ import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WALProvider.Writer;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 import org.junit.rules.TestName;
 import org.mockito.Mockito;
 import org.mockito.exceptions.verification.WantedButNotInvoked;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Testing sync/append failures.
@@ -62,7 +61,12 @@ import org.mockito.exceptions.verification.WantedButNotInvoked;
  */
 @Category({MediumTests.class})
 public class TestFailedAppendAndSync {
-  private static final Log LOG = LogFactory.getLog(TestFailedAppendAndSync.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestFailedAppendAndSync.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestFailedAppendAndSync.class);
   @Rule public TestName name = new TestName();
 
   private static final String COLUMN_FAMILY = "MyCF";
@@ -104,7 +108,7 @@ public class TestFailedAppendAndSync {
    * First I need to set up some mocks for Server and RegionServerServices. I also need to
    * set up a dodgy WAL that will throw an exception when we go to append to it.
    */
-  @Test (timeout=300000)
+  @Test
   public void testLockupAroundBadAssignSync() throws IOException {
     final AtomicLong rolls = new AtomicLong(0);
     // Dodgy WAL. Will throw exceptions when flags set.

@@ -26,8 +26,6 @@ import java.io.IOException;
 import java.util.List;
 
 import org.apache.commons.cli.CommandLine;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -39,7 +37,8 @@ import org.apache.hadoop.hbase.util.AbstractHBaseTool;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.zookeeper.RecoverableZooKeeper;
 import org.apache.hadoop.hbase.zookeeper.ZKUtil;
-import org.apache.hadoop.hbase.zookeeper.ZooKeeperWatcher;
+import org.apache.hadoop.hbase.zookeeper.ZKWatcher;
+import org.apache.hadoop.hbase.zookeeper.ZNodePaths;
 import org.apache.hadoop.util.ToolRunner;
 import org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.KeeperException.Code;
@@ -50,6 +49,8 @@ import org.apache.zookeeper.data.ACL;
 import org.apache.zookeeper.data.Id;
 import org.apache.zookeeper.data.Stat;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * An integration test which checks that the znodes in zookeeper and data in the FileSystem
@@ -67,8 +68,9 @@ import org.junit.experimental.categories.Category;
  */
 @Category(IntegrationTests.class)
 public class IntegrationTestZKAndFSPermissions extends AbstractHBaseTool {
+  private static final Logger LOG =
+      LoggerFactory.getLogger(IntegrationTestZKAndFSPermissions.class);
 
-  private static final Log LOG = LogFactory.getLog(IntegrationTestZKAndFSPermissions.class);
   private String superUser;
   private String masterPrincipal;
   private boolean isForce;
@@ -138,7 +140,7 @@ public class IntegrationTestZKAndFSPermissions extends AbstractHBaseTool {
 
   private void testZNodeACLs() throws IOException, KeeperException, InterruptedException {
 
-    ZooKeeperWatcher watcher = new ZooKeeperWatcher(conf, "IntegrationTestZnodeACLs", null);
+    ZKWatcher watcher = new ZKWatcher(conf, "IntegrationTestZnodeACLs", null);
     RecoverableZooKeeper zk = ZKUtil.connect(this.conf, watcher);
 
     String baseZNode = watcher.znodePaths.baseZNode;
@@ -154,10 +156,10 @@ public class IntegrationTestZKAndFSPermissions extends AbstractHBaseTool {
     LOG.info("Checking ZK permissions: SUCCESS");
   }
 
-  private void checkZnodePermsRecursive(ZooKeeperWatcher watcher,
+  private void checkZnodePermsRecursive(ZKWatcher watcher,
       RecoverableZooKeeper zk, String znode) throws KeeperException, InterruptedException {
 
-    boolean expectedWorldReadable = watcher.isClientReadable(znode);
+    boolean expectedWorldReadable = watcher.znodePaths.isClientReadable(znode);
 
     assertZnodePerms(zk, znode, expectedWorldReadable);
 
@@ -165,7 +167,7 @@ public class IntegrationTestZKAndFSPermissions extends AbstractHBaseTool {
       List<String> children = zk.getChildren(znode, false);
 
       for (String child : children) {
-        checkZnodePermsRecursive(watcher, zk, ZKUtil.joinZNode(znode, child));
+        checkZnodePermsRecursive(watcher, zk, ZNodePaths.joinZNode(znode, child));
       }
     } catch (KeeperException ke) {
       // if we are not authenticated for listChildren, it is fine.
@@ -200,7 +202,7 @@ public class IntegrationTestZKAndFSPermissions extends AbstractHBaseTool {
         assertTrue(expectedWorldReadable);
         // assert that anyone can only read
         assertEquals(perms, Perms.READ);
-      } else if (superUsers != null && ZooKeeperWatcher.isSuperUserId(superUsers, id)) {
+      } else if (superUsers != null && ZKWatcher.isSuperUserId(superUsers, id)) {
         // assert that super user has all the permissions
         assertEquals(perms, Perms.ALL);
       } else if (new Id("sasl", masterPrincipal).equals(id)) {

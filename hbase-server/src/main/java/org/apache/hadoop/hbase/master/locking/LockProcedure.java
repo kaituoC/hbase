@@ -19,12 +19,14 @@
 
 package org.apache.hadoop.hbase.master.locking;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import java.io.IOException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.yetus.audience.InterfaceAudience;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.master.procedure.MasterProcedureEnv;
 import org.apache.hadoop.hbase.master.procedure.TableProcedureInterface;
 import org.apache.hadoop.hbase.procedure2.LockType;
@@ -32,15 +34,13 @@ import org.apache.hadoop.hbase.procedure2.Procedure;
 import org.apache.hadoop.hbase.procedure2.ProcedureEvent;
 import org.apache.hadoop.hbase.procedure2.ProcedureStateSerializer;
 import org.apache.hadoop.hbase.procedure2.ProcedureSuspendedException;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.LockServiceProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.LockServiceProtos.LockProcedureData;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos;
-
-import java.io.IOException;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Procedure to allow blessed clients and external admin tools to take our internal Schema locks
@@ -56,7 +56,7 @@ import java.util.concurrent.atomic.AtomicLong;
 @InterfaceAudience.Private
 public final class LockProcedure extends Procedure<MasterProcedureEnv>
     implements TableProcedureInterface {
-  private static final Log LOG = LogFactory.getLog(LockProcedure.class);
+  private static final Logger LOG = LoggerFactory.getLogger(LockProcedure.class);
 
   public static final int DEFAULT_REMOTE_LOCKS_TIMEOUT_MS = 30000;  // timeout in ms
   public static final String REMOTE_LOCKS_TIMEOUT_MS_CONF =
@@ -68,7 +68,7 @@ public final class LockProcedure extends Procedure<MasterProcedureEnv>
 
   private String namespace;
   private TableName tableName;
-  private HRegionInfo[] regionInfos;
+  private RegionInfo[] regionInfos;
   private LockType type;
   // underlying namespace/table/region lock.
   private LockInterface lock;
@@ -160,12 +160,12 @@ public final class LockProcedure extends Procedure<MasterProcedureEnv>
    *                        Useful for locks acquired locally from master process.
    * @throws IllegalArgumentException if all regions are not from same table.
    */
-  public LockProcedure(final Configuration conf, final HRegionInfo[] regionInfos,
+  public LockProcedure(final Configuration conf, final RegionInfo[] regionInfos,
       final LockType type, final String description, final CountDownLatch lockAcquireLatch)
       throws IllegalArgumentException {
     this(conf, type, description, lockAcquireLatch);
 
-    // Build HRegionInfo from region names.
+    // Build RegionInfo from region names.
     if (regionInfos.length == 0) {
       throw new IllegalArgumentException("No regions specified for region lock");
     }
@@ -202,13 +202,13 @@ public final class LockProcedure extends Procedure<MasterProcedureEnv>
    * @return false, so procedure framework doesn't mark this procedure as failure.
    */
   @Override
-  protected boolean setTimeoutFailure(final MasterProcedureEnv env) {
+  protected synchronized boolean setTimeoutFailure(final MasterProcedureEnv env) {
     synchronized (event) {
       if (LOG.isDebugEnabled()) LOG.debug("Timeout failure " + this.event);
       if (!event.isReady()) {  // Maybe unlock() awakened the event.
         setState(ProcedureProtos.ProcedureState.RUNNABLE);
         if (LOG.isDebugEnabled()) LOG.debug("Calling wake on " + this.event);
-        env.getProcedureScheduler().wakeEvent(event);
+        event.wake(env.getProcedureScheduler());
       }
     }
     return false;  // false: do not mark the procedure as failed.
@@ -223,7 +223,7 @@ public final class LockProcedure extends Procedure<MasterProcedureEnv>
     synchronized (event) {
       if (!event.isReady()) {
         setState(ProcedureProtos.ProcedureState.RUNNABLE);
-        env.getProcedureScheduler().wakeEvent(event);
+        event.wake(env.getProcedureScheduler());
       }
     }
   }
@@ -243,8 +243,8 @@ public final class LockProcedure extends Procedure<MasterProcedureEnv>
       return null;
     }
     synchronized (event) {
-      env.getProcedureScheduler().suspendEvent(event);
-      env.getProcedureScheduler().waitEvent(event, this);
+      event.suspend();
+      event.suspendIfNotReady(this);
       setState(ProcedureProtos.ProcedureState.WAITING_TIMEOUT);
     }
     throw new ProcedureSuspendedException();
@@ -269,7 +269,7 @@ public final class LockProcedure extends Procedure<MasterProcedureEnv>
           .setDescription(description);
     if (regionInfos != null) {
       for (int i = 0; i < regionInfos.length; ++i) {
-        builder.addRegionInfo(HRegionInfo.convert(regionInfos[i]));
+        builder.addRegionInfo(ProtobufUtil.toRegionInfo(regionInfos[i]));
       }
     } else if (namespace != null) {
       builder.setNamespace(namespace);
@@ -289,9 +289,9 @@ public final class LockProcedure extends Procedure<MasterProcedureEnv>
     type = LockType.valueOf(state.getLockType().name());
     description = state.getDescription();
     if (state.getRegionInfoCount() > 0) {
-      regionInfos = new HRegionInfo[state.getRegionInfoCount()];
+      regionInfos = new RegionInfo[state.getRegionInfoCount()];
       for (int i = 0; i < state.getRegionInfoCount(); ++i) {
-        regionInfos[i] = HRegionInfo.convert(state.getRegionInfo(i));
+        regionInfos[i] = ProtobufUtil.toRegionInfo(state.getRegionInfo(i));
       }
     } else if (state.hasNamespace()) {
       namespace = state.getNamespace();

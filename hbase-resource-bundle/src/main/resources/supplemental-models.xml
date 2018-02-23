@@ -514,19 +514,6 @@ under the License.
   </supplement>
   <supplement>
     <project>
-      <groupId>org.glassfish.jersey.media</groupId>
-      <artifactId>jersey-media-json-jackson1</artifactId>
-      <licenses>
-        <license>
-          <name>CDDL 1.1</name>
-          <url>https://glassfish.java.net/public/CDDL+GPL_1_1.html</url>
-          <distribution>repo</distribution>
-        </license>
-      </licenses>
-    </project>
-  </supplement>
-  <supplement>
-    <project>
       <groupId>org.glassfish.web</groupId>
       <artifactId>javax.servlet.jsp</artifactId>
       <licenses>
@@ -555,6 +542,20 @@ under the License.
     <project>
       <groupId>org.mortbay.jetty</groupId>
       <artifactId>jetty-util</artifactId>
+
+      <licenses>
+        <license>
+          <name>Apache License, Version 2.0</name>
+          <url>http://www.apache.org/licenses/LICENSE-2.0.txt</url>
+          <distribution>repo</distribution>
+        </license>
+      </licenses>
+    </project>
+  </supplement>
+  <supplement>
+    <project>
+      <groupId>org.mortbay.jetty</groupId>
+      <artifactId>jetty-sslengine</artifactId>
 
       <licenses>
         <license>
@@ -600,7 +601,7 @@ under the License.
   </supplement>
 
   <supplement>
-    <project>   <!-- hadoop.profile=3.0 from hadoop-3.0.0-alpha1 -->
+    <project>   <!-- hadoop.profile=3.0 from hadoop-3.0.0 -->
       <groupId>com.codahale.metrics</groupId>
       <artifactId>metrics-core</artifactId>
       <version>3.0.1</version>
@@ -614,7 +615,7 @@ under the License.
     </project>
   </supplement>
   <supplement>
-    <project>  <!-- hadoop.profile=3.0 from hadoop-3.0.0-alpha1 -->
+    <project>  <!-- hadoop.profile=3.0 from hadoop-3.0.0 -->
       <groupId>com.squareup.okhttp</groupId>
       <artifactId>okhttp</artifactId>
       <version>2.4.0</version>
@@ -628,7 +629,7 @@ under the License.
     </project>
   </supplement>
   <supplement>
-    <project>  <!-- hadoop.profile=3.0 from hadoop-3.0.0-alpha1 -->
+    <project>  <!-- hadoop.profile=3.0 from hadoop-3.0.0 -->
       <groupId>com.squareup.okio</groupId>
       <artifactId>okio</artifactId>
       <version>1.4.0</version>
@@ -643,7 +644,7 @@ under the License.
   </supplement>
 
   <supplement>
-    <project>   <!-- hadoop.profile=3.0 from hadoop-3.0.0-alpha1 -->
+    <project>   <!-- hadoop.profile=3.0 from hadoop-3.0.0 -->
       <groupId>de.ruedigermoeller</groupId>
       <artifactId>fst</artifactId>
       <version>2.24</version>
@@ -662,7 +663,7 @@ under the License.
   </supplement>
 
   <supplement>
-    <project>   <!-- hadoop.profile=3.0 from hadoop-3.0.0-alpha1 -->
+    <project>   <!-- hadoop.profile=3.0 from hadoop-3.0.0 -->
       <groupId>org.objenesis</groupId>
       <artifactId>objenesis</artifactId>
       <version>2.1</version>
@@ -799,7 +800,7 @@ EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
     </project>
   </supplement>
   <supplement>
-    <project> <!-- hadoop.profile=3.0 from hadoop-3.0.0-alpha4 -->
+    <project> <!-- hadoop.profile=3.0 from hadoop-3.0.0 -->
       <groupId>org.codehaus.woodstox</groupId>
       <artifactId>stax2-api</artifactId>
       <version>3.1.4</version>
@@ -1298,7 +1299,7 @@ Mozilla Public License Version 2.0
     means any form of the work other than Source Code Form.
 
 1.7. "Larger Work"
-    means a work that combines Covered Software with other material, in 
+    means a work that combines Covered Software with other material, in
     a separate file or files, that is not Covered Software.
 
 1.8. "License"

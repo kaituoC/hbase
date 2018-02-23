@@ -29,19 +29,19 @@ import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.atomic.LongAdder;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.MinMaxPriorityQueue;
+import org.apache.hbase.thirdparty.com.google.common.collect.MinMaxPriorityQueue;
 import org.apache.commons.collections4.map.LinkedMap;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.io.hfile.BlockCacheKey;
 import org.apache.hadoop.hbase.io.hfile.CacheConfig;
 import org.apache.hadoop.hbase.io.hfile.bucket.BucketCache.BucketEntry;
-import org.codehaus.jackson.annotate.JsonIgnoreProperties;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.base.MoreObjects;
-import org.apache.hadoop.hbase.shaded.com.google.common.base.Preconditions;
-import org.apache.hadoop.hbase.shaded.com.google.common.primitives.Ints;
+import org.apache.hbase.thirdparty.com.google.common.base.MoreObjects;
+import org.apache.hbase.thirdparty.com.google.common.base.Preconditions;
+import org.apache.hbase.thirdparty.com.google.common.primitives.Ints;
 
 /**
  * This class is used to allocate a block with specified size and free the block
@@ -54,7 +54,7 @@ import org.apache.hadoop.hbase.shaded.com.google.common.primitives.Ints;
 @InterfaceAudience.Private
 @JsonIgnoreProperties({"indexStatistics", "freeSize", "usedSize"})
 public final class BucketAllocator {
-  private static final Log LOG = LogFactory.getLog(BucketAllocator.class);
+  private static final Logger LOG = LoggerFactory.getLogger(BucketAllocator.class);
 
   @JsonIgnoreProperties({"completelyFree", "uninstantiated"})
   public final static class Bucket {
@@ -414,6 +414,7 @@ public final class BucketAllocator {
     }
   }
 
+  @Override
   public String toString() {
     StringBuilder sb = new StringBuilder(1024);
     for (int i = 0; i < buckets.length; ++i) {

@@ -17,13 +17,14 @@
  */
 package org.apache.hadoop.hbase.rsgroup;
 
+import com.google.protobuf.ServiceException;
+
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
 import org.apache.hadoop.hbase.TableName;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.net.Address;
 import org.apache.hadoop.hbase.protobuf.ProtobufUtil;
@@ -42,10 +43,11 @@ import org.apache.hadoop.hbase.protobuf.generated.RSGroupAdminProtos.MoveServers
 import org.apache.hadoop.hbase.protobuf.generated.RSGroupAdminProtos.MoveTablesRequest;
 import org.apache.hadoop.hbase.protobuf.generated.RSGroupAdminProtos.RSGroupAdminService;
 import org.apache.hadoop.hbase.protobuf.generated.RSGroupAdminProtos.RemoveRSGroupRequest;
+import org.apache.hadoop.hbase.protobuf.generated.RSGroupAdminProtos.RemoveServersRequest;
 import org.apache.hadoop.hbase.protobuf.generated.RSGroupProtos;
+import org.apache.yetus.audience.InterfaceAudience;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Sets;
-import com.google.protobuf.ServiceException;
+import org.apache.hbase.thirdparty.com.google.common.collect.Sets;
 
 /**
  * Client used for managing region server group information.
@@ -201,6 +203,25 @@ class RSGroupAdminClient implements RSGroupAdmin {
     }
     try {
       stub.moveServersAndTables(null, builder.build());
+    } catch (ServiceException e) {
+      throw ProtobufUtil.handleRemoteException(e);
+    }
+  }
+
+  @Override
+  public void removeServers(Set<Address> servers) throws IOException {
+    Set<HBaseProtos.ServerName> hostPorts = Sets.newHashSet();
+    for(Address el: servers) {
+      hostPorts.add(HBaseProtos.ServerName.newBuilder()
+          .setHostName(el.getHostname())
+          .setPort(el.getPort())
+          .build());
+    }
+    RemoveServersRequest request = RemoveServersRequest.newBuilder()
+        .addAllServers(hostPorts)
+        .build();
+    try {
+      stub.removeServers(null, request);
     } catch (ServiceException e) {
       throw ProtobufUtil.handleRemoteException(e);
     }

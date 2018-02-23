@@ -18,15 +18,15 @@
  */
 package org.apache.hadoop.hbase.regionserver;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-import org.apache.hadoop.hbase.shaded.com.google.common.base.MoreObjects;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.base.MoreObjects;
 
 import java.util.LinkedList;
 import java.util.concurrent.atomic.AtomicLong;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ClassSize;
 
@@ -38,7 +38,7 @@ import org.apache.hadoop.hbase.util.ClassSize;
  */
 @InterfaceAudience.Private
 public class MultiVersionConcurrencyControl {
-  private static final Log LOG = LogFactory.getLog(MultiVersionConcurrencyControl.class);
+  private static final Logger LOG = LoggerFactory.getLogger(MultiVersionConcurrencyControl.class);
 
   final AtomicLong readPoint = new AtomicLong(0);
   final AtomicLong writePoint = new AtomicLong(0);
@@ -74,8 +74,12 @@ public class MultiVersionConcurrencyControl {
   public void advanceTo(long newStartPoint) {
     while (true) {
       long seqId = this.getWritePoint();
-      if (seqId >= newStartPoint) break;
-      if (this.tryAdvanceTo(/* newSeqId = */ newStartPoint, /* expected = */ seqId)) break;
+      if (seqId >= newStartPoint) {
+        break;
+      }
+      if (this.tryAdvanceTo(newStartPoint, seqId)) {
+        break;
+      }
     }
   }
 
@@ -239,6 +243,7 @@ public class MultiVersionConcurrencyControl {
   }
 
   @VisibleForTesting
+  @Override
   public String toString() {
     return MoreObjects.toStringHelper(this)
         .add("readPoint", readPoint)
@@ -286,7 +291,7 @@ public class MultiVersionConcurrencyControl {
   }
 
   public static final long FIXED_SIZE = ClassSize.align(
-      ClassSize.OBJECT +
+      (long)ClassSize.OBJECT +
       2 * Bytes.SIZEOF_LONG +
       2 * ClassSize.REFERENCE);
 }

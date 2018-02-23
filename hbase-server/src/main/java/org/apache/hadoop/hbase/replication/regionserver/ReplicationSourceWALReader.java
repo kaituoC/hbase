@@ -29,8 +29,6 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.atomic.AtomicLong;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -45,7 +43,8 @@ import org.apache.hadoop.hbase.wal.WAL.Entry;
 import org.apache.hadoop.hbase.wal.WALEdit;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.yetus.audience.InterfaceStability;
-
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.WALProtos;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.WALProtos.BulkLoadDescriptor;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.WALProtos.StoreDescriptor;
@@ -57,7 +56,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.WALProtos.StoreDescript
 @InterfaceAudience.Private
 @InterfaceStability.Evolving
 public class ReplicationSourceWALReader extends Thread {
-  private static final Log LOG = LogFactory.getLog(ReplicationSourceWALReader.class);
+  private static final Logger LOG = LoggerFactory.getLogger(ReplicationSourceWALReader.class);
 
   private final PriorityBlockingQueue<Path> logQueue;
   private final FileSystem fs;
@@ -116,7 +115,7 @@ public class ReplicationSourceWALReader extends Thread {
         this.conf.getInt("replication.source.maxretriesmultiplier", 300); // 5 minutes @ 1 sec per
     this.eofAutoRecovery = conf.getBoolean("replication.source.eof.autorecovery", false);
     this.entryBatchQueue = new LinkedBlockingQueue<>(batchCount);
-    LOG.info("peerClusterZnode=" + source.getPeerClusterZnode()
+    LOG.info("peerClusterZnode=" + source.getQueueId()
         + ", ReplicationSourceWALReaderThread : " + source.getPeerId()
         + " inited, replicationBatchSizeCapacity=" + replicationBatchSizeCapacity
         + ", replicationBatchCountCapacity=" + replicationBatchCountCapacity
@@ -127,8 +126,10 @@ public class ReplicationSourceWALReader extends Thread {
   public void run() {
     int sleepMultiplier = 1;
     while (isReaderRunning()) { // we only loop back here if something fatal happened to our stream
-      try (WALEntryStream entryStream = new WALEntryStream(logQueue, fs, conf, currentPosition,
-          source.getWALFileLengthProvider(), source.getSourceMetrics())) {
+      try (WALEntryStream entryStream =
+          new WALEntryStream(logQueue, fs, conf, currentPosition,
+              source.getWALFileLengthProvider(), source.getServerWALsBelongTo(),
+              source.getSourceMetrics())) {
         while (isReaderRunning()) { // loop here to keep reusing stream while we can
           if (!checkQuota()) {
             continue;
@@ -203,8 +204,8 @@ public class ReplicationSourceWALReader extends Thread {
   // (highly likely we've closed the current log), we've hit the max retries, and autorecovery is
   // enabled, then dump the log
   private void handleEofException(IOException e) {
-    if (e instanceof EOFException ||
-        e.getCause() instanceof EOFException && logQueue.size() > 1 && this.eofAutoRecovery) {
+    if ((e instanceof EOFException || e.getCause() instanceof EOFException) &&
+      logQueue.size() > 1 && this.eofAutoRecovery) {
       try {
         if (fs.getFileStatus(logQueue.peek()).getLen() == 0) {
           LOG.warn("Forcing removal of 0 length log in queue: " + logQueue.peek());
@@ -354,7 +355,8 @@ public class ReplicationSourceWALReader extends Thread {
           List<StoreDescriptor> stores = bld.getStoresList();
           int totalStores = stores.size();
           for (int j = 0; j < totalStores; j++) {
-            totalStoreFilesSize += stores.get(j).getStoreFileSizeBytes();
+            totalStoreFilesSize =
+                (int) (totalStoreFilesSize + stores.get(j).getStoreFileSizeBytes());
           }
         } catch (IOException e) {
           LOG.error("Failed to deserialize bulk load entry from wal edit. "

@@ -26,8 +26,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.Optional;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.hbase.metrics.MetricRegistries;
 import org.apache.hadoop.hbase.metrics.MetricRegistry;
 import org.apache.hadoop.hbase.metrics.MetricRegistryInfo;
@@ -38,8 +36,9 @@ import org.apache.hadoop.metrics2.impl.JmxCacheBuster;
 import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
 import org.apache.hadoop.metrics2.lib.DefaultMetricsSystemHelper;
 import org.apache.hadoop.metrics2.lib.MetricsExecutorImpl;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 /**
  * This class acts as an adapter to export the MetricRegistry's in the global registry. Each
@@ -65,7 +64,7 @@ import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTe
  */
 public class GlobalMetricRegistriesAdapter {
 
-  private static final Log LOG = LogFactory.getLog(GlobalMetricRegistriesAdapter.class);
+  private static final Logger LOG = LoggerFactory.getLogger(GlobalMetricRegistriesAdapter.class);
 
   private class MetricsSourceAdapter implements MetricsSource {
     private final MetricRegistry registry;

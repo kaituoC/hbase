@@ -24,8 +24,6 @@ import java.lang.management.RuntimeMXBean;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellComparator;
@@ -33,6 +31,8 @@ import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ClassSize;
 import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
@@ -55,7 +55,7 @@ import org.apache.hadoop.hbase.util.EnvironmentEdgeManager;
  */
 @InterfaceAudience.Private
 public class DefaultMemStore extends AbstractMemStore {
-  private static final Log LOG = LogFactory.getLog(DefaultMemStore.class);
+  private static final Logger LOG = LoggerFactory.getLogger(DefaultMemStore.class);
 
   public final static long DEEP_OVERHEAD = ClassSize.align(AbstractMemStore.DEEP_OVERHEAD);
   public final static long FIXED_OVERHEAD = ClassSize.align(AbstractMemStore.FIXED_OVERHEAD);
@@ -63,7 +63,7 @@ public class DefaultMemStore extends AbstractMemStore {
    * Default constructor. Used for tests.
    */
   public DefaultMemStore() {
-    this(HBaseConfiguration.create(), CellComparator.COMPARATOR);
+    this(HBaseConfiguration.create(), CellComparator.getInstance());
   }
 
   /**
@@ -103,10 +103,10 @@ public class DefaultMemStore extends AbstractMemStore {
    * @return size of data that is going to be flushed from active set
    */
   @Override
-  public MemstoreSize getFlushableSize() {
-    MemstoreSize snapshotSize = getSnapshotSize();
+  public MemStoreSize getFlushableSize() {
+    MemStoreSize snapshotSize = getSnapshotSize();
     return snapshotSize.getDataSize() > 0 ? snapshotSize
-        : new MemstoreSize(keySize(), heapSize());
+        : new MemStoreSize(active.getMemStoreSize());
   }
 
   @Override
@@ -154,8 +154,8 @@ public class DefaultMemStore extends AbstractMemStore {
   }
 
   @Override
-  public MemstoreSize size() {
-    return new MemstoreSize(this.active.keySize(), this.active.heapSize());
+  public MemStoreSize size() {
+    return new MemStoreSize(active.getMemStoreSize());
   }
 
   /**
@@ -194,26 +194,26 @@ public class DefaultMemStore extends AbstractMemStore {
     byte [] fam = Bytes.toBytes("col");
     byte [] qf = Bytes.toBytes("umn");
     byte [] empty = new byte[0];
-    MemstoreSize memstoreSize = new MemstoreSize();
+    MemStoreSizing memstoreSizing = new MemStoreSizing();
     for (int i = 0; i < count; i++) {
       // Give each its own ts
-      memstore1.add(new KeyValue(Bytes.toBytes(i), fam, qf, i, empty), memstoreSize);
+      memstore1.add(new KeyValue(Bytes.toBytes(i), fam, qf, i, empty), memstoreSizing);
     }
     LOG.info("memstore1 estimated size="
-        + (memstoreSize.getDataSize() + memstoreSize.getHeapSize()));
+        + (memstoreSizing.getDataSize() + memstoreSizing.getHeapSize()));
     for (int i = 0; i < count; i++) {
-      memstore1.add(new KeyValue(Bytes.toBytes(i), fam, qf, i, empty), memstoreSize);
+      memstore1.add(new KeyValue(Bytes.toBytes(i), fam, qf, i, empty), memstoreSizing);
     }
     LOG.info("memstore1 estimated size (2nd loading of same data)="
-        + (memstoreSize.getDataSize() + memstoreSize.getHeapSize()));
+        + (memstoreSizing.getDataSize() + memstoreSizing.getHeapSize()));
     // Make a variably sized memstore.
     DefaultMemStore memstore2 = new DefaultMemStore();
-    memstoreSize = new MemstoreSize();
+    memstoreSizing = new MemStoreSizing();
     for (int i = 0; i < count; i++) {
-      memstore2.add(new KeyValue(Bytes.toBytes(i), fam, qf, i, new byte[i]), memstoreSize);
+      memstore2.add(new KeyValue(Bytes.toBytes(i), fam, qf, i, new byte[i]), memstoreSizing);
     }
     LOG.info("memstore2 estimated size="
-        + (memstoreSize.getDataSize() + memstoreSize.getHeapSize()));
+        + (memstoreSizing.getDataSize() + memstoreSizing.getHeapSize()));
     final int seconds = 30;
     LOG.info("Waiting " + seconds + " seconds while heap dump is taken");
     LOG.info("Exiting.");

@@ -27,7 +27,7 @@ import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.security.User;
 import org.apache.hadoop.hbase.util.Bytes;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.base.Joiner;
+import org.apache.hbase.thirdparty.com.google.common.base.Joiner;
 
 /**
  * Represents the result of an authorization check for logging and error
@@ -207,6 +207,7 @@ public class AuthResult {
     return sb.toString();
   }
 
+  @Override
   public String toString() {
     return "AuthResult" + toContextString();
   }
@@ -279,6 +280,7 @@ public class AuthResult {
       return this;
     }
 
+    @Override
     public String toString() {
       String familiesString = toFamiliesString(families, family, qualifier);
       String[] params = new String[] {

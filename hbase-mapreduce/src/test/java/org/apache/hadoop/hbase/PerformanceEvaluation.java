@@ -18,7 +18,10 @@
  */
 package org.apache.hadoop.hbase;
 
-import static org.codehaus.jackson.map.SerializationConfig.Feature.SORT_PROPERTIES_ALPHABETICALLY;
+import com.codahale.metrics.Histogram;
+import com.codahale.metrics.UniformReservoir;
+import com.fasterxml.jackson.databind.MapperFeature;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.io.PrintStream;
@@ -33,10 +36,10 @@ import java.util.Date;
 import java.util.LinkedList;
 import java.util.Locale;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Queue;
 import java.util.Random;
 import java.util.TreeMap;
-import java.util.NoSuchElementException;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -44,13 +47,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Append;
 import org.apache.hadoop.hbase.client.AsyncConnection;
@@ -64,15 +64,12 @@ import org.apache.hadoop.hbase.client.Durability;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.Increment;
 import org.apache.hadoop.hbase.client.Put;
-import org.apache.hadoop.hbase.client.RawAsyncTable;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.RowMutations;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.filter.BinaryComparator;
-import org.apache.hadoop.hbase.filter.CompareFilter;
-import org.apache.hadoop.hbase.filter.CompareFilter.CompareOp;
 import org.apache.hadoop.hbase.filter.Filter;
 import org.apache.hadoop.hbase.filter.FilterAllFilter;
 import org.apache.hadoop.hbase.filter.FilterList;
@@ -85,10 +82,15 @@ import org.apache.hadoop.hbase.io.hfile.RandomDistribution;
 import org.apache.hadoop.hbase.mapreduce.TableMapReduceUtil;
 import org.apache.hadoop.hbase.regionserver.BloomType;
 import org.apache.hadoop.hbase.regionserver.CompactingMemStore;
-import org.apache.hadoop.hbase.regionserver.TestHRegionFileSystem;
 import org.apache.hadoop.hbase.trace.HBaseHTraceConfiguration;
 import org.apache.hadoop.hbase.trace.SpanReceiverHost;
-import org.apache.hadoop.hbase.util.*;
+import org.apache.hadoop.hbase.trace.TraceUtil;
+import org.apache.hadoop.hbase.util.ByteArrayHashKey;
+import org.apache.hadoop.hbase.util.Bytes;
+import org.apache.hadoop.hbase.util.Hash;
+import org.apache.hadoop.hbase.util.MurmurHash;
+import org.apache.hadoop.hbase.util.Pair;
+import org.apache.hadoop.hbase.util.YammerHistogramUtils;
 import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.mapreduce.Job;
@@ -98,16 +100,14 @@ import org.apache.hadoop.mapreduce.lib.output.TextOutputFormat;
 import org.apache.hadoop.mapreduce.lib.reduce.LongSumReducer;
 import org.apache.hadoop.util.Tool;
 import org.apache.hadoop.util.ToolRunner;
-import org.codehaus.jackson.map.ObjectMapper;
-import org.apache.htrace.Sampler;
-import org.apache.htrace.Trace;
-import org.apache.htrace.TraceScope;
-import org.apache.htrace.impl.ProbabilitySampler;
-import org.apache.hadoop.hbase.shaded.com.google.common.base.MoreObjects;
-import org.apache.hadoop.hbase.shaded.com.google.common.util.concurrent.ThreadFactoryBuilder;
-
-import com.codahale.metrics.Histogram;
-import com.codahale.metrics.UniformReservoir;
+import org.apache.htrace.core.ProbabilitySampler;
+import org.apache.htrace.core.Sampler;
+import org.apache.htrace.core.TraceScope;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.apache.hbase.thirdparty.com.google.common.base.MoreObjects;
+import org.apache.hbase.thirdparty.com.google.common.util.concurrent.ThreadFactoryBuilder;
 
 /**
  * Script used evaluating HBase performance and scalability.  Runs a HBase
@@ -130,10 +130,10 @@ import com.codahale.metrics.UniformReservoir;
 public class PerformanceEvaluation extends Configured implements Tool {
   static final String RANDOM_SEEK_SCAN = "randomSeekScan";
   static final String RANDOM_READ = "randomRead";
-  private static final Log LOG = LogFactory.getLog(PerformanceEvaluation.class.getName());
+  private static final Logger LOG = LoggerFactory.getLogger(PerformanceEvaluation.class.getName());
   private static final ObjectMapper MAPPER = new ObjectMapper();
   static {
-    MAPPER.configure(SORT_PROPERTIES_ALPHABETICALLY, true);
+    MAPPER.configure(MapperFeature.SORT_PROPERTIES_ALPHABETICALLY, true);
   }
 
   public static final String TABLE_NAME = "TestTable";
@@ -360,7 +360,8 @@ public class PerformanceEvaluation extends Configured implements Tool {
         .add("desc", desc)
         .add("presplit", opts.presplitRegions)
         .add("splitPolicy", opts.splitPolicy)
-        .add("replicas", opts.replicas));
+        .add("replicas", opts.replicas)
+        .toString());
     }
 
     // remove an existing table
@@ -405,7 +406,7 @@ public class PerformanceEvaluation extends Configured implements Tool {
     if (opts.replicas != DEFAULT_OPTS.replicas) {
       desc.setRegionReplication(opts.replicas);
     }
-    if (opts.splitPolicy != DEFAULT_OPTS.splitPolicy) {
+    if (opts.splitPolicy != null && !opts.splitPolicy.equals(DEFAULT_OPTS.splitPolicy)) {
       desc.setRegionSplitPolicyClassName(opts.splitPolicy);
     }
     return desc;
@@ -1038,7 +1039,7 @@ public class PerformanceEvaluation extends Configured implements Tool {
     protected final TestOptions opts;
 
     private final Status status;
-    private final Sampler<?> traceSampler;
+    private final Sampler traceSampler;
     private final SpanReceiverHost receiverHost;
 
     private String testName;
@@ -1072,9 +1073,13 @@ public class PerformanceEvaluation extends Configured implements Tool {
     }
 
     int getValueLength(final Random r) {
-      if (this.opts.isValueRandom()) return Math.abs(r.nextInt() % opts.valueSize);
-      else if (this.opts.isValueZipf()) return Math.abs(this.zipf.nextInt());
-      else return opts.valueSize;
+      if (this.opts.isValueRandom()) {
+        return r.nextInt(opts.valueSize);
+      } else if (this.opts.isValueZipf()) {
+        return Math.abs(this.zipf.nextInt());
+      } else {
+        return opts.valueSize;
+      }
     }
 
     void updateValueSize(final Result [] rs) throws IOException {
@@ -1182,17 +1187,15 @@ public class PerformanceEvaluation extends Configured implements Tool {
     void testTimed() throws IOException, InterruptedException {
       int startRow = getStartRow();
       int lastRow = getLastRow();
+      TraceUtil.addSampler(traceSampler);
       // Report on completion of 1/10th of total.
       for (int ii = 0; ii < opts.cycles; ii++) {
         if (opts.cycles > 1) LOG.info("Cycle=" + ii + " of " + opts.cycles);
         for (int i = startRow; i < lastRow; i++) {
           if (i % everyN != 0) continue;
           long startTime = System.nanoTime();
-          TraceScope scope = Trace.startSpan("test row", traceSampler);
-          try {
+          try (TraceScope scope = TraceUtil.createTrace("test row")){
             testRow(i);
-          } finally {
-            scope.close();
           }
           if ( (i - startRow) > opts.measureAfter) {
             // If multiget is enabled, say set to 10, testRow() returns immediately first 9 times
@@ -1299,7 +1302,7 @@ public class PerformanceEvaluation extends Configured implements Tool {
   }
 
   static abstract class AsyncTableTest extends AsyncTest {
-    protected RawAsyncTable table;
+    protected AsyncTable<?> table;
 
     AsyncTableTest(AsyncConnection con, TestOptions options, Status status) {
       super(con, options, status);
@@ -1307,7 +1310,7 @@ public class PerformanceEvaluation extends Configured implements Tool {
 
     @Override
     void onStartup() throws IOException {
-      this.table = connection.getRawTable(TableName.valueOf(opts.tableName));
+      this.table = connection.getTable(TableName.valueOf(opts.tableName));
     }
 
     @Override
@@ -1432,7 +1435,7 @@ public class PerformanceEvaluation extends Configured implements Tool {
 
   static class AsyncScanTest extends AsyncTableTest {
     private ResultScanner testScanner;
-    private AsyncTable asyncTable;
+    private AsyncTable<?> asyncTable;
 
     AsyncScanTest(AsyncConnection con, TestOptions options, Status status) {
       super(con, options, status);
@@ -1889,8 +1892,8 @@ public class PerformanceEvaluation extends Configured implements Tool {
       this.table.put(put);
       RowMutations mutations = new RowMutations(bytes);
       mutations.add(put);
-      this.table.checkAndMutate(bytes, FAMILY_NAME, getQualifier(), CompareOperator.EQUAL, bytes,
-          mutations);
+      this.table.checkAndMutate(bytes, FAMILY_NAME).qualifier(getQualifier())
+          .ifEquals(bytes).thenMutate(mutations);
     }
   }
 
@@ -1906,7 +1909,8 @@ public class PerformanceEvaluation extends Configured implements Tool {
       Put put = new Put(bytes);
       put.addColumn(FAMILY_NAME, getQualifier(), bytes);
       this.table.put(put);
-      this.table.checkAndPut(bytes, FAMILY_NAME, getQualifier(), CompareOperator.EQUAL, bytes, put);
+      this.table.checkAndMutate(bytes, FAMILY_NAME).qualifier(getQualifier())
+          .ifEquals(bytes).thenPut(put);
     }
   }
 
@@ -1924,8 +1928,8 @@ public class PerformanceEvaluation extends Configured implements Tool {
       this.table.put(put);
       Delete delete = new Delete(put.getRow());
       delete.addColumn(FAMILY_NAME, getQualifier());
-      this.table.checkAndDelete(bytes, FAMILY_NAME, getQualifier(),
-        CompareOperator.EQUAL, bytes, delete);
+      this.table.checkAndMutate(bytes, FAMILY_NAME).qualifier(getQualifier())
+          .ifEquals(bytes).thenDelete(delete);
     }
   }
 
@@ -1985,7 +1989,7 @@ public class PerformanceEvaluation extends Configured implements Tool {
   }
 
   static class FilteredScanTest extends TableTest {
-    protected static final Log LOG = LogFactory.getLog(FilteredScanTest.class.getName());
+    protected static final Logger LOG = LoggerFactory.getLogger(FilteredScanTest.class.getName());
 
     FilteredScanTest(Connection con, TestOptions options, Status status) {
       super(con, options, status);

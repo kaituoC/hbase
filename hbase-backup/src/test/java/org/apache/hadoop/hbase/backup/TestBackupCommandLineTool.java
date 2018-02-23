@@ -17,21 +17,27 @@
  */
 package org.apache.hadoop.hbase.backup;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
-
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.testclassification.SmallTests;
 import org.apache.hadoop.util.ToolRunner;
 import org.junit.Before;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
 @Category(SmallTests.class)
 public class TestBackupCommandLineTool {
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestBackupCommandLineTool.class);
 
   private final static String USAGE_DESCRIBE = "Usage: hbase backup describe <backup_id>";
   private final static String USAGE_CREATE = "Usage: hbase backup create";
@@ -78,6 +84,15 @@ public class TestBackupCommandLineTool {
     output = baos.toString();
     System.out.println(baos.toString());
     assertTrue(output.indexOf(USAGE_DESCRIBE) >= 0);
+  }
+
+
+  @Test
+  public void testBackupDriverCreateTopLevelBackupDest() throws Exception {
+    String[] args = new String[] { "create", "full", "hdfs://localhost:1020", "-t", "t1" };
+    int result = ToolRunner.run(conf, new BackupDriver(), args);
+    // FAILED
+    assertEquals(1, result);
   }
 
   @Test
@@ -419,7 +434,7 @@ public class TestBackupCommandLineTool {
   public void testBackupDriverBackupSetAndList() throws Exception {
     ByteArrayOutputStream baos = new ByteArrayOutputStream();
     System.setOut(new PrintStream(baos));
-    String[] args = new String[] { "create", "full", "file:/", "-t", "clicks", "-s", "s" };
+    String[] args = new String[] { "create", "full", "file:/localhost", "-t", "clicks", "-s", "s" };
     ToolRunner.run(conf, new BackupDriver(), args);
 
     String output = baos.toString();

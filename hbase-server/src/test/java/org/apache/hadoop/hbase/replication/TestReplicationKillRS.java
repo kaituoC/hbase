@@ -1,5 +1,4 @@
-/*
- *
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,8 +17,9 @@
  */
 package org.apache.hadoop.hbase.replication;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import static org.junit.Assert.fail;
+
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.UnknownScannerException;
 import org.apache.hadoop.hbase.client.Result;
@@ -27,14 +27,19 @@ import org.apache.hadoop.hbase.client.ResultScanner;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.ReplicationTests;
+import org.junit.ClassRule;
 import org.junit.experimental.categories.Category;
-
-import static org.junit.Assert.fail;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category({ReplicationTests.class, LargeTests.class})
 public class TestReplicationKillRS extends TestReplicationBase {
 
-  private static final Log LOG = LogFactory.getLog(TestReplicationKillRS.class);
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestReplicationKillRS.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestReplicationKillRS.class);
 
   /**
    * Load up 1 tables over 2 region servers and kill a source during
@@ -111,6 +116,7 @@ public class TestReplicationKillRS extends TestReplicationBase {
   private static Thread killARegionServer(final HBaseTestingUtility utility,
                                           final long timeout, final int rs) {
     Thread killer = new Thread() {
+      @Override
       public void run() {
         try {
           Thread.sleep(timeout);

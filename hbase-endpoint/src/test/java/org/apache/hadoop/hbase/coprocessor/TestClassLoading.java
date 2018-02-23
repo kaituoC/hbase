@@ -1,5 +1,4 @@
-/*
- *
+/**
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -18,11 +17,29 @@
  */
 package org.apache.hadoop.hbase.coprocessor;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertTrue;
+
+import java.io.*;
+import java.util.*;
 import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.*;
+import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.hbase.Coprocessor;
+import org.apache.hadoop.hbase.CoprocessorEnvironment;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
+import org.apache.hadoop.hbase.HBaseTestingUtility;
+import org.apache.hadoop.hbase.HColumnDescriptor;
+import org.apache.hadoop.hbase.HTableDescriptor;
+import org.apache.hadoop.hbase.MiniHBaseCluster;
+import org.apache.hadoop.hbase.RegionLoad;
+import org.apache.hadoop.hbase.ServerLoad;
+import org.apache.hadoop.hbase.ServerName;
+import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.client.Admin;
+import org.apache.hadoop.hbase.regionserver.HRegion;
 import org.apache.hadoop.hbase.regionserver.Region;
 import org.apache.hadoop.hbase.regionserver.TestServerCustomProtocol;
 import org.apache.hadoop.hbase.testclassification.CoprocessorTests;
@@ -30,31 +47,31 @@ import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.util.ClassLoaderTestHelper;
 import org.apache.hadoop.hbase.util.CoprocessorClassLoader;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
-import org.apache.hadoop.fs.FileSystem;
-import org.apache.hadoop.fs.Path;
-import org.apache.hadoop.hbase.ServerLoad;
-import org.apache.hadoop.hbase.RegionLoad;
-
-import java.io.*;
-import java.util.*;
-
 import org.junit.*;
+import org.junit.ClassRule;
 import org.junit.experimental.categories.Category;
-
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertTrue;
-import static org.junit.Assert.assertFalse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Test coprocessors class loading.
  */
 @Category({CoprocessorTests.class, MediumTests.class})
 public class TestClassLoading {
-  private static final Log LOG = LogFactory.getLog(TestClassLoading.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestClassLoading.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestClassLoading.class);
   private final static HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
 
-  public static class TestMasterCoprocessor implements MasterObserver {}
+  public static class TestMasterCoprocessor implements MasterCoprocessor, MasterObserver {
+    @Override
+    public Optional<MasterObserver> getMasterObserver() {
+      return Optional.of(this);
+    }
+  }
 
   private static MiniDFSCluster cluster;
 
@@ -69,7 +86,7 @@ public class TestClassLoading {
   private static Class<?> regionCoprocessor1 = ColumnAggregationEndpoint.class;
   // TOOD: Fix the import of this handler.  It is coming in from a package that is far away.
   private static Class<?> regionCoprocessor2 = TestServerCustomProtocol.PingHandler.class;
-  private static Class<?> regionServerCoprocessor = SampleRegionWALObserver.class;
+  private static Class<?> regionServerCoprocessor = SampleRegionWALCoprocessor.class;
   private static Class<?> masterCoprocessor = TestMasterCoprocessor.class;
 
   private static final String[] regionServerSystemCoprocessors =
@@ -110,8 +127,9 @@ public class TestClassLoading {
   }
 
   static File buildCoprocessorJar(String className) throws Exception {
-    String code = "import org.apache.hadoop.hbase.coprocessor.*;" +
-      "public class " + className + " implements RegionObserver {}";
+    String code =
+        "import org.apache.hadoop.hbase.coprocessor.*;" +
+            "public class " + className + " implements RegionCoprocessor {}";
     return ClassLoaderTestHelper.buildJar(
       TEST_UTIL.getDataTestDir().toString(), className, code);
   }
@@ -170,7 +188,7 @@ public class TestClassLoading {
     boolean found1 = true, found2 = true, found2_k1 = true, found2_k2 = true, found2_k3 = true;
     Map<Region, Set<ClassLoader>> regionsActiveClassLoaders = new HashMap<>();
     MiniHBaseCluster hbase = TEST_UTIL.getHBaseCluster();
-    for (Region region:
+    for (HRegion region:
         hbase.getRegionServer(0).getOnlineRegionsLocalContext()) {
       if (region.getRegionInfo().getRegionNameAsString().startsWith(tableName.getNameAsString())) {
         foundTableRegion = true;
@@ -239,7 +257,7 @@ public class TestClassLoading {
     // verify that the coprocessor was loaded
     boolean found = false;
     MiniHBaseCluster hbase = TEST_UTIL.getHBaseCluster();
-    for (Region region: hbase.getRegionServer(0).getOnlineRegionsLocalContext()) {
+    for (HRegion region: hbase.getRegionServer(0).getOnlineRegionsLocalContext()) {
       if (region.getRegionInfo().getRegionNameAsString().startsWith(cpName3)) {
         found = (region.getCoprocessorHost().findCoprocessor(cpName3) != null);
       }
@@ -264,7 +282,7 @@ public class TestClassLoading {
     // verify that the coprocessor was loaded correctly
     boolean found = false;
     MiniHBaseCluster hbase = TEST_UTIL.getHBaseCluster();
-    for (Region region: hbase.getRegionServer(0).getOnlineRegionsLocalContext()) {
+    for (HRegion region: hbase.getRegionServer(0).getOnlineRegionsLocalContext()) {
       if (region.getRegionInfo().getRegionNameAsString().startsWith(cpName4)) {
         Coprocessor cp = region.getCoprocessorHost().findCoprocessor(cpName4);
         if (cp != null) {
@@ -335,7 +353,7 @@ public class TestClassLoading {
         found6_k4 = false;
 
     MiniHBaseCluster hbase = TEST_UTIL.getHBaseCluster();
-    for (Region region: hbase.getRegionServer(0).getOnlineRegionsLocalContext()) {
+    for (HRegion region: hbase.getRegionServer(0).getOnlineRegionsLocalContext()) {
       if (region.getRegionInfo().getRegionNameAsString().startsWith(tableName.getNameAsString())) {
         found_1 = found_1 ||
             (region.getCoprocessorHost().findCoprocessor(cpName1) != null);
@@ -423,7 +441,7 @@ public class TestClassLoading {
     boolean found1 = false, found2 = false, found2_k1 = false,
         found2_k2 = false, found2_k3 = false;
     MiniHBaseCluster hbase = TEST_UTIL.getHBaseCluster();
-    for (Region region: hbase.getRegionServer(0).getOnlineRegionsLocalContext()) {
+    for (HRegion region: hbase.getRegionServer(0).getOnlineRegionsLocalContext()) {
       if (region.getRegionInfo().getRegionNameAsString().startsWith(tableName.getNameAsString())) {
         CoprocessorEnvironment env;
         env = region.getCoprocessorHost().findCoprocessorEnvironment(cpName1);
@@ -537,19 +555,6 @@ public class TestClassLoading {
         java.util.Arrays.toString(
             TEST_UTIL.getHBaseCluster().getMaster().getMasterCoprocessors());
     assertEquals(loadedMasterCoprocessorsVerify, loadedMasterCoprocessors);
-  }
-
-  @Test
-  public void testFindCoprocessors() {
-    // HBASE 12277: 
-    CoprocessorHost masterCpHost =
-                             TEST_UTIL.getHBaseCluster().getMaster().getMasterCoprocessorHost();
-
-    List<MasterObserver> masterObservers = masterCpHost.findCoprocessors(MasterObserver.class);
-
-    assertTrue(masterObservers != null && masterObservers.size() > 0);
-    assertEquals(masterCoprocessor.getSimpleName(),
-                 masterObservers.get(0).getClass().getSimpleName());
   }
 
   private void waitForTable(TableName name) throws InterruptedException, IOException {

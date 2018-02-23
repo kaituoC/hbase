@@ -17,11 +17,10 @@
  */
 package org.apache.hadoop.hbase.client;
 
-import com.google.common.base.Preconditions;
-
 import java.util.concurrent.TimeUnit;
-
 import org.apache.yetus.audience.InterfaceAudience;
+
+import org.apache.hbase.thirdparty.com.google.common.base.Preconditions;
 
 /**
  * The implementation of {@link AsyncBufferedMutatorBuilder}.
@@ -29,12 +28,12 @@ import org.apache.yetus.audience.InterfaceAudience;
 @InterfaceAudience.Private
 class AsyncBufferedMutatorBuilderImpl implements AsyncBufferedMutatorBuilder {
 
-  private final AsyncTableBuilder<? extends AsyncTableBase> tableBuilder;
+  private final AsyncTableBuilder<?> tableBuilder;
 
   private long writeBufferSize;
 
   public AsyncBufferedMutatorBuilderImpl(AsyncConnectionConfiguration connConf,
-      AsyncTableBuilder<? extends AsyncTableBase> tableBuilder) {
+      AsyncTableBuilder<?> tableBuilder) {
     this.tableBuilder = tableBuilder;
     this.writeBufferSize = connConf.getWriteBufferSize();
   }

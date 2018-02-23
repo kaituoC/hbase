@@ -20,8 +20,7 @@ package org.apache.hadoop.hbase.master.procedure;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
@@ -29,6 +28,8 @@ import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.NamespaceDescriptor;
 import org.apache.hadoop.hbase.NamespaceNotFoundException;
 import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.constraint.ConstraintException;
 import org.apache.hadoop.hbase.master.MasterFileSystem;
 import org.apache.hadoop.hbase.master.TableNamespaceManager;
@@ -44,7 +45,7 @@ import org.apache.hadoop.hbase.util.FSUtils;
 @InterfaceAudience.Private
 public class DeleteNamespaceProcedure
     extends AbstractStateMachineNamespaceProcedure<DeleteNamespaceState> {
-  private static final Log LOG = LogFactory.getLog(DeleteNamespaceProcedure.class);
+  private static final Logger LOG = LoggerFactory.getLogger(DeleteNamespaceProcedure.class);
 
   private NamespaceDescriptor nsDescriptor;
   private String namespaceName;
@@ -56,7 +57,12 @@ public class DeleteNamespaceProcedure
   }
 
   public DeleteNamespaceProcedure(final MasterProcedureEnv env, final String namespaceName) {
-    super(env);
+    this(env, namespaceName, null);
+  }
+
+  public DeleteNamespaceProcedure(final MasterProcedureEnv env, final String namespaceName,
+      final ProcedurePrepareLatch latch) {
+    super(env, latch);
     this.namespaceName = namespaceName;
     this.nsDescriptor = null;
     this.traceEnabled = null;
@@ -73,7 +79,12 @@ public class DeleteNamespaceProcedure
     try {
       switch (state) {
       case DELETE_NAMESPACE_PREPARE:
-        prepareDelete(env);
+        boolean present = prepareDelete(env);
+        releaseSyncLatch();
+        if (!present) {
+          assert isFailed() : "Delete namespace should have an exception here";
+          return Flow.NO_MORE_STATE;
+        }
         setNextState(DeleteNamespaceState.DELETE_NAMESPACE_DELETE_FROM_NS_TABLE);
         break;
       case DELETE_NAMESPACE_DELETE_FROM_NS_TABLE:
@@ -112,6 +123,7 @@ public class DeleteNamespaceProcedure
       // nothing to rollback, pre is just table-state checks.
       // We can fail if the table does not exist or is not disabled.
       // TODO: coprocessor rollback semantic is still undefined.
+      releaseSyncLatch();
       return;
     }
 
@@ -187,27 +199,34 @@ public class DeleteNamespaceProcedure
    * @param env MasterProcedureEnv
    * @throws IOException
    */
-  private void prepareDelete(final MasterProcedureEnv env) throws IOException {
+  private boolean prepareDelete(final MasterProcedureEnv env) throws IOException {
     if (getTableNamespaceManager(env).doesNamespaceExist(namespaceName) == false) {
-      throw new NamespaceNotFoundException(namespaceName);
+      setFailure("master-delete-namespace", new NamespaceNotFoundException(namespaceName));
+      return false;
     }
     if (NamespaceDescriptor.RESERVED_NAMESPACES.contains(namespaceName)) {
-      throw new ConstraintException("Reserved namespace "+ namespaceName +" cannot be removed.");
+      setFailure("master-delete-namespace", new ConstraintException(
+          "Reserved namespace "+ namespaceName +" cannot be removed."));
+      return false;
     }
 
     int tableCount = 0;
     try {
       tableCount = env.getMasterServices().listTableDescriptorsByNamespace(namespaceName).size();
     } catch (FileNotFoundException fnfe) {
-      throw new NamespaceNotFoundException(namespaceName);
+      setFailure("master-delete-namespace", new NamespaceNotFoundException(namespaceName));
+      return false;
     }
     if (tableCount > 0) {
-      throw new ConstraintException("Only empty namespaces can be removed. " +
-          "Namespace "+ namespaceName + " has "+ tableCount +" tables");
+      setFailure("master-delete-namespace", new ConstraintException(
+          "Only empty namespaces can be removed. Namespace "+ namespaceName + " has "
+          + tableCount +" tables"));
+      return false;
     }
 
     // This is used for rollback
     nsDescriptor = getTableNamespaceManager(env).get(namespaceName);
+    return true;
   }
 
   /**

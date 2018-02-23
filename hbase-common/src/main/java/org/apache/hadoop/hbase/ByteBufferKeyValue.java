@@ -20,20 +20,19 @@ package org.apache.hadoop.hbase;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
-
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.util.ByteBufferUtils;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.ClassSize;
+import org.apache.yetus.audience.InterfaceAudience;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
 
 /**
- * This Cell is an implementation of {@link ByteBufferCell} where the data resides in
+ * This Cell is an implementation of {@link ByteBufferExtendedCell} where the data resides in
  * off heap/ on heap ByteBuffer
  */
 @InterfaceAudience.Private
-public class ByteBufferKeyValue extends ByteBufferCell implements ExtendedCell {
+public class ByteBufferKeyValue extends ByteBufferExtendedCell {
 
   protected final ByteBuffer buf;
   protected final int offset;
@@ -154,6 +153,7 @@ public class ByteBufferKeyValue extends ByteBufferCell implements ExtendedCell {
     return this.seqId;
   }
 
+  @Override
   public void setSequenceId(long seqId) {
     this.seqId = seqId;
   }
@@ -255,7 +255,7 @@ public class ByteBufferKeyValue extends ByteBufferCell implements ExtendedCell {
     if (this.buf.hasArray()) {
       return ClassSize.align(FIXED_OVERHEAD + length);
     }
-    return ClassSize.align(FIXED_OVERHEAD);
+    return ClassSize.align(FIXED_OVERHEAD) + KeyValueUtil.length(this);
   }
 
   @Override
@@ -296,8 +296,8 @@ public class ByteBufferKeyValue extends ByteBufferCell implements ExtendedCell {
   }
 
   @Override
-  public void setTimestamp(byte[] ts, int tsOffset) throws IOException {
-    ByteBufferUtils.copyFromArrayToBuffer(this.buf, this.getTimestampOffset(), ts, tsOffset,
+  public void setTimestamp(byte[] ts) throws IOException {
+    ByteBufferUtils.copyFromArrayToBuffer(this.buf, this.getTimestampOffset(), ts, 0,
         Bytes.SIZEOF_LONG);
   }
 
@@ -329,7 +329,7 @@ public class ByteBufferKeyValue extends ByteBufferCell implements ExtendedCell {
     return calculateHashForKey(this);
   }
 
-  private int calculateHashForKey(ByteBufferCell cell) {
+  private int calculateHashForKey(ByteBufferExtendedCell cell) {
     int rowHash = ByteBufferUtils.hashCode(cell.getRowByteBuffer(), cell.getRowPosition(),
       cell.getRowLength());
     int familyHash = ByteBufferUtils.hashCode(cell.getFamilyByteBuffer(), cell.getFamilyPosition(),

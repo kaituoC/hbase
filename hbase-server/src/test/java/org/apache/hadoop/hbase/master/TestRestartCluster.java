@@ -1,5 +1,4 @@
 /**
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -24,33 +23,36 @@ import static org.junit.Assert.assertTrue;
 
 import java.util.List;
 import java.util.Map;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
-import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.MetaTableAccessor;
 import org.apache.hadoop.hbase.MiniHBaseCluster;
 import org.apache.hadoop.hbase.ServerName;
 import org.apache.hadoop.hbase.TableExistsException;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.client.RegionInfo;
 import org.apache.hadoop.hbase.master.assignment.RegionStates;
-import org.apache.hadoop.hbase.net.Address;
-import org.apache.hadoop.hbase.shaded.com.google.common.net.HostAndPort;
 import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.testclassification.MasterTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.JVMClusterUtil;
 import org.apache.hadoop.hbase.util.Threads;
 import org.junit.After;
-import org.junit.Ignore;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Category({MasterTests.class, LargeTests.class})
 public class TestRestartCluster {
-  private static final Log LOG = LogFactory.getLog(TestRestartCluster.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestRestartCluster.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestRestartCluster.class);
   private HBaseTestingUtility UTIL = new HBaseTestingUtility();
 
   private static final TableName[] TABLES = {
@@ -64,7 +66,7 @@ public class TestRestartCluster {
     UTIL.shutdownMiniCluster();
   }
 
-  @Test (timeout=300000)
+  @Test
   public void testClusterRestart() throws Exception {
     UTIL.startMiniCluster(3);
     while (!UTIL.getMiniHBaseCluster().getMaster().isInitialized()) {
@@ -78,7 +80,7 @@ public class TestRestartCluster {
       UTIL.waitTableEnabled(TABLE);
     }
 
-    List<HRegionInfo> allRegions = MetaTableAccessor.getAllRegions(UTIL.getConnection(), false);
+    List<RegionInfo> allRegions = MetaTableAccessor.getAllRegions(UTIL.getConnection(), false);
     assertEquals(4, allRegions.size());
 
     LOG.info("\n\nShutting down cluster");
@@ -110,7 +112,7 @@ public class TestRestartCluster {
   /**
    * This tests retaining assignments on a cluster restart
    */
-  @Test (timeout=300000)
+  @Test
   public void testRetainAssignmentOnRestart() throws Exception {
     UTIL.startMiniCluster(2);
     while (!UTIL.getMiniHBaseCluster().getMaster().isInitialized()) {
@@ -135,7 +137,7 @@ public class TestRestartCluster {
     SnapshotOfRegionAssignmentFromMeta snapshot = new SnapshotOfRegionAssignmentFromMeta(
       master.getConnection());
     snapshot.initialize();
-    Map<HRegionInfo, ServerName> regionToRegionServerMap
+    Map<RegionInfo, ServerName> regionToRegionServerMap
       = snapshot.getRegionToRegionServerMap();
 
     MiniHBaseCluster cluster = UTIL.getHBaseCluster();
@@ -201,10 +203,10 @@ public class TestRestartCluster {
 
     snapshot = new SnapshotOfRegionAssignmentFromMeta(master.getConnection());
     snapshot.initialize();
-    Map<HRegionInfo, ServerName> newRegionToRegionServerMap =
+    Map<RegionInfo, ServerName> newRegionToRegionServerMap =
       snapshot.getRegionToRegionServerMap();
     assertEquals(regionToRegionServerMap.size(), newRegionToRegionServerMap.size());
-    for (Map.Entry<HRegionInfo, ServerName> entry: newRegionToRegionServerMap.entrySet()) {
+    for (Map.Entry<RegionInfo, ServerName> entry: newRegionToRegionServerMap.entrySet()) {
       if (TableName.NAMESPACE_TABLE_NAME.equals(entry.getKey().getTable())) continue;
       ServerName oldServer = regionToRegionServerMap.get(entry.getKey());
       ServerName currentServer = entry.getValue();

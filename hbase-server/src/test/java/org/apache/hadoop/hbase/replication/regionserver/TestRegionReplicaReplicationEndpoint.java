@@ -17,7 +17,10 @@
  */
 package org.apache.hadoop.hbase.replication.regionserver;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.fail;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -25,11 +28,8 @@ import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
-import org.apache.commons.logging.impl.Log4JLogger;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionLocation;
@@ -41,42 +41,45 @@ import org.apache.hadoop.hbase.client.ClusterConnection;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.client.RegionLocator;
-import org.apache.hadoop.hbase.client.RpcRetryingCallerImpl;
 import org.apache.hadoop.hbase.client.Table;
 import org.apache.hadoop.hbase.client.replication.ReplicationAdmin;
+import org.apache.hadoop.hbase.regionserver.HRegion;
 import org.apache.hadoop.hbase.regionserver.HRegionServer;
 import org.apache.hadoop.hbase.regionserver.Region;
-import org.apache.hadoop.hbase.wal.WAL.Entry;
-import org.apache.hadoop.hbase.wal.WALKey;
-import org.apache.hadoop.hbase.wal.WALEdit;
 import org.apache.hadoop.hbase.replication.ReplicationException;
 import org.apache.hadoop.hbase.replication.ReplicationPeerConfig;
 import org.apache.hadoop.hbase.testclassification.FlakeyTests;
-import org.apache.hadoop.hbase.testclassification.MediumTests;
+import org.apache.hadoop.hbase.testclassification.LargeTests;
 import org.apache.hadoop.hbase.util.ServerRegionReplicaUtil;
+import org.apache.hadoop.hbase.wal.WAL.Entry;
+import org.apache.hadoop.hbase.wal.WALEdit;
+import org.apache.hadoop.hbase.wal.WALKeyImpl;
 import org.apache.hadoop.hbase.zookeeper.ZKConfig;
-import org.apache.log4j.Level;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
-
-import org.apache.hadoop.hbase.shaded.com.google.common.collect.Lists;
 import org.junit.rules.TestName;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.com.google.common.collect.Lists;
 
 /**
  * Tests RegionReplicaReplicationEndpoint class by setting up region replicas and verifying
  * async wal replication replays the edits to the secondary region in various scenarios.
  */
-@Category({FlakeyTests.class, MediumTests.class})
+@Category({FlakeyTests.class, LargeTests.class})
 public class TestRegionReplicaReplicationEndpoint {
 
-  private static final Log LOG = LogFactory.getLog(TestRegionReplicaReplicationEndpoint.class);
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestRegionReplicaReplicationEndpoint.class);
 
-  static {
-    ((Log4JLogger) RpcRetryingCallerImpl.LOG).getLogger().setLevel(Level.ALL);
-  }
+  private static final Logger LOG =
+      LoggerFactory.getLogger(TestRegionReplicaReplicationEndpoint.class);
 
   private static final int NB_SERVERS = 2;
 
@@ -100,7 +103,7 @@ public class TestRegionReplicaReplicationEndpoint {
     conf.setInt("replication.stats.thread.period.seconds", 5);
     conf.setBoolean("hbase.tests.use.shortcircuit.reads", false);
     conf.setInt(HConstants.HBASE_CLIENT_RETRIES_NUMBER, 5); // less number of retries is needed
-    conf.setInt("hbase.client.serverside.retries.multiplier", 1);
+    conf.setInt(HConstants.HBASE_CLIENT_SERVERSIDE_RETRIES_MULTIPLIER, 1);
 
     HTU.startMiniCluster(NB_SERVERS);
   }
@@ -149,12 +152,12 @@ public class TestRegionReplicaReplicationEndpoint {
     assertNotNull(peerConfig);
     assertEquals(peerConfig.getClusterKey(), ZKConfig.getZooKeeperClusterKey(
         HTU.getConfiguration()));
-    assertEquals(peerConfig.getReplicationEndpointImpl(),
-      RegionReplicaReplicationEndpoint.class.getName());
+    assertEquals(RegionReplicaReplicationEndpoint.class.getName(),
+        peerConfig.getReplicationEndpointImpl());
     admin.close();
   }
 
-  @Test (timeout=240000)
+  @Test
   public void testRegionReplicaReplicationPeerIsCreatedForModifyTable() throws Exception {
     // modify a table by adding region replicas. Check whether the replication peer is created
     // and replication started.
@@ -196,8 +199,8 @@ public class TestRegionReplicaReplicationEndpoint {
     assertNotNull(peerConfig);
     assertEquals(peerConfig.getClusterKey(), ZKConfig.getZooKeeperClusterKey(
         HTU.getConfiguration()));
-    assertEquals(peerConfig.getReplicationEndpointImpl(),
-      RegionReplicaReplicationEndpoint.class.getName());
+    assertEquals(RegionReplicaReplicationEndpoint.class.getName(),
+        peerConfig.getReplicationEndpointImpl());
     admin.close();
   }
 
@@ -247,8 +250,8 @@ public class TestRegionReplicaReplicationEndpoint {
 
     for (int i=0; i < NB_SERVERS; i++) {
       HRegionServer rs = HTU.getMiniHBaseCluster().getRegionServer(i);
-      List<Region> onlineRegions = rs.getOnlineRegions(tableName);
-      for (Region region : onlineRegions) {
+      List<HRegion> onlineRegions = rs.getRegions(tableName);
+      for (HRegion region : onlineRegions) {
         regions[region.getRegionInfo().getReplicaId()] = region;
       }
     }
@@ -277,22 +280,22 @@ public class TestRegionReplicaReplicationEndpoint {
     }
   }
 
-  @Test(timeout = 240000)
+  @Test
   public void testRegionReplicaReplicationWith2Replicas() throws Exception {
     testRegionReplicaReplication(2);
   }
 
-  @Test(timeout = 240000)
+  @Test
   public void testRegionReplicaReplicationWith3Replicas() throws Exception {
     testRegionReplicaReplication(3);
   }
 
-  @Test(timeout = 240000)
+  @Test
   public void testRegionReplicaReplicationWith10Replicas() throws Exception {
     testRegionReplicaReplication(10);
   }
 
-  @Test (timeout = 240000)
+  @Test
   public void testRegionReplicaWithoutMemstoreReplication() throws Exception {
     int regionReplication = 3;
     final TableName tableName = TableName.valueOf(name.getMethodName());
@@ -324,7 +327,7 @@ public class TestRegionReplicaReplicationEndpoint {
     }
   }
 
-  @Test (timeout = 240000)
+  @Test
   public void testRegionReplicaReplicationForFlushAndCompaction() throws Exception {
     // Tests a table with region replication 3. Writes some data, and causes flushes and
     // compactions. Verifies that the data is readable from the replicas. Note that this
@@ -359,12 +362,12 @@ public class TestRegionReplicaReplicationEndpoint {
     }
   }
 
-  @Test (timeout = 240000)
+  @Test
   public void testRegionReplicaReplicationIgnoresDisabledTables() throws Exception {
     testRegionReplicaReplicationIgnoresDisabledTables(false);
   }
 
-  @Test (timeout = 240000)
+  @Test
   public void testRegionReplicaReplicationIgnoresDroppedTables() throws Exception {
     testRegionReplicaReplicationIgnoresDisabledTables(true);
   }
@@ -411,7 +414,7 @@ public class TestRegionReplicaReplicationEndpoint {
     byte[] encodedRegionName = hrl.getRegionInfo().getEncodedNameAsBytes();
 
     Entry entry = new Entry(
-      new WALKey(encodedRegionName, toBeDisabledTable, 1),
+      new WALKeyImpl(encodedRegionName, toBeDisabledTable, 1),
       new WALEdit());
 
     HTU.getAdmin().disableTable(toBeDisabledTable); // disable the table

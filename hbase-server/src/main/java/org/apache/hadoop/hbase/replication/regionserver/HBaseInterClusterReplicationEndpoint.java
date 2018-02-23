@@ -18,11 +18,10 @@
 
 package org.apache.hadoop.hbase.replication.regionserver;
 
-import org.apache.hadoop.hbase.shaded.com.google.common.annotations.VisibleForTesting;
-
 import java.io.IOException;
 import java.net.ConnectException;
 import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -36,29 +35,34 @@ import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Abortable;
 import org.apache.hadoop.hbase.HBaseConfiguration;
 import org.apache.hadoop.hbase.HConstants;
+import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.TableNotFoundException;
-import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.hadoop.hbase.client.ClusterConnection;
+import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.ipc.RpcServer;
 import org.apache.hadoop.hbase.protobuf.ReplicationProtbufUtil;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.AdminService.BlockingInterface;
 import org.apache.hadoop.hbase.replication.HBaseReplicationEndpoint;
-import org.apache.hadoop.hbase.replication.ReplicationPeer.PeerState;
 import org.apache.hadoop.hbase.replication.regionserver.ReplicationSinkManager.SinkPeer;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
 import org.apache.hadoop.ipc.RemoteException;
+import org.apache.yetus.audience.InterfaceAudience;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.com.google.common.annotations.VisibleForTesting;
+
+import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.AdminService.BlockingInterface;
 
 /**
  * A {@link org.apache.hadoop.hbase.replication.ReplicationEndpoint}
@@ -73,12 +77,13 @@ import org.apache.hadoop.ipc.RemoteException;
  */
 @InterfaceAudience.Private
 public class HBaseInterClusterReplicationEndpoint extends HBaseReplicationEndpoint {
-
-  private static final Log LOG = LogFactory.getLog(HBaseInterClusterReplicationEndpoint.class);
+  private static final Logger LOG =
+      LoggerFactory.getLogger(HBaseInterClusterReplicationEndpoint.class);
 
   private static final long DEFAULT_MAX_TERMINATION_WAIT_MULTIPLIER = 2;
 
   private ClusterConnection conn;
+  private Configuration localConf;
   private Configuration conf;
   // How long should we sleep for each retry
   private long sleepForRetries;
@@ -102,11 +107,13 @@ public class HBaseInterClusterReplicationEndpoint extends HBaseReplicationEndpoi
   private Path hfileArchiveDir;
   private boolean replicationBulkLoadDataEnabled;
   private Abortable abortable;
+  private boolean dropOnDeletedTables;
 
   @Override
   public void init(Context context) throws IOException {
     super.init(context);
     this.conf = HBaseConfiguration.create(ctx.getConfiguration());
+    this.localConf = HBaseConfiguration.create(ctx.getLocalConfiguration());
     decorateConf();
     this.maxRetriesMultiplier = this.conf.getInt("replication.source.maxretriesmultiplier", 300);
     this.socketTimeoutMultiplier = this.conf.getInt("replication.source.socketTimeoutMultiplier",
@@ -137,8 +144,10 @@ public class HBaseInterClusterReplicationEndpoint extends HBaseReplicationEndpoi
     // Set the size limit for replication RPCs to 95% of the max request size.
     // We could do with less slop if we have an accurate estimate of encoded size. Being
     // conservative for now.
-    this.replicationRpcLimit = (int)(0.95 * (double)conf.getLong(RpcServer.MAX_REQUEST_SIZE,
+    this.replicationRpcLimit = (int)(0.95 * conf.getLong(RpcServer.MAX_REQUEST_SIZE,
       RpcServer.DEFAULT_MAX_REQUEST_SIZE));
+    this.dropOnDeletedTables =
+        this.conf.getBoolean(HConstants.REPLICATION_DROP_ON_DELETED_TABLE_KEY, false);
 
     this.replicationBulkLoadDataEnabled =
         conf.getBoolean(HConstants.REPLICATION_BULKLOAD_ENABLE_KEY,
@@ -222,6 +231,37 @@ public class HBaseInterClusterReplicationEndpoint extends HBaseReplicationEndpoi
     }
 
     entryLists.addAll(entryMap.values());
+    return entryLists;
+  }
+
+  private TableName parseTable(String msg) {
+    // ... TableNotFoundException: '<table>'/n...
+    Pattern p = Pattern.compile("TableNotFoundException: \\'([\\S]*)\\'");
+    Matcher m = p.matcher(msg);
+    if (m.find()) {
+      String table = m.group(1);
+      try {
+        // double check that table is a valid table name
+        TableName.valueOf(TableName.isLegalFullyQualifiedTableName(Bytes.toBytes(table)));
+        return TableName.valueOf(table);
+      } catch (IllegalArgumentException ignore) {
+      }
+    }
+    return null;
+  }
+
+  // Filter a set of batches by TableName
+  private List<List<Entry>> filterBatches(final List<List<Entry>> oldEntryList, TableName table) {
+    List<List<Entry>> entryLists = new ArrayList<>();
+    for (List<Entry> entries : oldEntryList) {
+      ArrayList<Entry> thisList = new ArrayList<Entry>(entries.size());
+      entryLists.add(thisList);
+      for (Entry e : entries) {
+        if (!e.getKey().getTableName().equals(table)) {
+          thisList.add(e);
+        }
+      }
+    }
     return entryLists;
   }
 
@@ -325,10 +365,27 @@ public class HBaseInterClusterReplicationEndpoint extends HBaseReplicationEndpoi
           ioe = ((RemoteException) ioe).unwrapRemoteException();
           LOG.warn("Can't replicate because of an error on the remote cluster: ", ioe);
           if (ioe instanceof TableNotFoundException) {
-            if (sleepForRetries("A table is missing in the peer cluster. "
-                + "Replication cannot proceed without losing data.", sleepMultiplier)) {
-              sleepMultiplier++;
+            if (dropOnDeletedTables) {
+              // this is a bit fragile, but cannot change how TNFE is serialized
+              // at least check whether the table name is legal
+              TableName table = parseTable(ioe.getMessage());
+              if (table != null) {
+                try (Connection localConn =
+                    ConnectionFactory.createConnection(ctx.getLocalConfiguration())) {
+                  if (!localConn.getAdmin().tableExists(table)) {
+                    // Would potentially be better to retry in one of the outer loops
+                    // and add a table filter there; but that would break the encapsulation,
+                    // so we're doing the filtering here.
+                    LOG.info("Missing table detected at sink, local table also does not exist, filtering edits for '"+table+"'");
+                    batches = filterBatches(batches, table);
+                    continue;
+                  }
+                } catch (IOException iox) {
+                  LOG.warn("Exception checking for local table: ", iox);
+                }
+              }
             }
+            // fall through and sleep below
           } else {
             LOG.warn("Peer encountered RemoteException, rechecking all sinks: ", ioe);
             replicationSinkMgr.chooseSinks();
@@ -342,7 +399,7 @@ public class HBaseInterClusterReplicationEndpoint extends HBaseReplicationEndpoi
               "call to the remote cluster timed out, which is usually " +
               "caused by a machine failure or a massive slowdown",
               this.socketTimeoutMultiplier);
-          } else if (ioe instanceof ConnectException) {
+          } else if (ioe instanceof ConnectException || ioe instanceof UnknownHostException) {
             LOG.warn("Peer is unavailable, rechecking all sinks: ", ioe);
             replicationSinkMgr.chooseSinks();
           } else {
@@ -358,7 +415,7 @@ public class HBaseInterClusterReplicationEndpoint extends HBaseReplicationEndpoi
   }
 
   protected boolean isPeerEnabled() {
-    return ctx.getReplicationPeer().getPeerState() == PeerState.ENABLED;
+    return ctx.getReplicationPeer().isPeerEnabled();
   }
 
   @Override

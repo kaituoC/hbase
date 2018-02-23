@@ -1,5 +1,4 @@
 /*
- *
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -32,49 +31,61 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
-
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
+import org.apache.hadoop.hbase.HBaseClassTestRule;
 import org.apache.hadoop.hbase.HBaseTestingUtility;
 import org.apache.hadoop.hbase.HConstants;
 import org.apache.hadoop.hbase.HRegionInfo;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.Stoppable;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.TableNotFoundException;
+import org.apache.hadoop.hbase.client.Admin;
 import org.apache.hadoop.hbase.client.Connection;
 import org.apache.hadoop.hbase.client.ConnectionFactory;
 import org.apache.hadoop.hbase.client.Get;
 import org.apache.hadoop.hbase.client.RegionLocator;
 import org.apache.hadoop.hbase.client.Result;
 import org.apache.hadoop.hbase.client.ResultScanner;
+import org.apache.hadoop.hbase.client.RetriesExhaustedWithDetailsException;
 import org.apache.hadoop.hbase.client.Scan;
 import org.apache.hadoop.hbase.client.Table;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.WALEntry;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.UUID;
-import org.apache.hadoop.hbase.shaded.com.google.protobuf.UnsafeByteOperations;
-import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.WALProtos;
-import org.apache.hadoop.hbase.shaded.protobuf.generated.WALProtos.WALKey;
 import org.apache.hadoop.hbase.testclassification.MediumTests;
 import org.apache.hadoop.hbase.testclassification.ReplicationTests;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.util.FSUtils;
 import org.apache.hadoop.hbase.util.HFileTestUtil;
 import org.junit.AfterClass;
+import org.junit.Assert;
 import org.junit.Before;
 import org.junit.BeforeClass;
+import org.junit.ClassRule;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import org.apache.hbase.thirdparty.com.google.protobuf.UnsafeByteOperations;
+
+import org.apache.hadoop.hbase.shaded.protobuf.ProtobufUtil;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.AdminProtos.WALEntry;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.HBaseProtos.UUID;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.WALProtos;
+import org.apache.hadoop.hbase.shaded.protobuf.generated.WALProtos.WALKey;
 
 @Category({ReplicationTests.class, MediumTests.class})
 public class TestReplicationSink {
-  private static final Log LOG = LogFactory.getLog(TestReplicationSink.class);
+
+  @ClassRule
+  public static final HBaseClassTestRule CLASS_RULE =
+      HBaseClassTestRule.forClass(TestReplicationSink.class);
+
+  private static final Logger LOG = LoggerFactory.getLogger(TestReplicationSink.class);
   private static final int BATCH_SIZE = 10;
 
   protected final static HBaseTestingUtility TEST_UTIL = new HBaseTestingUtility();
@@ -264,6 +275,40 @@ public class TestReplicationSink {
     assertEquals(0, res.size());
   }
 
+  @Test
+  public void testRethrowRetriesExhaustedWithDetailsException() throws Exception {
+    TableName notExistTable = TableName.valueOf("notExistTable");
+    List<WALEntry> entries = new ArrayList<>();
+    List<Cell> cells = new ArrayList<>();
+    for (int i = 0; i < 10; i++) {
+      entries.add(createEntry(notExistTable, i, KeyValue.Type.Put, cells));
+    }
+    try {
+      SINK.replicateEntries(entries, CellUtil.createCellScanner(cells.iterator()),
+        replicationClusterId, baseNamespaceDir, hfileArchiveDir);
+      Assert.fail("Should re-throw TableNotFoundException.");
+    } catch (TableNotFoundException e) {
+    }
+    entries.clear();
+    cells.clear();
+    for (int i = 0; i < 10; i++) {
+      entries.add(createEntry(TABLE_NAME1, i, KeyValue.Type.Put, cells));
+    }
+    try (Connection conn = ConnectionFactory.createConnection(TEST_UTIL.getConfiguration())) {
+      try (Admin admin = conn.getAdmin()) {
+        admin.disableTable(TABLE_NAME1);
+        try {
+          SINK.replicateEntries(entries, CellUtil.createCellScanner(cells.iterator()),
+            replicationClusterId, baseNamespaceDir, hfileArchiveDir);
+          Assert.fail("Should re-throw RetriesExhaustedWithDetailsException.");
+        } catch (RetriesExhaustedWithDetailsException e) {
+        } finally {
+          admin.enableTable(TABLE_NAME1);
+        }
+      }
+    }
+  }
+
   /**
    * Test replicateEntries with a bulk load entry for 25 HFiles
    */
@@ -272,8 +317,8 @@ public class TestReplicationSink {
     Path dir = TEST_UTIL.getDataTestDirOnTestFS("testReplicateEntries");
     Path familyDir = new Path(dir, Bytes.toString(FAM_NAME1));
     int numRows = 10;
-
     List<Path> p = new ArrayList<>(1);
+    final String hfilePrefix = "hfile-";
 
     // 1. Generate 25 hfile ranges
     Random rng = new SecureRandom();
@@ -290,7 +335,7 @@ public class TestReplicationSink {
     FileSystem fs = dir.getFileSystem(conf);
     Iterator<Integer> numbersItr = numberList.iterator();
     for (int i = 0; i < 25; i++) {
-      Path hfilePath = new Path(familyDir, "hfile_" + i);
+      Path hfilePath = new Path(familyDir, hfilePrefix + i);
       HFileTestUtil.createHFile(conf, fs, hfilePath, FAM_NAME1, FAM_NAME1,
         Bytes.toBytes(numbersItr.next()), Bytes.toBytes(numbersItr.next()), numRows);
       p.add(hfilePath);
@@ -325,10 +370,10 @@ public class TestReplicationSink {
               .append(Bytes.toString(TABLE_NAME1.getName())).append(Path.SEPARATOR)
               .append(Bytes.toString(loadDescriptor.getEncodedRegionName().toByteArray()))
               .append(Path.SEPARATOR).append(Bytes.toString(FAM_NAME1)).append(Path.SEPARATOR)
-              .append("hfile_" + i).toString();
+              .append(hfilePrefix + i).toString();
       String dst = baseNamespaceDir + Path.SEPARATOR + pathToHfileFromNS;
-
-      FileUtil.copy(fs, p.get(0), fs, new Path(dst), false, conf);
+      Path dstPath = new Path(dst);
+      FileUtil.copy(fs, p.get(0), fs, dstPath, false, conf);
     }
 
     entries.add(builder.build());
@@ -343,6 +388,7 @@ public class TestReplicationSink {
       // 8. Assert data is replicated
       assertEquals(numRows, scanner.next(numRows).length);
     }
+    // Clean up the created hfiles or it will mess up subsequent tests
   }
 
   private WALEntry createEntry(TableName table, int row,  KeyValue.Type type, List<Cell> cells) {

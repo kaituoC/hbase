@@ -24,10 +24,10 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import org.apache.commons.logging.Log;
-import org.apache.commons.logging.LogFactory;
 import org.apache.yetus.audience.InterfaceAudience;
 import org.apache.yetus.audience.InterfaceStability;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos.StateMachineProcedureData;
 
 /**
@@ -45,7 +45,7 @@ import org.apache.hadoop.hbase.shaded.protobuf.generated.ProcedureProtos.StateMa
 @InterfaceStability.Evolving
 public abstract class StateMachineProcedure<TEnvironment, TState>
     extends Procedure<TEnvironment> {
-  private static final Log LOG = LogFactory.getLog(StateMachineProcedure.class);
+  private static final Logger LOG = LoggerFactory.getLogger(StateMachineProcedure.class);
 
   private static final int EOF_STATE = Integer.MIN_VALUE;
 
@@ -176,6 +176,7 @@ public abstract class StateMachineProcedure<TEnvironment, TState>
         this.cycles++;
       }
 
+      LOG.trace("{}", toString());
       stateFlow = executeFromState(env, state);
       if (!hasMoreState()) setNextState(EOF_STATE);
       if (subProcList != null && !subProcList.isEmpty()) {
@@ -208,18 +209,13 @@ public abstract class StateMachineProcedure<TEnvironment, TState>
 
   @Override
   protected boolean abort(final TEnvironment env) {
-    final boolean isDebugEnabled = LOG.isDebugEnabled();
     final TState state = getCurrentState();
-    if (isDebugEnabled) {
-      LOG.debug("abort requested for " + this + " state=" + state);
-    }
-
+    LOG.debug("Abort requested for {}", this);
     if (hasMoreState()) {
       aborted.set(true);
       return true;
-    } else if (isDebugEnabled) {
-      LOG.debug("ignoring abort request on state=" + state + " for " + this);
     }
+    LOG.debug("Ignoring abort request on {}", this);
     return false;
   }
 
